@@ -1,0 +1,7 @@
+name = "rlm-pypi"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "rlm-pypi"
