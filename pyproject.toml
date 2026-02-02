@@ -1,0 +1,18 @@
+[project]
+name = "rlm-core"
+version = "0.1.0"
+description = "Core RLM loop and protocols"
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rlm_core"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
