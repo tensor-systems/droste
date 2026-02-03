@@ -9,6 +9,14 @@ This project uses **uv** as the default package manager.
 - Add a dev dependency: `uv add --group dev <package>`
 - Run tests: `uv run pytest`
 
+## Policy Hints (Contract Enforcement)
+
+rlm-core does **not** infer semantic or count intent from the question text.
+If you want contract enforcement (e.g., require `llm_query` for semantic tasks
+or require SQL aggregates + numeric-only output for counts), the caller must
+pass explicit policy hints. Benchmarks should supply these hints; general use
+can omit them to keep behavior purely prompt-driven.
+
 ## Installing from Private Index
 
 To install `rlm-core` from the private PyPI index:

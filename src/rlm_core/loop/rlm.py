@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import sys
 from typing import Any
 
-from ..exceptions import BatchLLMError, RLMError, SandboxError
+from ..exceptions import BatchLLMError, PolicyError, RLMError, SandboxError
 from ..execution.context import ExecutionContext, create_execution_context
 from ..execution.config import (
     DEFAULT_MAX_CALLS,
@@ -16,6 +16,7 @@ from ..protocols.environment import ExecutionResult, RLMEnvironment
 from ..protocols.llm_client import LLMClient, total_tokens_from_usage
 from ..protocols.subcall_client import SubcallClient
 from ..prompts.builder import SystemPromptBuilder
+from ..policy import PolicyHints, contract_violations, is_numeric_output
 from .code_extractor import extract_code_block
 from .trajectory import IterationRecord
 
@@ -46,6 +47,8 @@ class RLMConfig:
     verbose: bool = False
     root_model: str | None = None
     on_progress: Any | None = None
+    enforce_contract: bool = True
+    policy_hints: PolicyHints | None = None
 
 
 @dataclass
@@ -67,6 +70,12 @@ def _execution_output(result: ExecutionResult | str) -> str:
     if isinstance(result, ExecutionResult):
         return result.stdout
     return str(result)
+
+
+def _resolved_output(answer: dict[str, Any], last_output: str) -> str:
+    if answer.get("content"):
+        return str(answer.get("content", ""))
+    return last_output
 
 
 def _apply_batch_error_guard(subcalls: SubcallClient, env_globals: dict[str, Any]) -> None:
@@ -198,36 +207,109 @@ def run_rlm(
 
             code = extract_code_block(response, "python")
             if not code:
-                if cfg.verbose:
-                    print("\nNo code block found, returning response as answer", file=sys.stderr)
-                final_answer = str(answer.get("content", "")) or response
-                return RLMResult(
-                    answer=final_answer,
-                    ready=bool(answer.get("ready")),
-                    iterations=iterations,
-                    tokens_used=context.stats.total_tokens,
-                    sub_calls_made=context.stats.calls_made,
-                    trajectory=trajectory,
-                    error=None,
-                )
+                if cfg.enforce_contract:
+                    if cfg.verbose:
+                        print("\nNo code block found, retrying with contract enforcement", file=sys.stderr)
+                    repair_messages = messages + [
+                        {"role": "assistant", "content": response},
+                        {
+                            "role": "user",
+                            "content": "Your response must include a single ```python code block. Return only code.",
+                        },
+                    ]
+                    try:
+                        repair_response, repair_usage = root_llm.chat_completion(
+                            repair_messages,
+                            model=cfg.root_model or "",
+                            return_usage=True,
+                        )
+                        context.stats.total_tokens += total_tokens_from_usage(repair_usage)
+                    except Exception as repair_exc:
+                        error = RLMError(type=repair_exc.__class__.__name__, message=str(repair_exc))
+                        return RLMResult(
+                            answer=str(answer.get("content", "")),
+                            ready=bool(answer.get("ready")),
+                            iterations=iterations,
+                            tokens_used=context.stats.total_tokens,
+                            sub_calls_made=context.stats.calls_made,
+                            trajectory=trajectory,
+                            error=error,
+                        )
+
+                    code = extract_code_block(repair_response, "python")
+                    if not code:
+                        error = RLMError(
+                            type="PolicyError",
+                            message="Response missing python code block.",
+                        )
+                        return RLMResult(
+                            answer=str(answer.get("content", "")),
+                            ready=bool(answer.get("ready")),
+                            iterations=iterations,
+                            tokens_used=context.stats.total_tokens,
+                            sub_calls_made=context.stats.calls_made,
+                            trajectory=trajectory,
+                            error=error,
+                        )
+                    response = repair_response
+                    messages = repair_messages
+                else:
+                    if cfg.verbose:
+                        print("\nNo code block found, returning response as answer", file=sys.stderr)
+                    final_answer = str(answer.get("content", "")) or response
+                    return RLMResult(
+                        answer=final_answer,
+                        ready=bool(answer.get("ready")),
+                        iterations=iterations,
+                        tokens_used=context.stats.total_tokens,
+                        sub_calls_made=context.stats.calls_made,
+                        trajectory=trajectory,
+                        error=None,
+                    )
 
             context.emit_progress(f"Iteration {iterations}/{cfg.max_iterations}: Executing...")
             if cfg.verbose:
                 print(f"\nExecuting code:\n{code}", file=sys.stderr)
 
             try:
+                if cfg.enforce_contract:
+                    violations = contract_violations(code, cfg.policy_hints)
+                    if violations:
+                        raise PolicyError("Policy violation: " + " | ".join(violations))
+
                 output = environment.execute(code)
                 last_output = _execution_output(output)
                 _enforce_output_budget(last_output, cfg.max_output_chars)
+                if (
+                    cfg.enforce_contract
+                    and cfg.policy_hints is not None
+                    and cfg.policy_hints.semantic
+                    and answer.get("ready")
+                    and context.stats.calls_made == 0
+                ):
+                    raise PolicyError(
+                        "Policy violation: semantic question must call llm_query/batch_llm_query at least once."
+                    )
+                if (
+                    cfg.enforce_contract
+                    and cfg.policy_hints is not None
+                    and cfg.policy_hints.numeric_output
+                    and answer.get("ready")
+                ):
+                    candidate = _resolved_output(answer, last_output)
+                    if not is_numeric_output(candidate):
+                        raise PolicyError(
+                            "Policy violation: output must be a single number (optionally with %)."
+                        )
                 error = None
                 if cfg.verbose:
                     if last_output and not last_output.startswith("ERROR:"):
                         print(f"\nOutput:\n{last_output}", file=sys.stderr)
                     print(f"\nSub-calls made: {context.stats.calls_made}", file=sys.stderr)
-                    print(f"answer[\"ready\"] = {answer.get(\"ready\")}", file=sys.stderr)
+                    print(f"answer['ready'] = {answer.get('ready')}", file=sys.stderr)
                     if answer.get("content"):
                         print(
-                            f"answer[\"content\"] length: {len(str(answer.get(\"content\")))} chars",
+                            f"answer['content'] length: {len(str(answer.get('content')))} chars",
                             file=sys.stderr,
                         )
                 trajectory.append(
@@ -245,6 +327,9 @@ def run_rlm(
                 details = None
                 if isinstance(exec_error, BatchLLMError):
                     details = {"errors": exec_error.errors}
+                if isinstance(exec_error, PolicyError):
+                    answer["ready"] = False
+                    answer["content"] = ""
                 error = RLMError(type=exec_error.__class__.__name__, message=str(exec_error), code=code, details=details)
                 if cfg.verbose:
                     print(f"\nExecution error: {exec_error}", file=sys.stderr)
@@ -286,9 +371,35 @@ def run_rlm(
                         f"Iteration {iterations}/{cfg.max_iterations}: Executing repaired code..."
                     )
                     try:
+                        if cfg.enforce_contract:
+                            violations = contract_violations(repaired_code, cfg.policy_hints)
+                            if violations:
+                                raise PolicyError("Policy violation: " + " | ".join(violations))
+
                         output = environment.execute(repaired_code)
                         last_output = _execution_output(output)
                         _enforce_output_budget(last_output, cfg.max_output_chars)
+                        if (
+                            cfg.enforce_contract
+                            and cfg.policy_hints is not None
+                            and cfg.policy_hints.semantic
+                            and answer.get("ready")
+                            and context.stats.calls_made == 0
+                        ):
+                            raise PolicyError(
+                                "Policy violation: semantic question must call llm_query/batch_llm_query at least once."
+                            )
+                        if (
+                            cfg.enforce_contract
+                            and cfg.policy_hints is not None
+                            and cfg.policy_hints.numeric_output
+                            and answer.get("ready")
+                        ):
+                            candidate = _resolved_output(answer, last_output)
+                            if not is_numeric_output(candidate):
+                                raise PolicyError(
+                                    "Policy violation: output must be a single number (optionally with %)."
+                                )
                         error = None
                         code = repaired_code
                         trajectory.append(
@@ -306,6 +417,9 @@ def run_rlm(
                         details = None
                         if isinstance(repair_exec_error, BatchLLMError):
                             details = {"errors": repair_exec_error.errors}
+                        if isinstance(repair_exec_error, PolicyError):
+                            answer["ready"] = False
+                            answer["content"] = ""
                         error = RLMError(
                             type=repair_exec_error.__class__.__name__,
                             message=str(repair_exec_error),
@@ -326,7 +440,7 @@ def run_rlm(
 
         if cfg.verbose:
             print(f"\nFinal iterations: {iterations}", file=sys.stderr)
-            print(f"answer[\"ready\"]: {answer.get(\"ready\")}", file=sys.stderr)
+            print(f"answer['ready']: {answer.get('ready')}", file=sys.stderr)
 
         return RLMResult(
             answer=final_answer,

@@ -12,7 +12,8 @@ from .execution.config import (
 from .execution.stats import ExecutionStats
 from .execution.context import ExecutionContext, create_execution_context
 from .execution.progress import ProgressCallback, emit_progress
-from .exceptions import RLMError
+from .exceptions import RLMError, PolicyError
+from .policy import PolicyHints
 from .protocols.environment import RLMEnvironment, EnvCapabilities, ExecutionResult
 from .protocols.data_source import DataSource, SearchResult, DataSourceCapabilities
 from .protocols.llm_client import LLMClient, TokenUsage
@@ -36,6 +37,8 @@ __all__ = [
     "ProgressCallback",
     "emit_progress",
     "RLMError",
+    "PolicyError",
+    "PolicyHints",
     "RLMEnvironment",
     "EnvCapabilities",
     "ExecutionResult",

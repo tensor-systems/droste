@@ -9,6 +9,11 @@ class SandboxError(Exception):
     pass
 
 
+class PolicyError(SandboxError):
+    """Raised when generated code violates the RLM execution contract."""
+    pass
+
+
 class BatchLLMError(SandboxError):
     """Raised when a batch sub-LLM request returns one or more errors."""
 
