@@ -1,15 +1,24 @@
 # rlm-core
 
-Core library for the Reflexive Loop Model (RLM) - an iterative code-generation and execution framework for LLM-powered agents.
+Core library implementing the Recursive Language Model (RLM) - a scaffolding approach that enables LLMs to handle effectively unbounded context through recursive self-calls and code execution.
 
-## Overview
+## What is RLM?
 
-RLM enables LLMs to solve complex problems by generating and executing code in a controlled loop:
+RLM lets language models manage large contexts by treating input as a programmable variable rather than direct context. The model writes Python code to inspect, partition, and delegate work to sub-LLM instances, keeping the primary context window lean.
 
-1. LLM receives a question and generates Python code
-2. Code executes in a sandboxed environment
-3. Output feeds back to the LLM for refinement
-4. Loop continues until `answer["ready"] = True`
+**Key insight:** LLMs should decide how to decompose problems, not humans. RLM provides "the illusion of near infinite context, while under the hood a language model manages, partitions, and recursively calls itself."
+
+Learn more:
+- [Recursive Language Models](https://alexzhang13.github.io/blog/2025/rlm/) - Alex Zhang
+- [RLM: Scalable Context with Recursive LLMs](https://www.primeintellect.ai/blog/rlm) - Prime Intellect
+
+## How It Works
+
+1. Root LLM receives a question (not the full context)
+2. LLM generates Python code to inspect/process data
+3. Code executes in a sandboxed REPL with access to `llm_query()` and `llm_batch()` for sub-calls
+4. Output feeds back to LLM for refinement
+5. Loop continues until `answer["ready"] = True`
 
 ## Installation
 
@@ -28,26 +37,26 @@ uv pip install --no-index --find-links wheelhouse rlm-core
 from rlm_core import run_rlm, RLMConfig
 
 result = run_rlm(
-    question="What is 2 + 2?",
+    question="Summarize the key themes across these documents.",
     environment=my_environment,  # RLMEnvironment implementation
     root_llm=my_llm_client,      # LLMClient implementation
-    subcalls=my_subcall_client,  # SubcallClient implementation
-    config=RLMConfig(max_iterations=5),
+    subcalls=my_subcall_client,  # SubcallClient for llm_query/llm_batch
+    config=RLMConfig(max_iterations=10),
 )
 
 print(result.answer)
-print(f"Completed in {result.iterations} iterations")
+print(f"Completed in {result.iterations} iterations, {result.sub_calls_made} sub-calls")
 ```
 
 ## Core Concepts
 
 ### Protocols
 
-Implement these protocols to integrate with your infrastructure:
+Implement these to integrate with your infrastructure:
 
-- **`RLMEnvironment`** - Sandboxed code execution environment
+- **`RLMEnvironment`** - Sandboxed Python REPL with data access
 - **`LLMClient`** - Chat completion interface for the root LLM
-- **`SubcallClient`** - Interface for `llm_query()` and `llm_batch()` calls from generated code
+- **`SubcallClient`** - Provides `llm_query()` and `llm_batch()` for sub-LLM calls
 - **`DataSource`** - Optional data source integration
 
 ### Configuration
@@ -58,7 +67,6 @@ RLMConfig(
     max_depth=3,            # Max nested subcall depth
     max_calls=50,           # Max total subcalls
     max_output_chars=50000, # Output budget per iteration
-    verbose=False,          # Debug logging
 )
 ```
 
@@ -66,27 +74,21 @@ RLMConfig(
 
 ```python
 RLMResult(
-    answer="...",           # Final answer
+    answer="...",           # Final answer from answer["content"]
     ready=True,             # Whether answer["ready"] was set
     iterations=3,           # Iterations used
     tokens_used=1500,       # Total tokens consumed
-    sub_calls_made=12,      # Total subcalls made
+    sub_calls_made=12,      # Total llm_query/llm_batch calls
     trajectory=[...],       # Full execution history
-    error=None,             # Any error that occurred
 )
 ```
 
 ## Development
 
 ```bash
-# Install dependencies
-uv sync
-
-# Run tests
-uv run pytest
-
-# Build
-uv build
+uv sync          # Install dependencies
+uv run pytest    # Run tests
+uv build         # Build wheel
 ```
 
 ## License
