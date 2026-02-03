@@ -26,6 +26,18 @@ url = "https://rlm-pypi.hyperpredict.workers.dev/simple"
 
 Then set `UV_INDEX_PYPI_TOKEN` or use a `.netrc` file for authentication.
 
+## Offline Wheelhouse (macOS App Builds)
+
+For reproducible offline builds, download wheels to a local directory:
+
+```bash
+# Download wheels
+uv pip download --dest wheelhouse --index-url "https://${PYPI_TOKEN}:x@rlm-pypi.hyperpredict.workers.dev/simple" rlm-core
+
+# Install offline (no network needed)
+uv pip install --no-index --find-links wheelhouse rlm-core
+```
+
 ## Publishing
 
 Publishing is automated via GitHub Actions on `v*` tags. To publish manually:
