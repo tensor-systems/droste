@@ -78,6 +78,16 @@ def _resolved_output(answer: dict[str, Any], last_output: str) -> str:
     return last_output
 
 
+def _best_answer(answer: dict[str, Any], last_output: str, last_response: str) -> str:
+    if answer.get("content"):
+        return str(answer.get("content", ""))
+    if last_output and not last_output.startswith("ERROR:"):
+        return last_output
+    if last_response:
+        return last_response
+    return ""
+
+
 def _apply_batch_error_guard(subcalls: SubcallClient, env_globals: dict[str, Any]) -> None:
     if hasattr(subcalls, "llm_batch_with_errors"):
         def _wrapped_batch(prompts: list[str], contexts: list[str] | None = None) -> list[str]:
@@ -156,6 +166,7 @@ def run_rlm(
     trajectory: list[IterationRecord] = []
     iterations = 0
     last_output = ""
+    last_response = ""
     error: RLMError | None = None
 
     messages: list[dict[str, str]] = []
@@ -191,12 +202,14 @@ def run_rlm(
                     return_usage=True,
                 )
                 context.stats.total_tokens += total_tokens_from_usage(usage)
+                last_response = response
                 if cfg.verbose:
                     print(f"\nLLM Response:\n{response}", file=sys.stderr)
             except Exception as exc:
                 error = RLMError(type=exc.__class__.__name__, message=str(exc))
+                final_answer = _best_answer(answer, last_output, last_response)
                 return RLMResult(
-                    answer=str(answer.get("content", "")),
+                    answer=final_answer,
                     ready=bool(answer.get("ready")),
                     iterations=iterations,
                     tokens_used=context.stats.total_tokens,
@@ -224,10 +237,12 @@ def run_rlm(
                             return_usage=True,
                         )
                         context.stats.total_tokens += total_tokens_from_usage(repair_usage)
+                        last_response = repair_response
                     except Exception as repair_exc:
                         error = RLMError(type=repair_exc.__class__.__name__, message=str(repair_exc))
+                        final_answer = _best_answer(answer, last_output, last_response)
                         return RLMResult(
-                            answer=str(answer.get("content", "")),
+                            answer=final_answer,
                             ready=bool(answer.get("ready")),
                             iterations=iterations,
                             tokens_used=context.stats.total_tokens,
@@ -242,8 +257,9 @@ def run_rlm(
                             type="PolicyError",
                             message="Response missing python code block.",
                         )
+                        final_answer = _best_answer(answer, last_output, last_response)
                         return RLMResult(
-                            answer=str(answer.get("content", "")),
+                            answer=final_answer,
                             ready=bool(answer.get("ready")),
                             iterations=iterations,
                             tokens_used=context.stats.total_tokens,
@@ -256,7 +272,7 @@ def run_rlm(
                 else:
                     if cfg.verbose:
                         print("\nNo code block found, returning response as answer", file=sys.stderr)
-                    final_answer = str(answer.get("content", "")) or response
+                    final_answer = _best_answer(answer, last_output, last_response) or response
                     return RLMResult(
                         answer=final_answer,
                         ready=bool(answer.get("ready")),
@@ -353,10 +369,12 @@ def run_rlm(
                         return_usage=True,
                     )
                     context.stats.total_tokens += total_tokens_from_usage(repair_usage)
+                    last_response = repair_response
                 except Exception as repair_exc:
                     error = RLMError(type=repair_exc.__class__.__name__, message=str(repair_exc))
+                    final_answer = _best_answer(answer, last_output, last_response)
                     return RLMResult(
-                        answer=str(answer.get("content", "")),
+                        answer=final_answer,
                         ready=bool(answer.get("ready")),
                         iterations=iterations,
                         tokens_used=context.stats.total_tokens,
@@ -429,14 +447,12 @@ def run_rlm(
                         if cfg.verbose:
                             print(f"\nRepair execution error: {repair_exec_error}", file=sys.stderr)
 
-        if answer.get("content"):
-            final_answer = str(answer.get("content", ""))
-        elif last_output and not last_output.startswith("ERROR:"):
-            final_answer = last_output
-        elif error:
-            final_answer = f"Error: {error.message}"
-        else:
-            final_answer = "No output produced."
+        final_answer = _best_answer(answer, last_output, last_response)
+        if not final_answer:
+            if error:
+                final_answer = f"Error: {error.message}"
+            else:
+                final_answer = "No output produced."
 
         if cfg.verbose:
             print(f"\nFinal iterations: {iterations}", file=sys.stderr)
