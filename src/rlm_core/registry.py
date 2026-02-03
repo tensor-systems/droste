@@ -35,6 +35,15 @@ class DataSourceRegistry:
             if caps.get("stats"):
                 ns["get_stats"] = source.get_stats
 
+            if hasattr(source, "get_messages"):
+                ns["get_messages"] = source.get_messages
+            if hasattr(source, "get_chats"):
+                ns["get_chats"] = source.get_chats
+            if hasattr(source, "get_chat_messages"):
+                ns["get_chat_messages"] = source.get_chat_messages
+            if hasattr(source, "sample"):
+                ns["sample"] = source.sample
+
             env[name] = ns
 
             if self._default_source_name == name:

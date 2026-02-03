@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sys
 from typing import Any
 
-from ..exceptions import RLMError
+from ..exceptions import BatchLLMError, RLMError, SandboxError
 from ..execution.context import ExecutionContext, create_execution_context
 from ..execution.config import (
     DEFAULT_MAX_CALLS,
@@ -68,12 +69,28 @@ def _execution_output(result: ExecutionResult | str) -> str:
     return str(result)
 
 
-def _truncate_output(output: str, max_chars: int) -> str:
+def _apply_batch_error_guard(subcalls: SubcallClient, env_globals: dict[str, Any]) -> None:
+    if hasattr(subcalls, "llm_batch_with_errors"):
+        def _wrapped_batch(prompts: list[str], contexts: list[str] | None = None) -> list[str]:
+            results, errors = subcalls.llm_batch_with_errors(prompts, contexts)
+            if errors:
+                raise BatchLLMError(
+                    f"batch_llm_query failed for {len(errors)}/{len(prompts)} items",
+                    errors,
+                )
+            return results
+        env_globals["llm_batch"] = _wrapped_batch
+        env_globals["batch_llm_query"] = _wrapped_batch
+
+
+def _enforce_output_budget(output: str, max_chars: int) -> None:
     if max_chars <= 0:
-        return ""
-    if len(output) <= max_chars:
-        return output
-    return output[:max_chars]
+        return
+    if len(output) > max_chars:
+        raise SandboxError(
+            f"Sandbox output exceeded {max_chars} characters (attempted {len(output)}). "
+            "Summarize or aggregate results instead of printing raw rows."
+        )
 
 
 def run_rlm(
@@ -111,6 +128,7 @@ def run_rlm(
     env_globals.setdefault("llm_query", subcalls.llm_query)
     env_globals.setdefault("llm_batch", subcalls.llm_batch)
     env_globals.setdefault("batch_llm_query", subcalls.llm_batch)
+    _apply_batch_error_guard(subcalls, env_globals)
 
     if system_prompt is None:
         prompt_additions = environment.prompt_fragment()
@@ -152,6 +170,10 @@ def run_rlm(
                 messages.append({"role": "user", "content": refinement_content})
 
             context.emit_progress(f"Iteration {iterations}/{cfg.max_iterations}: Generating code...")
+            if cfg.verbose:
+                print(f"\n{'='*60}", file=sys.stderr)
+                print(f"Iteration {iterations}/{cfg.max_iterations}: Generating code...", file=sys.stderr)
+                print(f"{'='*60}", file=sys.stderr)
 
             try:
                 response, usage = root_llm.chat_completion(
@@ -160,6 +182,8 @@ def run_rlm(
                     return_usage=True,
                 )
                 context.stats.total_tokens += total_tokens_from_usage(usage)
+                if cfg.verbose:
+                    print(f"\nLLM Response:\n{response}", file=sys.stderr)
             except Exception as exc:
                 error = RLMError(type=exc.__class__.__name__, message=str(exc))
                 return RLMResult(
@@ -174,23 +198,38 @@ def run_rlm(
 
             code = extract_code_block(response, "python")
             if not code:
-                error = RLMError(type="MissingCodeBlock", message="No python code block returned")
+                if cfg.verbose:
+                    print("\nNo code block found, returning response as answer", file=sys.stderr)
+                final_answer = str(answer.get("content", "")) or response
                 return RLMResult(
-                    answer=str(answer.get("content", "")),
+                    answer=final_answer,
                     ready=bool(answer.get("ready")),
                     iterations=iterations,
                     tokens_used=context.stats.total_tokens,
                     sub_calls_made=context.stats.calls_made,
                     trajectory=trajectory,
-                    error=error,
+                    error=None,
                 )
 
             context.emit_progress(f"Iteration {iterations}/{cfg.max_iterations}: Executing...")
+            if cfg.verbose:
+                print(f"\nExecuting code:\n{code}", file=sys.stderr)
 
             try:
                 output = environment.execute(code)
-                last_output = _truncate_output(_execution_output(output), cfg.max_output_chars)
+                last_output = _execution_output(output)
+                _enforce_output_budget(last_output, cfg.max_output_chars)
                 error = None
+                if cfg.verbose:
+                    if last_output and not last_output.startswith("ERROR:"):
+                        print(f"\nOutput:\n{last_output}", file=sys.stderr)
+                    print(f"\nSub-calls made: {context.stats.calls_made}", file=sys.stderr)
+                    print(f"answer[\"ready\"] = {answer.get(\"ready\")}", file=sys.stderr)
+                    if answer.get("content"):
+                        print(
+                            f"answer[\"content\"] length: {len(str(answer.get(\"content\")))} chars",
+                            file=sys.stderr,
+                        )
                 trajectory.append(
                     IterationRecord(
                         iteration=iterations,
@@ -203,11 +242,18 @@ def run_rlm(
                 )
             except Exception as exec_error:
                 last_output = f"ERROR: {exec_error}"
-                error = RLMError(type=exec_error.__class__.__name__, message=str(exec_error), code=code)
+                details = None
+                if isinstance(exec_error, BatchLLMError):
+                    details = {"errors": exec_error.errors}
+                error = RLMError(type=exec_error.__class__.__name__, message=str(exec_error), code=code, details=details)
+                if cfg.verbose:
+                    print(f"\nExecution error: {exec_error}", file=sys.stderr)
 
                 context.emit_progress(
                     f"Iteration {iterations}/{cfg.max_iterations}: Retrying with error feedback..."
                 )
+                if cfg.verbose:
+                    print("\nRetrying with error feedback...", file=sys.stderr)
                 repair_messages = messages + [
                     {"role": "assistant", "content": f"```python\n{code}\n```"},
                     {
@@ -241,7 +287,8 @@ def run_rlm(
                     )
                     try:
                         output = environment.execute(repaired_code)
-                        last_output = _truncate_output(_execution_output(output), cfg.max_output_chars)
+                        last_output = _execution_output(output)
+                        _enforce_output_budget(last_output, cfg.max_output_chars)
                         error = None
                         code = repaired_code
                         trajectory.append(
@@ -256,43 +303,39 @@ def run_rlm(
                         )
                     except Exception as repair_exec_error:
                         last_output = f"ERROR: {repair_exec_error}"
+                        details = None
+                        if isinstance(repair_exec_error, BatchLLMError):
+                            details = {"errors": repair_exec_error.errors}
                         error = RLMError(
                             type=repair_exec_error.__class__.__name__,
                             message=str(repair_exec_error),
                             code=repaired_code,
+                            details=details,
                         )
+                        if cfg.verbose:
+                            print(f"\nRepair execution error: {repair_exec_error}", file=sys.stderr)
 
-        if error is not None:
-            return RLMResult(
-                answer=str(answer.get("content", "")),
-                ready=bool(answer.get("ready")),
-                iterations=iterations,
-                tokens_used=context.stats.total_tokens,
-                sub_calls_made=context.stats.calls_made,
-                trajectory=trajectory,
-                error=error,
-            )
+        if answer.get("content"):
+            final_answer = str(answer.get("content", ""))
+        elif last_output and not last_output.startswith("ERROR:"):
+            final_answer = last_output
+        elif error:
+            final_answer = f"Error: {error.message}"
+        else:
+            final_answer = "No output produced."
 
-        if not answer.get("ready"):
-            error = RLMError(type="AnswerNotReady", message="answer['ready'] was never set")
-            return RLMResult(
-                answer=str(answer.get("content", "")),
-                ready=False,
-                iterations=iterations,
-                tokens_used=context.stats.total_tokens,
-                sub_calls_made=context.stats.calls_made,
-                trajectory=trajectory,
-                error=error,
-            )
+        if cfg.verbose:
+            print(f"\nFinal iterations: {iterations}", file=sys.stderr)
+            print(f"answer[\"ready\"]: {answer.get(\"ready\")}", file=sys.stderr)
 
         return RLMResult(
-            answer=str(answer.get("content", "")),
-            ready=True,
+            answer=final_answer,
+            ready=bool(answer.get("ready")),
             iterations=iterations,
             tokens_used=context.stats.total_tokens,
             sub_calls_made=context.stats.calls_made,
             trajectory=trajectory,
-            error=None,
+            error=error,
         )
     finally:
         environment.close()

@@ -44,9 +44,13 @@ class DataSource(Protocol):
         self,
         query: str,
         limit: int = 50,
+        sender: str | None = None,
+        chat: str | None = None,
+        days: int | None = None,
+        table: str = "messages",
         filters: dict[str, Any] | None = None,
     ) -> list[SearchResult]:
-        """Full-text search."""
+        """Full-text search (supports Recall-style args plus filters)."""
         ...
 
     def query(self, sql: str) -> list[dict[str, Any]]:
@@ -59,4 +63,20 @@ class DataSource(Protocol):
 
     def get_recent(self, days: int = 7, limit: int = 100) -> list[dict[str, Any]]:
         """Get recent records."""
+        ...
+
+    def get_messages(self, limit: int | None = 10000) -> list[dict[str, Any]]:
+        """Get messages in bulk (optional)."""
+        ...
+
+    def get_chats(self) -> list[dict[str, Any]]:
+        """Get list of chats (optional)."""
+        ...
+
+    def get_chat_messages(self, chat_id: str, limit: int = 1000) -> list[dict[str, Any]]:
+        """Get messages from a chat (optional)."""
+        ...
+
+    def sample(self, n: int = 1000) -> list[dict[str, Any]]:
+        """Get random sample (optional)."""
         ...

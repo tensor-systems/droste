@@ -11,7 +11,7 @@ class MockEnvironment(RLMEnvironment):
         self._calls: list[str] = []
 
     def capabilities(self) -> EnvCapabilities:
-        return {"tools_in_root": False, "max_output_chars": 8192}
+        return {"tools_in_root": False, "max_output_chars": 25000}
 
     def globals(self) -> dict[str, Any]:
         return self._globals

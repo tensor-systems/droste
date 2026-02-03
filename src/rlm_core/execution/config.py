@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from .progress import ProgressCallback
 
 
-DEFAULT_MAX_OUTPUT_CHARS = 8192
+DEFAULT_MAX_OUTPUT_CHARS = 25000
 DEFAULT_MAX_DEPTH = 1
 DEFAULT_MAX_CALLS = 10
 DEFAULT_MAX_ITERATIONS = 5

@@ -13,3 +13,11 @@ class SubcallClient(Protocol):
     def llm_batch(self, prompts: list[str], contexts: list[str] | None = None) -> list[str]:
         """Batch sub-LLM calls for parallel processing."""
         ...
+
+    def llm_batch_with_errors(
+        self,
+        prompts: list[str],
+        contexts: list[str] | None = None,
+    ) -> tuple[list[str], list[dict[str, object]]]:
+        """Batch sub-LLM calls with structured per-item errors."""
+        ...
