@@ -34,7 +34,7 @@ def upload_to_r2(filepath: Path, bucket: str = "rlm-pypi") -> None:
 
     # Upload file with SHA256 in custom metadata
     cmd = [
-        "bunx", "wrangler", "r2", "object", "put",
+        "npx", "wrangler", "r2", "object", "put",
         f"{bucket}/packages/{filename}",
         "--file", str(filepath),
         "--content-type", "application/octet-stream",
