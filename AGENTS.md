@@ -27,6 +27,8 @@ can omit them to keep behavior purely prompt-driven.
 - `rlm_runner` is a shared HTTP-backed runner used by host apps (ModelRelay, Recall). It reads the request JSON from `RLM_RUNNER_REQUEST_PATH` (or argv) and returns a JSON response payload.
 - The runner wraps `rlm_core` and supplies an HTTP `LLMClient` + `SubcallClient` plus a sandboxed `RunnerEnvironment`.
 - Timeouts in `RunnerEnvironment.execute` use `signal.setitimer` and restore the previous handler (`old_handler`) after each execution to avoid clobbering host signal handlers.
+- `rlm_runner` expects HTTP endpoints for root and subcall execution (`root_endpoint`/`subcall_endpoint` + `token`).
+- `adapter_module` lets callers delegate the runner to a custom module with `run(request)` (used for non-HTTP environments like Recall).
 
 ## Installing from Private Index
 

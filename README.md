@@ -52,7 +52,9 @@ print(f"Completed in {result.iterations} iterations, {result.sub_calls_made} sub
 
 The `rlm_runner` package is a thin orchestration layer that wires `rlm_core` to
 HTTP-backed root LLM calls and subcalls. It is shared across hosts (ModelRelay,
-Recall, etc.) so the loop logic stays in one place.
+Recall, etc.) so the loop logic stays in one place. For custom environments,
+set `adapter_module` in the runner request to delegate to an adapter module's
+`run(request)` function.
 
 ```mermaid
 flowchart LR
@@ -67,6 +69,10 @@ flowchart LR
     Core --> Subcalls[SubcallClient llm_query llm_batch]
     Subcalls --> SubcallAPI[Host /rlm/subcall]
 ```
+
+**Runner Inputs**
+- `root_endpoint` + `subcall_endpoint` + `token`: required for HTTP-backed runs.
+- `adapter_module`: optional Python module path to override the runner entirely.
 
 ## Core Concepts
 

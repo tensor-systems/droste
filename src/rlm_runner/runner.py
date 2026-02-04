@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import importlib
 import io
 import json
 import os
@@ -484,7 +485,25 @@ def _build_context(payload: dict[str, Any]) -> Any:
     return payload.get("context")
 
 
+def _run_adapter(request: dict[str, Any]) -> dict[str, Any]:
+    adapter_module = str(request.get("adapter_module") or "").strip()
+    if not adapter_module:
+        raise RuntimeError("adapter_module is required for adapter runs")
+    module = importlib.import_module(adapter_module)
+    run_fn = getattr(module, "run", None)
+    if not callable(run_fn):
+        raise RuntimeError(f"adapter module {adapter_module} missing run(request) function")
+    result = run_fn(request)
+    if not isinstance(result, dict):
+        raise RuntimeError(f"adapter module {adapter_module} returned {type(result)}; expected dict")
+    return result
+
+
 def run(request: dict[str, Any]) -> dict[str, Any]:
+    adapter_module = request.get("adapter_module")
+    if isinstance(adapter_module, str) and adapter_module.strip():
+        return _run_adapter(request)
+
     context = _build_context(request)
     data_source = request.get("data_source")
 
@@ -500,21 +519,6 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
     session = str(request.get("session") or "")
     session_index = int(request.get("session_index") or 0)
 
-    if not token or not root_endpoint or not subcall_endpoint:
-        raise RuntimeError("missing endpoints or token")
-
-    root_client = RootLLMClient(
-        endpoint=root_endpoint,
-        token=token,
-        default_model=str(request.get("model") or ""),
-        provider=str(request.get("provider") or "") or None,
-        max_output_tokens=int(request.get("max_output_tokens") or 0),
-        temperature=request.get("temperature"),
-        stop=request.get("stop"),
-        session=session,
-        session_index=session_index,
-    )
-
     from rlm_core.execution.context import create_execution_context  # type: ignore
 
     exec_context = create_execution_context(
@@ -525,6 +529,25 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
         verbose=False,
     )
 
+    model = str(request.get("model") or "")
+    provider = str(request.get("provider") or "") or None
+    max_output_tokens = int(request.get("max_output_tokens") or 0)
+    temperature = request.get("temperature")
+    stop = request.get("stop")
+
+    if not token or not root_endpoint or not subcall_endpoint:
+        raise RuntimeError("missing endpoints or token")
+    root_client = RootLLMClient(
+        endpoint=root_endpoint,
+        token=token,
+        default_model=model,
+        provider=provider,
+        max_output_tokens=max_output_tokens,
+        temperature=temperature,
+        stop=stop,
+        session=session,
+        session_index=session_index,
+    )
     subcalls = HTTPSubcallClient(
         endpoint=subcall_endpoint,
         token=token,

@@ -1,4 +1,4 @@
-"""RLM runner for HTTP-backed root/subcall orchestration."""
+"""RLM runner for HTTP-backed root/subcall orchestration (with optional adapters)."""
 
 from .runner import main, run
 
