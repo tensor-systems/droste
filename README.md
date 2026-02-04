@@ -48,6 +48,26 @@ print(result.answer)
 print(f"Completed in {result.iterations} iterations, {result.sub_calls_made} sub-calls")
 ```
 
+## Runner Architecture (rlm_runner)
+
+The `rlm_runner` package is a thin orchestration layer that wires `rlm_core` to
+HTTP-backed root LLM calls and subcalls. It is shared across hosts (ModelRelay,
+Recall, etc.) so the loop logic stays in one place.
+
+```mermaid
+flowchart LR
+    Host[Host App] --> Runner[rlm_runner]
+    Runner --> Core[rlm_core run_rlm]
+    Runner --> Env[RunnerEnvironment]
+    Env --> Sandbox[Python REPL execute]
+
+    Core --> RootLLM[LLMClient responses_create]
+    RootLLM --> Responses[Host /responses]
+
+    Core --> Subcalls[SubcallClient llm_query llm_batch]
+    Subcalls --> SubcallAPI[Host /rlm/subcall]
+```
+
 ## Core Concepts
 
 ### Protocols

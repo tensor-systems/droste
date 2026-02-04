@@ -31,7 +31,7 @@ def total_tokens_from_usage(usage: Any) -> int:
 class LLMClient(Protocol):
     """Abstract LLM API client."""
 
-    def chat_completion(
+    def responses_create(
         self,
         messages: list[dict[str, Any]],
         model: str,
@@ -39,7 +39,7 @@ class LLMClient(Protocol):
         temperature: float = 0.0,
         return_usage: bool = False,
     ) -> str | tuple[str, TokenUsage]:
-        """Make a chat completion request."""
+        """Create a response from a list of messages."""
         ...
 
     def batch_responses(self, requests: list[dict[str, Any]]) -> list[str]:

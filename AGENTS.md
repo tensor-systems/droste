@@ -17,6 +17,17 @@ or require SQL aggregates + numeric-only output for counts), the caller must
 pass explicit policy hints. Benchmarks should supply these hints; general use
 can omit them to keep behavior purely prompt-driven.
 
+## LLM Client Protocol
+
+- `LLMClient` now exposes `responses_create(...)` (message-based) to avoid chat/completions terminology.
+- The core loop calls `responses_create` and expects it to wrap `/responses` semantics, not OpenAI-style completions.
+
+## rlm_runner Package
+
+- `rlm_runner` is a shared HTTP-backed runner used by host apps (ModelRelay, Recall). It reads the request JSON from `RLM_RUNNER_REQUEST_PATH` (or argv) and returns a JSON response payload.
+- The runner wraps `rlm_core` and supplies an HTTP `LLMClient` + `SubcallClient` plus a sandboxed `RunnerEnvironment`.
+- Timeouts in `RunnerEnvironment.execute` use `signal.setitimer` and restore the previous handler (`old_handler`) after each execution to avoid clobbering host signal handlers.
+
 ## Installing from Private Index
 
 To install `rlm-core` from the private PyPI index:

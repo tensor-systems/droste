@@ -196,7 +196,7 @@ def run_rlm(
                 print(f"{'='*60}", file=sys.stderr)
 
             try:
-                response, usage = root_llm.chat_completion(
+                response, usage = root_llm.responses_create(
                     messages,
                     model=cfg.root_model or "",
                     return_usage=True,
@@ -231,7 +231,7 @@ def run_rlm(
                         },
                     ]
                     try:
-                        repair_response, repair_usage = root_llm.chat_completion(
+                        repair_response, repair_usage = root_llm.responses_create(
                             repair_messages,
                             model=cfg.root_model or "",
                             return_usage=True,
@@ -363,7 +363,7 @@ def run_rlm(
                     },
                 ]
                 try:
-                    repair_response, repair_usage = root_llm.chat_completion(
+                    repair_response, repair_usage = root_llm.responses_create(
                         repair_messages,
                         model=cfg.root_model or "",
                         return_usage=True,

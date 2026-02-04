@@ -17,7 +17,7 @@ class MockLLMClient(LLMClient):
         self._responses = responses or []
         self._call_count = 0
 
-    def chat_completion(
+    def responses_create(
         self,
         messages: list[dict[str, Any]],
         model: str,
