@@ -49,10 +49,28 @@ view(query) digest    : 918fb043cbeb == 918fb043cbeb   (300 rows, ATTACH+view)
 - Keep `MessageDatabase` **verbatim**; fidelity is preserved when the same code runs over
   the same file. Reimplementing query()/the view in TS/Swift would reintroduce drift risk.
 
-## Open design decision (Phase 2/3)
-Phase 1 ran the data layer *inside* Pyodide with the DB mounted (parity with today's
-isolation: the data layer shares the interpreter with generated code; network is blocked).
-For stronger isolation, move the DB read out of the untrusted REPL onto the trusted host
-(Swift) behind the `query()` tool — at the cost of either reimplementing MessageDatabase
-host-side or running it in a separate trusted Python context. Network (`llm_query`) is
-host-side either way (no sockets in WASM).
+## Security model
+
+The RLM queries `shadow.db` — a **read-only, app-maintained derived copy** of iMessage
+data (`MessageDatabase` opens `file:{path}?mode=ro`). The live `~/Library/Messages/chat.db`
+is read only by the trusted Swift host (to build the shadow) and **never reaches the
+sandbox**. Combined with Pyodide having **no sockets** (no network egress), this makes the
+data-layer-in-sandbox posture acceptable for v1: generated code can only read a read-only
+copy of the corpus it's already meant to query, and can't exfiltrate it (except via the
+`llm_query` sub-call to the user's own ModelRelay).
+
+**v1 mitigation — tight, read-only, DB-only mount (do in Phase 2):** the data dir also holds
+`config.json` / `sessions.json` (settings / dev keys / session state). Do NOT mount the whole
+directory (the Phase 1 spike does, for convenience). Mount only:
+```
+read-only:  shadow.db{,-wal,-shm}  +  contacts.db{,-wal,-shm}
+exclude:    config.json, sessions.json, everything else
+```
+(WAL mode → include the `-wal`/`-shm` siblings, or open with `immutable=1`.) This removes the
+only real leak vector while keeping `MessageDatabase` verbatim.
+
+**Later hardening (Design B) — tracked in tensor-systems/rlm-core#3:** move the data layer
+onto the trusted host as a separate Pyodide "DB service" context (verbatim `MessageDatabase`
++ read-only mount + ENFORCED `SqlValidator`), with the untrusted REPL context getting no
+FS/no net and only the bridged tools. Matches DSPy's tools-only posture. Defense-in-depth,
+post-v1.
