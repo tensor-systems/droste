@@ -7,9 +7,24 @@ goal being a much simpler/safer macOS app bundle (one Deno binary + data, no nat
 
 Run:
 ```bash
-./run.sh spike.ts     # Phase 0: WASM viability (imports, host-tool bridge, blockers)
-./run.sh phase1.ts    # Phase 1: data-layer fidelity, native vs Pyodide, on the corpus
+./run.sh spike.ts      # Phase 0: WASM viability (imports, host-tool bridge, blockers)
+./run.sh phase1.ts     # Phase 1: data-layer fidelity, native vs Pyodide, on the corpus
+./run.sh phase2.ts     # Phase 2: RunnerEnvironment.execute() runs under Pyodide
+MODELRELAY_API_KEY=... ./run.sh phase3.ts   # Phase 2 (step 3): a live RLM query end-to-end
+MODELRELAY_API_KEY=... ./run.sh phase4.ts   # Phase 4: 8-query semantic parity vs baseline
+deno run --cached-only --allow-read --allow-env offline-probe.ts   # Phase 3: offline Pyodide
 ```
+
+**Status (all green / committed):** Phase 0 viability ✓ · Phase 1 fidelity ✓ · executor port ✓ ·
+a live Recall RLM query runs end-to-end in Deno+Pyodide ✓ · parity shows no quality-regression
+signal (Pyodide ≥ native on 6/8 semantic queries; single-shot metric is noisy) ✓.
+
+**Phase 3 — packaging keystone (offline Pyodide) ✓.** The whole runtime — `pyodide.asm.wasm`,
+`python_stdlib.zip`, `pyodide-lock.json`, and the `sqlite3` wheel — is ~13MB of **data** and runs
+with **zero network** (`deno run --cached-only`). So the shipped macOS bundle is one Deno binary
+(~40MB, the only signed native artifact) + ~13MB Pyodide data + the small Python sources + the
+relay — no `Python.framework`, no wheelhouse, no per-`.so` signing. That's the "easier to package"
+payoff, confirmed before building the bundle.
 `run.sh` stages `rlm-core/src` + the **verbatim** rcl_rlm data layer (`message_database.py`,
 `sql_validator.py`, `exceptions.py`) into a zip Pyodide loads. Requires Deno; the
 corpus DB is expected at `~/Library/Application Support/RecallRLM/` (override as arg 2).
