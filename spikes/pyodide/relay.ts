@@ -10,15 +10,18 @@
 import { loadPyodide } from "npm:pyodide";
 import { basename, dirname } from "node:path";
 
-const zipPath = Deno.args[0];
+const sources = Deno.args[0]; // bundled Python sources DIR (prod) or a .zip (spike)
 const request = JSON.parse(await new Response(Deno.stdin.readable).text());
 
 // Route Python stdout/stderr off the relay's stdout (which carries only the
 // response JSON); silence the package loader's "Loading sqlite3" chatter too.
 const py = await loadPyodide({ stdout: () => {}, stderr: () => {} });
 await py.loadPackage("sqlite3", { messageCallback: () => {}, errorCallback: () => {} });
-const zip = await Deno.readFile(zipPath);
-py.unpackArchive(zip, "zip", { extractDir: "/app" });
+if (sources.endsWith(".zip")) {
+  py.unpackArchive(await Deno.readFile(sources), "zip", { extractDir: "/app" });
+} else {
+  py.mountNodeFS("/app", sources); // bundled sources mounted into Pyodide's FS
+}
 await py.runPythonAsync(`import sys; sys.path.insert(0, "/app")`);
 
 // Mount the DB directory into Pyodide's FS and rewrite the request paths to it.
