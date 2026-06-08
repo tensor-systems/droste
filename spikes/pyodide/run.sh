@@ -22,7 +22,7 @@ cp -R "$RLMCORE_SRC/rlm_core" "$RLMCORE_SRC/rlm_runner" "$STAGE/"
 # demand, never during a data-layer import. (Previously this staged a 3-file stub
 # with an empty __init__ to dodge the eager httpx import — no longer needed.)
 cp -R "$RCL" "$STAGE/rcl_rlm"
-cp "$HERE/probe.py" "$STAGE/"
+cp "$HERE/probe.py" "$HERE/pyodide_runtime.py" "$STAGE/"
 find "$STAGE" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 ( cd "$STAGE" && zip -rq "$ZIP" . -x '*__pycache__*' )
 echo "staged: $ZIP   (db dir: $DBDIR)"

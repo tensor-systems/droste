@@ -91,6 +91,13 @@ class BridgedLLMClient:
 
         headers = json.dumps({"X-ModelRelay-Api-Key": self._api_key, "Content-Type": "application/json"})
         raw = self._fetch("POST", f"{self._base_url}{path}", headers, json.dumps(body))
+        # Under Pyodide the host fetch is async (returns an awaitable): block the
+        # synchronous RLM loop on it via run_sync (Pyodide 0.29 + Deno supports this
+        # with no flag). A plain-string fetch (native tests) is used as-is.
+        if hasattr(raw, "__await__"):
+            from pyodide.ffi import run_sync
+
+            raw = run_sync(raw)
         return json.loads(raw)
 
     def responses_create(
