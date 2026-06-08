@@ -19,12 +19,20 @@ deno run --cached-only --allow-read --allow-env offline-probe.ts   # Phase 3: of
 a live Recall RLM query runs end-to-end in Deno+Pyodide ✓ · parity shows no quality-regression
 signal (Pyodide ≥ native on 6/8 semantic queries; single-shot metric is noisy) ✓.
 
-**Phase 3 — packaging keystone (offline Pyodide) ✓.** The whole runtime — `pyodide.asm.wasm`,
-`python_stdlib.zip`, `pyodide-lock.json`, and the `sqlite3` wheel — is ~13MB of **data** and runs
-with **zero network** (`deno run --cached-only`). So the shipped macOS bundle is one Deno binary
-(~40MB, the only signed native artifact) + ~13MB Pyodide data + the small Python sources + the
-relay — no `Python.framework`, no wheelhouse, no per-`.so` signing. That's the "easier to package"
-payoff, confirmed before building the bundle.
+**Phase 3 — packaging (all technical risks resolved):**
+- *Offline Pyodide* ✓ — the runtime (`pyodide.asm.wasm`, `python_stdlib.zip`, `sqlite3` wheel) is
+  ~13MB of **data** and runs with **zero network** (`deno run --cached-only`).
+- *Relay drop-in* ✓ (`relay.ts`, Phase 3a) — reads a HostRequest JSON on stdin, runs the RLM in
+  Pyodide, writes a clean HostResponse JSON on stdout. Same contract as the native PyO3 helper.
+- *Bundle strategy* ✓ — `deno compile` is **NOT supported** for Pyodide (runtime fs/WASM loading).
+  Use an **isolated `DENO_DIR` + `--cached-only`**: a self-contained ~14MB cache runs the relay
+  fully offline. Shipped bundle = one Deno binary (~40MB, only signed native artifact) + ~14MB
+  `DENO_DIR` data + Python sources + `relay.ts` ≈ 54MB. No `Python.framework`, no wheelhouse, no
+  per-`.so` signing — the "easier to package" payoff.
+
+Remaining Phase 3 is mechanical productionization: assemble the bundle into the `.app`
+(`package_app.sh`), point Swift `RLMHelperRunner` at the Deno relay (replace `recall-rlm-helper`,
+tight read-only DB-only mount), sign Deno + add the JIT entitlement, build, smoke-test.
 `run.sh` stages `rlm-core/src` + the **verbatim** rcl_rlm data layer (`message_database.py`,
 `sql_validator.py`, `exceptions.py`) into a zip Pyodide loads. Requires Deno; the
 corpus DB is expected at `~/Library/Application Support/RecallRLM/` (override as arg 2).
