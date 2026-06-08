@@ -112,7 +112,13 @@ class BridgedLLMClient:
             from pyodide.ffi import run_sync
 
             raw = run_sync(raw)
-        return json.loads(raw)
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError) as exc:
+            snippet = (raw if isinstance(raw, str) else str(raw))[:1000]
+            raise RuntimeError(
+                f"ModelRelay returned a non-JSON response from {path}: {snippet!r}"
+            ) from exc
 
     def responses_create(
         self,

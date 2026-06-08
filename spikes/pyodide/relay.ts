@@ -56,7 +56,13 @@ if (request.contacts_db_path && request.contacts_db_path !== "nil") {
 // Host-brokered ModelRelay transport (Pyodide has no network of its own).
 py.globals.set("host_fetch", async (m: string, u: string, h: string, b: string) => {
   const r = await fetch(u, { method: m, headers: JSON.parse(h), body: b });
-  return await r.text();
+  const text = await r.text();
+  // Surface HTTP errors instead of returning an error/empty body that the
+  // Python client would blindly json.loads() into a cryptic JSONDecodeError.
+  if (!r.ok) {
+    throw new Error(`ModelRelay HTTP ${r.status} ${r.statusText}: ${text.slice(0, 1000)}`);
+  }
+  return text;
 });
 py.globals.set("request_json", JSON.stringify(request));
 
