@@ -14,13 +14,14 @@ SCRIPT="${1:-spike.ts}"
 DBDIR="${2:-$HOME/Library/Application Support/RecallRLM}"
 
 rm -rf "$STAGE" "$ZIP"
-mkdir -p "$STAGE/rcl_rlm"
+mkdir -p "$STAGE"
 cp -R "$RLMCORE_SRC/rlm_core" "$RLMCORE_SRC/rlm_runner" "$STAGE/"
-# Minimal rcl_rlm: just the data layer, with a stub __init__ so importing it does
-# NOT drag in the network stack (rcl_rlm/__init__.py eagerly imports httpx via
-# .modelrelay, which cannot load under Pyodide — see README).
-: > "$STAGE/rcl_rlm/__init__.py"
-cp "$RCL/message_database.py" "$RCL/sql_validator.py" "$RCL/exceptions.py" "$STAGE/rcl_rlm/"
+# Full rcl_rlm package with its real (refactored) __init__. Importing the data
+# layer (rcl_rlm.message_database) must NOT drag in the network stack — the lazy
+# __init__ guarantees this: modelrelay/httpx + the full RLM stack load only on
+# demand, never during a data-layer import. (Previously this staged a 3-file stub
+# with an empty __init__ to dodge the eager httpx import — no longer needed.)
+cp -R "$RCL" "$STAGE/rcl_rlm"
 cp "$HERE/probe.py" "$STAGE/"
 find "$STAGE" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 ( cd "$STAGE" && zip -rq "$ZIP" . -x '*__pycache__*' )

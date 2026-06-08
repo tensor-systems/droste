@@ -42,10 +42,11 @@ view(query) digest    : 918fb043cbeb == 918fb043cbeb   (300 rows, ATTACH+view)
 ## Findings that shape v1
 - **Bundle the `sqlite3` Pyodide package** — it's *unvendored* from the base distribution
   (`loadPackage("sqlite3")`), not present by default.
-- **The data layer must import without the network stack.** `rcl_rlm/__init__.py` eagerly
-  imports `.modelrelay` → httpx, which won't load under Pyodide. The in-sandbox data layer
-  needs to be importable standalone (this spike stages a minimal `rcl_rlm` with a stub
-  `__init__`). Refactor target for v1.
+- **The data layer must import without the network stack.** ✅ DONE (cozybot `e28f7ad`,
+  branch `feat/deno-pyodide-rlm`): `rcl_rlm/__init__.py` eagerly imported `.modelrelay` →
+  httpx. Refactored to a lazy PEP-562 `__init__` — data layer eager, network/rlm-core lazy.
+  The spike now stages the **full** `rcl_rlm` (real `__init__`) and the data layer imports
+  cleanly under Pyodide.
 - Keep `MessageDatabase` **verbatim**; fidelity is preserved when the same code runs over
   the same file. Reimplementing query()/the view in TS/Swift would reintroduce drift risk.
 
