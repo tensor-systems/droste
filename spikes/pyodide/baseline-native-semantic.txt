@@ -1,0 +1,26 @@
+# Native RLM semantic baseline (reference for Pyodide parity, Phase 4)
+# corpus: RecallRLM/shadow_corpus_test.db (300,649 msgs)  ·  substrate: native CPython
+# NOTE: LLM-sampled → point estimate; compare Pyodide within noise.
+
+  [sem-stressed] emotional stress/anxiety
+    ✗ Score: 0.22 | Sub-calls: 9 | Tokens: 74,680
+  [sem-excited] excitement/enthusiasm
+    ✓ Score: 0.51 | Sub-calls: 5 | Tokens: 81,349
+  [sem-plans] future planning/intent
+    ✗ Score: 0.17 | Sub-calls: 6 | Tokens: 76,980
+  [sem-gratitude] gratitude/appreciation
+    ✓ Score: 0.30 | Sub-calls: 5 | Tokens: 51,944
+  [sem-frustration] frustration/annoyance
+    ✓ Score: 0.30 | Sub-calls: 8 | Tokens: 74,121
+  [sem-asking-help] requesting assistance
+    ✓ Score: 0.30 | Sub-calls: 5 | Tokens: 67,372
+  [sem-apologizing] apology/regret
+    ✓ Score: 0.30 | Sub-calls: 5 | Tokens: 33,987
+  [sem-sarcasm] sarcasm/irony
+    ✓ Score: 0.38 | Sub-calls: 7 | Tokens: 70,720
+Passed: 6/8 (75.0%)
+Total sub-calls: 50
+Avg sub-calls per query: 6.2
+Total tokens: 531,153
+Avg tokens per query: 66,394
+Queries using llm_query(): 8/8
