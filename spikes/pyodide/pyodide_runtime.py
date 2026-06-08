@@ -81,15 +81,29 @@ HostFetch = Callable[[str, str, str, str], str]
 
 
 class BridgedLLMClient:
-    def __init__(self, host_fetch: HostFetch, api_key: str, base_url: str = "https://api.modelrelay.ai/api/v1") -> None:
+    def __init__(
+        self,
+        host_fetch: HostFetch,
+        api_key: str | None = None,
+        customer_token: str | None = None,
+        base_url: str = "https://api.modelrelay.ai/api/v1",
+    ) -> None:
         self._fetch = host_fetch
         self._api_key = api_key
+        self._customer_token = customer_token
         self._base_url = base_url
+
+    def _auth_headers(self) -> dict[str, str]:
+        # Customer token (PAYGO users) takes precedence over the dev API key —
+        # mirrors ModelRelayClient._get_auth_headers.
+        if self._customer_token:
+            return {"Authorization": f"Bearer {self._customer_token}"}
+        return {"X-ModelRelay-Api-Key": self._api_key or ""}
 
     def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         import json
 
-        headers = json.dumps({"X-ModelRelay-Api-Key": self._api_key, "Content-Type": "application/json"})
+        headers = json.dumps({**self._auth_headers(), "Content-Type": "application/json"})
         raw = self._fetch("POST", f"{self._base_url}{path}", headers, json.dumps(body))
         # Under Pyodide the host fetch is async (returns an awaitable): block the
         # synchronous RLM loop on it via run_sync (Pyodide 0.29 + Deno supports this
@@ -141,3 +155,40 @@ class BridgedLLMClient:
 
     def get_model_context_window(self, model: str) -> int | None:
         return None
+
+
+def run_for_host_pyodide(request: dict[str, Any], host_fetch: HostFetch) -> dict[str, Any]:
+    """Pyodide equivalent of rcl_rlm.host.run_for_host / runner_adapter.run.
+
+    Runs a Recall RLM request with the bridged client + raw executor and returns a
+    host-compatible response dict (same shape the Deno relay writes to stdout).
+    """
+    from rcl_rlm.rlm import run_rlm
+
+    auth_type = request.get("auth_type", "api_key")
+    customer_token = request.get("customer_token") if auth_type == "customer_token" else None
+    client = BridgedLLMClient(host_fetch, api_key=request.get("api_key"), customer_token=customer_token)
+
+    kwargs: dict[str, Any] = {}
+    for key in ("contacts_db_path", "root_model", "subcall_model", "conversation_context"):
+        if request.get(key) is not None:
+            kwargs[key] = request[key]
+    for key in ("max_depth", "max_calls", "max_output_chars"):
+        if request.get(key) is not None:
+            kwargs[key] = int(request[key])
+
+    res = run_rlm(
+        question=request["question"],
+        db_path=request["db_path"],
+        llm_client=client,
+        executor_factory=RawExecutor,
+        **kwargs,
+    )
+    return {
+        "answer": res.answer,
+        "sub_calls_made": res.sub_calls_made,
+        "total_tokens": res.total_tokens,
+        "retrieved_guids": res.retrieved_guids,
+        "iterations": res.iterations,
+        "error": res.error,
+    }
