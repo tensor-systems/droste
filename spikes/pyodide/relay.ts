@@ -13,6 +13,16 @@ import { basename, dirname } from "node:path";
 const sources = Deno.args[0]; // bundled Python sources DIR (prod) or a .zip (spike)
 const request = JSON.parse(await new Response(Deno.stdin.readable).text());
 
+// Fully resolve symlinks to a real on-disk path, returning the input unchanged
+// if it cannot be resolved (e.g. the file does not exist yet).
+function realPathOr(path: string): string {
+  try {
+    return Deno.realPathSync(path);
+  } catch {
+    return path;
+  }
+}
+
 // Route Python stdout/stderr off the relay's stdout (which carries only the
 // response JSON); silence the package loader's "Loading sqlite3" chatter too.
 const py = await loadPyodide({ stdout: () => {}, stderr: () => {} });
@@ -24,12 +34,21 @@ if (sources.endsWith(".zip")) {
 }
 await py.runPythonAsync(`import sys; sys.path.insert(0, "/app")`);
 
-// Mount the DB directory into Pyodide's FS and rewrite the request paths to it.
-const dbDir = dirname(request.db_path);
+// Resolve symlinks before mounting. Pyodide's NODEFS mounts a host directory
+// into its own VFS; if the DB file is a symlink to an absolute host path
+// OUTSIDE that directory (e.g. the Recall→Cozy rename leaves
+// Cozy/shadow.db -> RecallRLM/shadow.db), the in-VFS symlink target is
+// unreachable and SQLite reports "unable to open database file". Mounting the
+// resolved real directory (and opening the resolved file) sidesteps this.
+// Falls back to the original path if it cannot be resolved (e.g. not yet on
+// disk). The resolved directory must be in Deno's --allow-read (callers grant
+// it; see RLMHelperRunner.denoArgs and the CLI relay invocation).
+const realDbPath = realPathOr(request.db_path);
+const dbDir = dirname(realDbPath);
 py.mountNodeFS("/data", dbDir);
-request.db_path = "/data/" + basename(request.db_path);
+request.db_path = "/data/" + basename(realDbPath);
 if (request.contacts_db_path && request.contacts_db_path !== "nil") {
-  request.contacts_db_path = "/data/" + basename(request.contacts_db_path);
+  request.contacts_db_path = "/data/" + basename(realPathOr(request.contacts_db_path));
 } else {
   delete request.contacts_db_path;
 }
