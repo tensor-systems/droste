@@ -2,7 +2,7 @@
 // driving the UNCHANGED rcl_rlm.rlm.run_rlm with the two Pyodide adapters
 // (RawExecutor + BridgedLLMClient) and live ModelRelay calls.
 //   MODELRELAY_API_KEY=... RLM_QUESTION="..." ./run.sh phase3.ts
-import { loadPyodide } from "npm:pyodide";
+import { loadPyodide } from "npm:pyodide@0.29.4";
 
 const [zipPath, dbDir] = Deno.args;
 const apiKey = Deno.env.get("MODELRELAY_API_KEY");

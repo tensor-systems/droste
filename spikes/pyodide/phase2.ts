@@ -1,6 +1,6 @@
 // Phase 2 — step 1: prove RunnerEnvironment.execute() RUNS under Pyodide (not
 // just imports) after the signal-timeout port.   Run:  ./run.sh phase2.ts
-import { loadPyodide } from "npm:pyodide";
+import { loadPyodide } from "npm:pyodide@0.29.4";
 
 const zipPath = Deno.args[0];
 const pyodide = await loadPyodide();

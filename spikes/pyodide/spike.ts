@@ -1,6 +1,6 @@
 // Phase 0 spike: can Deno + Pyodide host rlm-core, round-trip a host tool, and
 // what breaks under WASM?   Run:  ./run.sh spike.ts
-import { loadPyodide } from "npm:pyodide";
+import { loadPyodide } from "npm:pyodide@0.29.4";
 
 const zipPath = Deno.args[0];
 

@@ -1,4 +1,4 @@
-import { loadPyodide } from "npm:pyodide";
+import { loadPyodide } from "npm:pyodide@0.29.4";
 const py = await loadPyodide();
 await py.loadPackage("sqlite3");
 const out = await py.runPythonAsync(`

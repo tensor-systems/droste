@@ -3,7 +3,7 @@
 // runtimes — native CPython and Pyodide (DB FS-mounted, not copied) — and
 // compares set-digests. Identical digests ⇒ the host-brokered data layer
 // preserves exactly what the LLM sees.   Run:  ./run.sh phase1.ts
-import { loadPyodide } from "npm:pyodide";
+import { loadPyodide } from "npm:pyodide@0.29.4";
 
 const [zipPath, dbDir, stageDir] = Deno.args;
 const dbFile = `${dbDir}/shadow_corpus_test.db`;

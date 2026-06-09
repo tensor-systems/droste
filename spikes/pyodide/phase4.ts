@@ -2,7 +2,7 @@
 // substrate; the native semantic_extraction scoring is then applied to these
 // answers (score_pyodide_parity.py) for an apples-to-apples vs the baseline.
 //   MODELRELAY_API_KEY=... ./run.sh phase4.ts   (reads /tmp/sem_queries.json)
-import { loadPyodide } from "npm:pyodide";
+import { loadPyodide } from "npm:pyodide@0.29.4";
 
 const [zipPath, dbDir] = Deno.args;
 const apiKey = Deno.env.get("MODELRELAY_API_KEY");

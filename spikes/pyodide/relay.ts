@@ -7,7 +7,11 @@
 //       --allow-read --allow-env relay.ts <sources.zip>
 //
 // (Spike: sources come from the staged zip. Production bundles them on disk.)
-import { loadPyodide } from "npm:pyodide";
+// Pin pyodide: an unpinned `npm:pyodide` lets `deno cache` drift to a new major
+// (e.g. 314.0.0) whose sqlite3 package/API differs, breaking the offline bundle
+// ("No known package with name 'sqlite3'"). 0.29.4 is the version this relay is
+// built and tested against (run_sync + mountNodeFS + loadPackage("sqlite3")).
+import { loadPyodide } from "npm:pyodide@0.29.4";
 import { basename, dirname } from "node:path";
 
 const sources = Deno.args[0]; // bundled Python sources DIR (prod) or a .zip (spike)
