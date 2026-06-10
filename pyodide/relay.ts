@@ -27,9 +27,26 @@ function realPathOr(path: string): string {
   }
 }
 
-// Route Python stdout/stderr off the relay's stdout (which carries only the
-// response JSON); silence the package loader's "Loading sqlite3" chatter too.
-const py = await loadPyodide({ stdout: () => {}, stderr: () => {} });
+// Route Python stdout off the relay's stdout (which carries only the response
+// JSON); silence the package loader's "Loading sqlite3" chatter too. Forward the
+// RLM's structured progress events (JSON lines on Python's stderr) to the relay's
+// own stderr so the host can render real-time progress; drop other stderr noise.
+const _enc = new TextEncoder();
+const py = await loadPyodide({
+  stdout: () => {},
+  stderr: (msg: string) => {
+    for (const line of msg.split("\n")) {
+      // Whitespace-insensitive: json.dumps emits `"type": "progress"` with spaces.
+      if (line.replace(/\s/g, "").includes('"type":"progress"')) {
+        try {
+          Deno.stderr.writeSync(_enc.encode(line + "\n"));
+        } catch {
+          // best-effort progress; never let it break the run
+        }
+      }
+    }
+  },
+});
 await py.loadPackage("sqlite3", { messageCallback: () => {}, errorCallback: () => {} });
 if (sources.endsWith(".zip")) {
   py.unpackArchive(await Deno.readFile(sources), "zip", { extractDir: "/app" });
