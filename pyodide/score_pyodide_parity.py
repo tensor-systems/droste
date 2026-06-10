@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, "benchmarks")
 from semantic_extraction import evaluate_semantic_result, get_semantic_queries  # noqa: E402
 
-# Native baseline captured this session (spikes/pyodide/baseline-native-semantic.txt).
+# Native baseline captured this session (pyodide/baseline-native-semantic.txt).
 BASELINE = {
     "sem-stressed": (False, 0.22), "sem-excited": (True, 0.51), "sem-plans": (False, 0.17),
     "sem-gratitude": (True, 0.30), "sem-frustration": (True, 0.30), "sem-asking-help": (True, 0.30),

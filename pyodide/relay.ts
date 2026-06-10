@@ -6,7 +6,7 @@
 //   echo '<request json>' | deno run --allow-net=api.modelrelay.ai \
 //       --allow-read --allow-env relay.ts <sources.zip>
 //
-// (Spike: sources come from the staged zip. Production bundles them on disk.)
+// (.zip path is a dev convenience; production bundles sources as a directory.)
 // Pin pyodide: an unpinned `npm:pyodide` lets `deno cache` drift to a new major
 // (e.g. 314.0.0) whose sqlite3 package/API differs, breaking the offline bundle
 // ("No known package with name 'sqlite3'"). 0.29.4 is the version this relay is
@@ -14,7 +14,7 @@
 import { loadPyodide } from "npm:pyodide@0.29.4";
 import { basename, dirname } from "node:path";
 
-const sources = Deno.args[0]; // bundled Python sources DIR (prod) or a .zip (spike)
+const sources = Deno.args[0]; // bundled Python sources DIR (prod) or a .zip (dev)
 const request = JSON.parse(await new Response(Deno.stdin.readable).text());
 
 // Fully resolve symlinks to a real on-disk path, returning the input unchanged
