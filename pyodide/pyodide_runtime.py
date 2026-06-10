@@ -162,6 +162,11 @@ class BridgedLLMClient:
     def get_model_context_window(self, model: str) -> int | None:
         return None
 
+    def get_model_max_output_tokens(self, model: str) -> int | None:
+        # Model metadata isn't fetched over the bridge; conversation budgeting
+        # falls back to its defaults when this is None (see _context_char_budget).
+        return None
+
 
 def run_for_host_pyodide(request: dict[str, Any], host_fetch: HostFetch) -> dict[str, Any]:
     """Pyodide equivalent of rcl_rlm.host.run_for_host / runner_adapter.run.
@@ -169,14 +174,24 @@ def run_for_host_pyodide(request: dict[str, Any], host_fetch: HostFetch) -> dict
     Runs a Recall RLM request with the bridged client + raw executor and returns a
     host-compatible response dict (same shape the Deno relay writes to stdout).
     """
+    from rcl_rlm.conversation import resolve_conversation_context
     from rcl_rlm.rlm import run_rlm
 
     auth_type = request.get("auth_type", "api_key")
     customer_token = request.get("customer_token") if auth_type == "customer_token" else None
     client = BridgedLLMClient(host_fetch, api_key=request.get("api_key"), customer_token=customer_token)
 
+    # Thread multi-turn history exactly like the native runner_adapter (shared
+    # helper, so the two substrates can't drift): prefer a pre-built context, else
+    # build one from conversation_messages/summary, returning the updated summary.
+    resolved_context, updated_summary = resolve_conversation_context(
+        request,
+        model=request.get("root_model"),
+        llm_client=client,
+    )
+
     kwargs: dict[str, Any] = {}
-    for key in ("contacts_db_path", "root_model", "subcall_model", "conversation_context"):
+    for key in ("contacts_db_path", "root_model", "subcall_model"):
         if request.get(key) is not None:
             kwargs[key] = request[key]
     for key in ("max_depth", "max_calls", "max_output_chars"):
@@ -188,6 +203,7 @@ def run_for_host_pyodide(request: dict[str, Any], host_fetch: HostFetch) -> dict
         db_path=request["db_path"],
         llm_client=client,
         executor_factory=RawExecutor,
+        conversation_context=resolved_context,
         **kwargs,
     )
     return {
@@ -197,4 +213,5 @@ def run_for_host_pyodide(request: dict[str, Any], host_fetch: HostFetch) -> dict
         "retrieved_guids": res.retrieved_guids,
         "iterations": res.iterations,
         "error": res.error,
+        "conversation_summary": updated_summary,
     }
