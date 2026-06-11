@@ -75,12 +75,18 @@ if (request.contacts_db_path && request.contacts_db_path !== "nil") {
 }
 
 // Host-brokered ModelRelay transport (Pyodide has no network of its own).
+// The last HTTP error status (0 = none) is captured structurally here, where
+// `r.status` is available, and injected into the HostResponse error below — so
+// callers (e.g. the Swift app) can branch on it (402 = out of balance) without
+// parsing the human-readable message string. Fresh per process (one run/query).
+let lastHttpErrorStatus = 0;
 py.globals.set("host_fetch", async (m: string, u: string, h: string, b: string) => {
   const r = await fetch(u, { method: m, headers: JSON.parse(h), body: b });
   const text = await r.text();
   // Surface HTTP errors instead of returning an error/empty body that the
   // Python client would blindly json.loads() into a cryptic JSONDecodeError.
   if (!r.ok) {
+    lastHttpErrorStatus = r.status;
     throw new Error(`ModelRelay HTTP ${r.status} ${r.statusText}: ${text.slice(0, 1000)}`);
   }
   return text;
@@ -100,5 +106,21 @@ except Exception as e:
 json.dumps(resp)
 `);
 
-// The ONLY thing written to stdout — the HostResponse JSON.
-await Deno.stdout.write(new TextEncoder().encode(out + "\n"));
+// The ONLY thing written to stdout — the HostResponse JSON. When the run failed
+// due to an HTTP error, attach the captured status to the structured error so the
+// host can distinguish out-of-balance (402) from other failures. Best-effort: if
+// our own output isn't parseable JSON, fall back to it unchanged (the error's
+// message still carries the detail).
+let outText = out;
+if (lastHttpErrorStatus !== 0) {
+  try {
+    const parsed = JSON.parse(out);
+    if (parsed && typeof parsed.error === "object" && parsed.error !== null) {
+      parsed.error.status = lastHttpErrorStatus;
+      outText = JSON.stringify(parsed);
+    }
+  } catch {
+    // Output left unchanged; status enrichment is best-effort, not load-bearing.
+  }
+}
+await Deno.stdout.write(new TextEncoder().encode(outText + "\n"));

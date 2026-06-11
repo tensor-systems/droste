@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import builtins
 import contextlib
+import dataclasses
 import io
 from typing import Any, Callable
 
@@ -168,6 +169,25 @@ class BridgedLLMClient:
         return None
 
 
+def _serialize_error(err: Any) -> dict[str, Any] | None:
+    """Make the RLM error JSON-serializable for the host response.
+
+    ``run_rlm`` returns a ``RLMError`` *dataclass*, but the host wire contract is a
+    plain ``{"type", "message", ...}`` dict (mirrors ``rcl_rlm.host`` / the shared
+    ``rlm_runner``). Without this, ``json.dumps`` of the response raises on the
+    dataclass and the relay emits no output — an opaque failure for the app, and
+    one that would also drop the structured HTTP status the host injects (402 =
+    out of balance). Defensive across shapes: dataclass, dict, or anything else.
+    """
+    if err is None:
+        return None
+    if dataclasses.is_dataclass(err) and not isinstance(err, type):
+        return dataclasses.asdict(err)
+    if isinstance(err, dict):
+        return err
+    return {"type": type(err).__name__, "message": str(err)}
+
+
 def run_for_host_pyodide(request: dict[str, Any], host_fetch: HostFetch) -> dict[str, Any]:
     """Pyodide equivalent of rcl_rlm.host.run_for_host / runner_adapter.run.
 
@@ -212,6 +232,6 @@ def run_for_host_pyodide(request: dict[str, Any], host_fetch: HostFetch) -> dict
         "total_tokens": res.total_tokens,
         "retrieved_guids": res.retrieved_guids,
         "iterations": res.iterations,
-        "error": res.error,
+        "error": _serialize_error(res.error),
         "conversation_summary": updated_summary,
     }
