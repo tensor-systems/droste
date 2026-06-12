@@ -13,6 +13,7 @@
 // built and tested against (run_sync + mountNodeFS + loadPackage("sqlite3")).
 import { loadPyodide } from "npm:pyodide@0.29.4";
 import { basename, dirname } from "node:path";
+import { streamResponses } from "./stream.ts";
 
 const sources = Deno.args[0]; // bundled Python sources DIR (prod) or a .zip (dev)
 const request = JSON.parse(await new Response(Deno.stdin.readable).text());
@@ -74,6 +75,21 @@ if (request.contacts_db_path && request.contacts_db_path !== "nil") {
   delete request.contacts_db_path;
 }
 
+// Emit a structured event line to the relay's own stderr — the same one-way
+// channel the host already reads for progress (see the loadPyodide stderr hook).
+// Best-effort; a failed write must never break the run.
+function emitEvent(obj: unknown): void {
+  try {
+    Deno.stderr.writeSync(_enc.encode(JSON.stringify(obj) + "\n"));
+  } catch {
+    // ignore
+  }
+}
+
+// Streaming is on by default; RLM_STREAM=0 forces the legacy unary path (a
+// no-rebuild kill switch). --allow-env is already granted (see usage header).
+const STREAM_ENABLED = Deno.env.get("RLM_STREAM") !== "0";
+
 // Host-brokered ModelRelay transport (Pyodide has no network of its own).
 // The last HTTP error status (0 = none) is captured structurally here, where
 // `r.status` is available, and injected into the HostResponse error below — so
@@ -81,15 +97,30 @@ if (request.contacts_db_path && request.contacts_db_path !== "nil") {
 // parsing the human-readable message string. Fresh per process (one run/query).
 let lastHttpErrorStatus = 0;
 py.globals.set("host_fetch", async (m: string, u: string, h: string, b: string) => {
-  const r = await fetch(u, { method: m, headers: JSON.parse(h), body: b });
-  const text = await r.text();
+  const headers = JSON.parse(h);
+  // Ask ModelRelay to stream /responses so reasoning tokens reach the host live.
+  // Pyodide still receives one complete response (see streamResponses), so the
+  // sync RLM loop is unaffected.
+  const wantsStream = STREAM_ENABLED && m === "POST" && u.endsWith("/responses");
+  if (wantsStream) {
+    headers["Accept"] = 'application/x-ndjson; profile="responses-stream/v2"';
+  }
+  const r = await fetch(u, { method: m, headers, body: b });
   // Surface HTTP errors instead of returning an error/empty body that the
   // Python client would blindly json.loads() into a cryptic JSONDecodeError.
   if (!r.ok) {
     lastHttpErrorStatus = r.status;
+    const text = await r.text();
     throw new Error(`ModelRelay HTTP ${r.status} ${r.statusText}: ${text.slice(0, 1000)}`);
   }
-  return text;
+  // Stream only when we asked for it AND the server actually returned ndjson;
+  // otherwise fall back to the unary path — behavior identical to before.
+  const contentType = r.headers.get("content-type") || "";
+  const isNdjson = contentType.includes("ndjson") || contentType.includes("event-stream");
+  if (wantsStream && isNdjson) {
+    return await streamResponses(r, (chunk) => emitEvent({ type: "reasoning_delta", text: chunk }));
+  }
+  return await r.text();
 });
 py.globals.set("request_json", JSON.stringify(request));
 
