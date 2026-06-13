@@ -26,6 +26,8 @@ class DataSourceRegistry:
 
             if caps.get("search"):
                 ns["search"] = source.search
+            if hasattr(source, "find"):
+                ns["find"] = source.find
             if caps.get("sql"):
                 ns["query"] = source.query
             if caps.get("get"):
