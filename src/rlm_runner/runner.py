@@ -23,6 +23,7 @@ from rlm_core.loop.rlm import RLMConfig, run_rlm  # type: ignore
 from rlm_core.protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment  # type: ignore
 from rlm_core.protocols.llm_client import TokenUsage  # type: ignore
 from rlm_core.protocols.subcall_client import SubcallClient  # type: ignore
+from rlm_core.registry import DataSourceRegistry  # type: ignore
 
 
 class OutputBuffer(io.StringIO):
@@ -49,13 +50,13 @@ class RunnerEnvironment(RLMEnvironment):
         self,
         *,
         context: Any,
-        data_source: dict[str, Any] | None,
+        registry: DataSourceRegistry | None,
         subcalls: SubcallClient,
         max_output_chars: int,
         exec_timeout_ms: int,
     ) -> None:
         self._context = context
-        self._data_source = data_source
+        self._registry = registry
         self._subcalls = subcalls
         self._max_output_chars = max_output_chars
         self._exec_timeout_ms = exec_timeout_ms
@@ -66,8 +67,9 @@ class RunnerEnvironment(RLMEnvironment):
             "llm_batch": subcalls.llm_batch,
             "batch_llm_query": subcalls.llm_batch,
         }
-        if data_source is not None:
-            self._globals["data_source"] = data_source
+        if registry is not None:
+            # Namespaced (e.g. db.query / vault.search) + default-flattened globals.
+            self._globals.update(registry.globals())
 
     def capabilities(self) -> EnvCapabilities:
         return {
@@ -84,14 +86,10 @@ class RunnerEnvironment(RLMEnvironment):
             "Context is available in a Python variable named `context`. "
             "If it contains files, expect context['files'] entries with path, name, mime, size, and optional text."
         )
-        if self._data_source:
-            parts.append("Data source: wrapper_v1 (use data_source_search/get/content helpers).")
-            allowed_hosts = self._data_source.get("allowed_hosts")
-            if isinstance(allowed_hosts, list) and allowed_hosts:
-                parts.append("Allowed hosts: " + ", ".join(str(h) for h in allowed_hosts if h))
-            limits = self._data_source.get("limits")
-            if isinstance(limits, dict) and limits:
-                parts.append("Wrapper limits: " + json.dumps(limits, ensure_ascii=True))
+        if self._registry is not None:
+            fragment = self._registry.prompt_fragment()
+            if fragment:
+                parts.append(fragment)
         return "\n".join(parts)
 
     def execute(self, code: str) -> ExecutionResult:
@@ -234,6 +232,110 @@ class DataSourceWrapper:
         if max_bytes is not None:
             payload["max_bytes"] = max_bytes
         return self._call("/content", payload)
+
+
+class WrapperV1DataSource:
+    """`DataSource` adapter over the remote wrapper_v1 HTTP transport.
+
+    Lets the remote search/get/content partner API participate in the
+    `DataSourceRegistry` like any in-process source instead of being a parallel
+    special-case. Budgets and SSRF/host guards stay in the wrapped
+    `DataSourceWrapper`. `content` is exposed as an extra method (the registry
+    binds it via its `hasattr` path); it is not a first-class capability.
+    """
+
+    def __init__(self, config: dict[str, Any] | None, *, name: str = "wrapper") -> None:
+        self._config = config or {}
+        self._name = name or "wrapper"
+        self._wrapper = DataSourceWrapper(self._config)
+
+    def name(self) -> str:
+        return self._name
+
+    def capabilities(self) -> dict[str, bool]:
+        return {
+            "sql": False,
+            "search": True,
+            "get": True,
+            "recent": False,
+            "schema": True,
+            "stats": True,
+        }
+
+    def get_schema(self) -> str:
+        parts = ["Remote wrapper_v1 source — search(query)/get(id)/content(id) over HTTP."]
+        allowed_hosts = self._config.get("allowed_hosts")
+        if isinstance(allowed_hosts, list) and allowed_hosts:
+            parts.append("Allowed hosts: " + ", ".join(str(h) for h in allowed_hosts if h))
+        limits = self._config.get("limits")
+        if isinstance(limits, dict) and limits:
+            parts.append("Limits: " + json.dumps(limits, ensure_ascii=True))
+        return " ".join(parts)
+
+    def get_stats(self) -> dict[str, Any]:
+        return {"requests_made": self._wrapper.requests_made}
+
+    @property
+    def requests_made(self) -> int:
+        return self._wrapper.requests_made
+
+    def search(self, query: str, filters: Any = None, page: Any = None) -> Any:
+        return self._wrapper.search(query, filters, page)
+
+    def get(self, id: str) -> Any:
+        return self._wrapper.get(id)
+
+    def content(self, id: str, format: str = "text", max_bytes: int | None = None) -> Any:
+        return self._wrapper.content(id, format, max_bytes)
+
+
+def _build_one_source(spec: dict[str, Any]) -> Any:
+    stype = str(spec.get("type") or "").strip()
+    name = str(spec.get("name") or "").strip()
+    if stype == "wrapper_v1":
+        return WrapperV1DataSource(spec, name=name or "wrapper")
+    if stype in ("sql", "fs"):
+        # Minimal-engine contract (Option B): in-process sources carry DB drivers
+        # and path/SQL policy, which live with the consumer that owns the data
+        # boundary — supplied via the adapter seam, never constructed here.
+        raise ValueError(
+            f"data source type '{stype}' must be supplied by a consumer adapter "
+            "(adapter_module); the base runner only builds remote wrapper_v1 sources"
+        )
+    raise ValueError(f"unknown data source type: {stype!r}")
+
+
+def build_data_sources(request: dict[str, Any]) -> tuple[list[Any], str | None]:
+    """Resolve a request's data sources into `DataSource` objects + a default name.
+
+    Accepts the new `data_sources` list shape, and the legacy singular
+    `data_source` wrapper_v1 config as sugar for a one-element list.
+    """
+    default_name = request.get("default_source")
+    if default_name is not None:
+        default_name = str(default_name)
+    sources: list[Any] = []
+
+    raw = request.get("data_sources")
+    if raw is not None:
+        # Present-but-malformed must fail loudly, not silently fall through to
+        # the legacy singular path (which would ignore the caller's intent).
+        if not isinstance(raw, list):
+            raise ValueError("data_sources must be a list")
+        for spec in raw:
+            if not isinstance(spec, dict):
+                raise ValueError("each data_sources entry must be an object")
+            sources.append(_build_one_source(spec))
+        return sources, default_name
+
+    legacy = request.get("data_source")
+    if legacy is not None:
+        if not isinstance(legacy, dict):
+            raise ValueError("data_source must be an object")
+        sources.append(WrapperV1DataSource(legacy, name="wrapper"))
+        if default_name is None:
+            default_name = "wrapper"
+    return sources, default_name
 
 
 class HTTPSubcallClient(SubcallClient):
@@ -513,7 +615,10 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
         return _run_adapter(request)
 
     context = _build_context(request)
-    data_source = request.get("data_source")
+    sources, default_source = build_data_sources(request)
+    registry = (
+        DataSourceRegistry(sources, default_source_name=default_source) if sources else None
+    )
 
     max_iterations = int(request.get("max_iterations") or 1)
     max_depth = int(request.get("max_depth") or 1)
@@ -568,19 +673,11 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
 
     environment = RunnerEnvironment(
         context=context,
-        data_source=data_source,
+        registry=registry,
         subcalls=subcalls,
         max_output_chars=max_output_chars,
         exec_timeout_ms=exec_timeout_ms,
     )
-
-    if data_source is not None:
-        wrapper = DataSourceWrapper(data_source)
-        environment.globals()["data_source_search"] = wrapper.search
-        environment.globals()["data_source_get"] = wrapper.get
-        environment.globals()["data_source_content"] = wrapper.content
-    else:
-        wrapper = None
 
     config = RLMConfig(
         max_iterations=max_iterations,
@@ -631,8 +728,9 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
         "stop_reason": root_client.last_stop_reason,
         "model": root_client.last_model or str(request.get("model") or ""),
     }
-    if wrapper is not None:
-        response["data_source_requests"] = wrapper.requests_made
+    wrapper_sources = [s for s in sources if isinstance(s, WrapperV1DataSource)]
+    if wrapper_sources:
+        response["data_source_requests"] = sum(s.requests_made for s in wrapper_sources)
     if result.error:
         response["error"] = {
             "type": result.error.type,
