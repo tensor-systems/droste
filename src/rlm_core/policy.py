@@ -6,7 +6,7 @@ from typing import Iterable
 
 
 AGGREGATE_REGEX = re.compile(r"\b(COUNT|SUM|AVG|MIN|MAX|ROUND)\s*\(", re.IGNORECASE)
-LLM_CALL_REGEX = re.compile(r"\b(llm_query|batch_llm_query|llm_batch)\s*\(", re.IGNORECASE)
+LLM_CALL_REGEX = re.compile(r"\b(llm_query_batched|llm_query|batch_llm_query|llm_batch)\s*\(", re.IGNORECASE)
 LEN_SEARCH_REGEX = re.compile(r"\blen\s*\(\s*(search|get_messages|get_recent)\s*\(", re.IGNORECASE)
 NUMERIC_OUTPUT_REGEX = re.compile(
     r"^\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)(%)?\s*$"
@@ -54,7 +54,7 @@ def contract_violations(code: str, hints: PolicyHints | None) -> list[str]:
 
     if hints.semantic and not uses_llm_query(code):
         violations.append(
-            "Semantic question requires llm_query() or batch_llm_query(). "
+            "Semantic question requires llm_query() or llm_query_batched(). "
             "Use search()/get_recent()/get_messages() to pre-filter, then call llm_query."
         )
 

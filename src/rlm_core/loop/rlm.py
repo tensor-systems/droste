@@ -100,6 +100,7 @@ def _apply_batch_error_guard(subcalls: SubcallClient, env_globals: dict[str, Any
             return results
         env_globals["llm_batch"] = _wrapped_batch
         env_globals["batch_llm_query"] = _wrapped_batch
+        env_globals["llm_query_batched"] = _wrapped_batch
 
 
 def _enforce_output_budget(output: str, max_chars: int) -> None:
@@ -170,6 +171,10 @@ def run_rlm(
     env_globals.setdefault("llm_query", subcalls.llm_query)
     env_globals.setdefault("llm_batch", subcalls.llm_batch)
     env_globals.setdefault("batch_llm_query", subcalls.llm_batch)
+    # llm_query_batched is the canonical name in the RLM paper's reference
+    # implementation and dspy.RLM; models primed on RLM literature reach for
+    # it first, so the sandbox must answer to it.
+    env_globals.setdefault("llm_query_batched", subcalls.llm_batch)
     _apply_batch_error_guard(subcalls, env_globals)
 
     if system_prompt is None:

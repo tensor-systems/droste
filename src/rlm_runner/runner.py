@@ -66,6 +66,7 @@ class RunnerEnvironment(RLMEnvironment):
             "llm_query": subcalls.llm_query,
             "llm_batch": subcalls.llm_batch,
             "batch_llm_query": subcalls.llm_batch,
+            "llm_query_batched": subcalls.llm_batch,
         }
         if registry is not None:
             # Namespaced (e.g. db.query / vault.search) + default-flattened globals.

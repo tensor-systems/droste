@@ -7,7 +7,7 @@ from .protocols.data_source import DataSource
 
 # Base globals the runner owns; a data source may not shadow them.
 RESERVED_NAMES = frozenset(
-    {"answer", "context", "llm_query", "llm_batch", "batch_llm_query"}
+    {"answer", "context", "llm_query", "llm_batch", "batch_llm_query", "llm_query_batched"}
 )
 
 
