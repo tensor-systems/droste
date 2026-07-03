@@ -112,6 +112,29 @@ def _enforce_output_budget(output: str, max_chars: int) -> None:
         )
 
 
+def _refresh_answer(env_globals: dict[str, Any], answer: dict[str, Any]) -> dict[str, Any]:
+    """Re-read the sandbox's current `answer` binding after an execution.
+
+    Sandbox code may REBIND `answer` (answer = {...}) instead of mutating it in
+    place; the loop must observe the current binding, not the object it
+    captured before the loop — otherwise a ready answer is invisible and every
+    remaining iteration burns. Non-dict rebinds (answer = "42") are normalized
+    back to the dict contract, preserving the value as content but never
+    guessing readiness.
+    """
+    rebound = env_globals.get("answer")
+    if rebound is answer:
+        return answer
+    if isinstance(rebound, dict):
+        return rebound
+    normalized = {
+        "content": "" if rebound is None else str(rebound),
+        "ready": False,
+    }
+    env_globals["answer"] = normalized
+    return normalized
+
+
 def run_rlm(
     question: str,
     *,
@@ -296,6 +319,7 @@ def run_rlm(
                 output = environment.execute(code)
                 last_output = _execution_output(output)
                 _enforce_output_budget(last_output, cfg.max_output_chars)
+                answer = _refresh_answer(env_globals, answer)
                 if (
                     cfg.enforce_contract
                     and cfg.policy_hints is not None
@@ -397,6 +421,7 @@ def run_rlm(
                         output = environment.execute(repaired_code)
                         last_output = _execution_output(output)
                         _enforce_output_budget(last_output, cfg.max_output_chars)
+                        answer = _refresh_answer(env_globals, answer)
                         if (
                             cfg.enforce_contract
                             and cfg.policy_hints is not None

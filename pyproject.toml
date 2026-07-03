@@ -1,6 +1,6 @@
 [project]
 name = "rlm-core"
-version = "0.4.0"
+version = "0.4.1"
 description = "Core RLM loop and protocols"
 requires-python = ">=3.11"
 dependencies = []
