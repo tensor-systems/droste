@@ -5,6 +5,7 @@ import importlib
 import io
 import json
 import os
+import re
 import signal
 import sys
 import threading
@@ -207,7 +208,9 @@ class DataSourceWrapper:
             with resp:
                 raw = self._read_response(resp)
         except urllib.error.HTTPError as exc:
-            raise ValueError(f"data_source HTTP error {getattr(exc, 'code', 0)}") from exc
+            excerpt = _http_error_excerpt(exc)
+            detail = f": {excerpt}" if excerpt else ""
+            raise ValueError(f"data_source HTTP error {getattr(exc, 'code', 0)}{detail}") from exc
         except Exception as exc:
             raise ValueError(f"data_source request failed: {exc}") from exc
         try:
@@ -399,6 +402,48 @@ def build_data_sources(
     return sources, default_name
 
 
+
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+"),
+    re.compile(r'''(?i)\b(api[_-]?key|apikey|token|authorization|secret|password|key)\b(["\'\s]*[:=]["\'\s]*)[^\s"\'&,;}]+'''),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{8,}"),
+)
+
+
+def _redact_secrets(text: str) -> str:
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub(
+            lambda m: (m.group(1) + m.group(2) if m.lastindex and m.lastindex >= 2 else "") + "[redacted]",
+            text,
+        )
+    return text
+
+
+def _http_error_excerpt(exc: "urllib.error.HTTPError", limit: int = 300) -> str:
+    """Return a short, redacted response-body excerpt for an HTTP error.
+
+    Bare "HTTP 502: Bad Gateway" errors destroy the server's actual
+    explanation (e.g. a circuit-breaker rejection vs a provider error), which
+    has cost real diagnosis time. The read is byte-bounded (a chunked/stalled
+    error body must not hang the client or bypass response-size limits), the
+    excerpt is redacted (it flows into exception text and from there into the
+    repair prompt shown to the root LLM), and any failure degrades to the
+    empty string — never raise.
+    """
+    try:
+        body = exc.read(4 * limit)
+    except Exception:
+        return ""
+    if not body:
+        return ""
+    text = body.decode("utf-8", errors="replace").strip()
+    text = " ".join(text.split())
+    text = _redact_secrets(text)
+    if len(text) > limit:
+        text = text[:limit] + "..."
+    return text
+
+
 class HTTPSubcallClient(SubcallClient):
     def __init__(
         self,
@@ -455,7 +500,9 @@ class HTTPSubcallClient(SubcallClient):
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             status = getattr(exc, "code", 0)
-            raise RuntimeError(f"llm_query failed with HTTP {status}: {exc}") from exc
+            excerpt = _http_error_excerpt(exc)
+            detail = f": {excerpt}" if excerpt else f": {exc}"
+            raise RuntimeError(f"llm_query failed with HTTP {status}{detail}") from exc
         except Exception as exc:
             raise RuntimeError(f"llm_query failed: {exc}") from exc
         data = json.loads(raw)
@@ -616,7 +663,9 @@ class RootLLMClient:
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             status = getattr(exc, "code", 0)
-            raise RuntimeError(f"root llm failed with HTTP {status}: {exc}") from exc
+            excerpt = _http_error_excerpt(exc)
+            detail = f": {excerpt}" if excerpt else f": {exc}"
+            raise RuntimeError(f"root llm failed with HTTP {status}{detail}") from exc
         except Exception as exc:
             raise RuntimeError(f"root llm failed: {exc}") from exc
         data = json.loads(raw)
