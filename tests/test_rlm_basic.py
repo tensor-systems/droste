@@ -25,6 +25,7 @@ def test_run_rlm_basic():
 
     assert result.ready
     assert result.answer == "ok"
+    assert result.extracted is False
 
 
 def test_run_rlm_rebound_answer_dict_registers_ready():

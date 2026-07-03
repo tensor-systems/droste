@@ -928,6 +928,7 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
         "iterations": result.iterations,
         "tokens_used": result.tokens_used,
         "subcalls": result.sub_calls_made,
+        "extracted": bool(getattr(result, "extracted", False)),
         "trajectory": [
             {
                 "iteration": entry.iteration,

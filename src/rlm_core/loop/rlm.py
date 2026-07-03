@@ -86,6 +86,10 @@ class RLMResult:
     sub_calls_made: int
     trajectory: list[IterationRecord]
     error: RLMError | None = None
+    # True when the answer came from the post-exhaustion extract pass rather
+    # than the model marking answer['ready'] — hosts may surface it as a
+    # best-effort answer but must not present it as confirmed.
+    extracted: bool = False
 
 
 ProgressCallback = Any
@@ -603,6 +607,7 @@ def run_rlm(
         # every prior call (root failures return early above), so one more
         # extract call is affordable; a trajectory must exist or there is
         # nothing to extract from.
+        was_extracted = False
         if not answer.get("ready") and iterations >= cfg.max_iterations and trajectory:
             context.emit_progress("Max iterations reached: extracting best final answer...")
             draft = "" if policy_outstanding else str(answer.get("content") or "")
@@ -611,6 +616,7 @@ def run_rlm(
             )
             if extracted:
                 final_answer = extracted
+                was_extracted = True
 
         if not final_answer:
             if error:
@@ -630,6 +636,7 @@ def run_rlm(
             sub_calls_made=context.stats.calls_made,
             trajectory=trajectory,
             error=error,
+            extracted=was_extracted,
         )
     finally:
         environment.close()
