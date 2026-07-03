@@ -433,9 +433,13 @@ class HTTPSubcallClient(SubcallClient):
         self._depth.value = value
 
     def _increment_calls(self) -> None:
-        self._context.stats.calls_made += 1
-        if self._max_calls >= 0 and self._context.stats.calls_made > self._max_calls:
-            raise RuntimeError("max subcalls exceeded")
+        # Check-then-increment under the lock: the count is the reported
+        # subcall total, so a rejected over-limit attempt must not inflate it,
+        # and concurrent llm_batch threads must not race the check.
+        with self._seq_lock:
+            if self._max_calls >= 0 and self._context.stats.calls_made >= self._max_calls:
+                raise RuntimeError("max subcalls exceeded")
+            self._context.stats.calls_made += 1
 
     def _request(self, payload: dict[str, Any]) -> str:
         body = json.dumps(payload).encode("utf-8")
@@ -766,6 +770,10 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
         system_prompt=system_prompt,
         system_prompt_additions=system_prompt_additions,
         conversation_context=str(request.get("conversation_context") or ""),
+        # The subcall client increments exec_context.stats.calls_made; without
+        # sharing it, run_rlm creates its own context and reports subcalls=0
+        # no matter how many subcalls actually ran.
+        context=exec_context,
     )
 
     response: dict[str, Any] = {
