@@ -7,8 +7,12 @@ from .progress import ProgressCallback
 
 DEFAULT_MAX_OUTPUT_CHARS = 25000
 DEFAULT_MAX_DEPTH = 1
-DEFAULT_MAX_CALLS = 10
-DEFAULT_MAX_ITERATIONS = 5
+# Raised 10 -> 50 and 5 -> 20 (issue #21): an explore-first orchestration
+# budget needs room — dspy.RLM defaults to 20 iterations / 50 subcalls and
+# actually used ~13.5 subcalls/task on OOLONG-131k; 5 iterations forecloses
+# that before it starts.
+DEFAULT_MAX_CALLS = 50
+DEFAULT_MAX_ITERATIONS = 20
 
 
 @dataclass(frozen=True)

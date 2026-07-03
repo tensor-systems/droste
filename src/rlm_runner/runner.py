@@ -20,6 +20,7 @@ REPO_ROOT = os.path.dirname(PACKAGE_ROOT)
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from rlm_core.execution.config import DEFAULT_MAX_CALLS, DEFAULT_MAX_ITERATIONS  # type: ignore
 from rlm_core.loop.rlm import RLMConfig, run_rlm  # type: ignore
 from rlm_core.protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment  # type: ignore
 from rlm_core.protocols.llm_client import TokenUsage  # type: ignore
@@ -44,6 +45,79 @@ class OutputBuffer(io.StringIO):
                 )
             self._size = new_size
         return super().write(text)
+
+
+CONTEXT_PREVIEW_CHARS = 400
+CONTEXT_PREVIEW_MAX_FILES = 20
+
+
+def _safe_preview(text: str, limit: int = CONTEXT_PREVIEW_CHARS) -> str:
+    """Head of `text`, truncated and defused so it cannot break its fenced block."""
+    head = text[:limit]
+    if len(text) > limit:
+        head += "..."
+    return head.replace("```", "'''")
+
+
+def _safe_label(text: str, limit: int = 200) -> str:
+    """File path/name for prompt inclusion: control chars and newlines
+    stripped, then JSON-quoted so attacker-controlled names cannot inject
+    prompt instructions outside a fence."""
+    cleaned = "".join(ch for ch in text if ch.isprintable())[:limit]
+    return json.dumps(cleaned, ensure_ascii=True)
+
+
+def _describe_files_context(files: list[Any]) -> str:
+    lines = [f"`context` is a dict with {len(files)} file(s) in context['files']:"]
+    total_text = 0
+    for entry in files[:CONTEXT_PREVIEW_MAX_FILES]:
+        if not isinstance(entry, dict):
+            lines.append(f"- (non-dict entry of type {type(entry).__name__})")
+            continue
+        path = _safe_label(str(entry.get("path") or entry.get("name") or "(unnamed)"))
+        text = entry.get("text")
+        text_len = len(text) if isinstance(text, str) else 0
+        total_text += text_len
+        lines.append(f"- {path} (text: {text_len:,} chars)")
+    if len(files) > CONTEXT_PREVIEW_MAX_FILES:
+        lines.append(f"- ... and {len(files) - CONTEXT_PREVIEW_MAX_FILES} more file(s)")
+        for entry in files[CONTEXT_PREVIEW_MAX_FILES:]:
+            text = entry.get("text") if isinstance(entry, dict) else None
+            if isinstance(text, str):
+                total_text += len(text)
+    lines.append(f"Total attached text: {total_text:,} characters.")
+    return "\n".join(lines)
+
+
+def describe_context(context: Any) -> str:
+    """Describe the `context` variable for the system prompt: type, total size,
+    and a short escaped head preview (issue #20). Dict-of-files contexts get a
+    shape summary (file count, per-file path + text length) instead of a raw
+    dump."""
+    if context is None:
+        return "`context` is None (no context payload was provided)."
+    if isinstance(context, str):
+        return (
+            f"`context` is a str of {len(context):,} characters. "
+            f"Preview (first {CONTEXT_PREVIEW_CHARS} chars):\n"
+            f"```\n{_safe_preview(context)}\n```"
+        )
+    if isinstance(context, dict) and isinstance(context.get("files"), list):
+        return _describe_files_context(context["files"])
+    try:
+        serialized = json.dumps(context, ensure_ascii=True, default=str)
+    except Exception:
+        serialized = str(context)
+    shape = f"a {type(context).__name__}"
+    if isinstance(context, (list, tuple)):
+        shape += f" of {len(context)} item(s)"
+    elif isinstance(context, dict):
+        shape += f" with {len(context)} key(s)"
+    return (
+        f"`context` is {shape}, {len(serialized):,} characters when JSON-serialized. "
+        f"Preview (first {CONTEXT_PREVIEW_CHARS} chars):\n"
+        f"```\n{_safe_preview(serialized)}\n```"
+    )
 
 
 class RunnerEnvironment(RLMEnvironment):
@@ -87,6 +161,17 @@ class RunnerEnvironment(RLMEnvironment):
         parts.append(
             "Context is available in a Python variable named `context`. "
             "If it contains files, expect context['files'] entries with path, name, mime, size, and optional text."
+        )
+        # Size + preview signal (issue #20): without it the model reasonably
+        # assumes the context fits in its own window and prints/counts in
+        # Python instead of subcalling. Mirrors dspy REPLVariable
+        # (type/length/preview) and alexzhang13/rlm's metadata turn.
+        description = describe_context(self._context)
+        if description:
+            parts.append(description)
+        parts.append(
+            "Each llm_query / llm_query_batched subcall can handle roughly ~100k tokens; "
+            "size chunks accordingly."
         )
         if self._registry is not None:
             fragment = self._registry.prompt_fragment()
@@ -737,9 +822,20 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
         DataSourceRegistry(sources, default_source_name=default_source) if sources else None
     )
 
-    max_iterations = int(request.get("max_iterations") or 1)
+    # Omitted budgets fall back to the core loop defaults instead of the old
+    # runner-local 1 iteration / 0 subcalls (0 made the FIRST llm_query raise
+    # "max subcalls exceeded"). An EXPLICIT value is always honored — including
+    # max_subcalls=0, which deliberately forbids subcalls. Hosts that care
+    # about cost must pass explicit budgets in the request.
+    def _budget(key: str, default: int) -> int:
+        raw = request.get(key)
+        if raw is None or raw == "":
+            return default
+        return int(raw)
+
+    max_iterations = _budget("max_iterations", DEFAULT_MAX_ITERATIONS)
     max_depth = int(request.get("max_depth") or 1)
-    max_subcalls = int(request.get("max_subcalls") or 0)
+    max_subcalls = _budget("max_subcalls", DEFAULT_MAX_CALLS)
     max_output_chars = int(request.get("max_output_chars") or 0)
     exec_timeout_ms = int(request.get("exec_timeout_ms") or 0)
 

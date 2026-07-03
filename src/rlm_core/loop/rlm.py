@@ -35,6 +35,31 @@ Last execution output:
 
 Continue refining. When done, set `answer[\"ready\"] = True`."""
 
+# Fed back instead of an empty string when executed code prints nothing, so the
+# model learns that only stdout is visible (adopted from dspy.RLM's
+# _format_output; issue #20).
+EMPTY_OUTPUT_NUDGE = "(no output - did you forget to print?)"
+
+# Compact per-iteration truncation budgets for the extract-fallback trajectory
+# summary (issue #21).
+_EXTRACT_CODE_CHARS = 1000
+_EXTRACT_OUTPUT_CHARS = 1500
+_EXTRACT_SUMMARY_CHARS = 60000
+
+# Sentinel used in extract summaries for iterations that printed nothing; the
+# conversational nudge shown to the in-loop model must not read as real output.
+_EXTRACT_EMPTY_OUTPUT = "<empty stdout>"
+
+EXTRACT_FALLBACK_SYSTEM_PROMPT = (
+    "An iterative Python-REPL session ran out of turns before submitting a final "
+    "answer. Below are the question, the draft answer so far, and a compact "
+    "trajectory of the code executed and its output. Produce the final answer "
+    "using ONLY what the trajectory supports - do not guess, extrapolate, or "
+    "fabricate. Reply with the answer text only - no code, no preamble. If the "
+    "answer cannot be determined from the trajectory, reply exactly: "
+    "unable to determine from the work so far"
+)
+
 
 @dataclass
 class RLMConfig:
@@ -70,6 +95,85 @@ def _execution_output(result: ExecutionResult | str) -> str:
     if isinstance(result, ExecutionResult):
         return result.stdout
     return str(result)
+
+
+def _feedback_output(output: str) -> str:
+    """What the model sees as the execution result. Empty stdout becomes a
+    nudge instead of silence; the raw output is kept separately so an empty
+    run never leaks the nudge text into `_best_answer`."""
+    return output if output else EMPTY_OUTPUT_NUDGE
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"... (truncated, {len(text):,} chars total)"
+
+
+def _trajectory_summary(
+    question: str,
+    draft: str,
+    trajectory: list[IterationRecord],
+) -> str:
+    parts = [f"Question: {question}"]
+    if draft:
+        parts.append(f"Draft answer so far:\n{_truncate(draft, _EXTRACT_OUTPUT_CHARS)}")
+    for entry in trajectory:
+        raw_output = entry.execution_result
+        if not raw_output or raw_output == EMPTY_OUTPUT_NUDGE:
+            output = _EXTRACT_EMPTY_OUTPUT
+        else:
+            output = _truncate(raw_output, _EXTRACT_OUTPUT_CHARS)
+        parts.append(
+            f"--- Iteration {entry.iteration} ---\n"
+            f"Code:\n{_truncate(entry.code_executed, _EXTRACT_CODE_CHARS)}\n"
+            f"Output:\n{output}"
+        )
+    summary = "\n\n".join(parts)
+    if len(summary) > _EXTRACT_SUMMARY_CHARS:
+        # Keep the most recent work; late iterations carry the conclusions.
+        summary = "(earlier trajectory truncated)\n" + summary[-_EXTRACT_SUMMARY_CHARS:]
+    return summary
+
+
+def _extract_final_answer(
+    question: str,
+    draft: str,
+    trajectory: list[IterationRecord],
+    root_llm: LLMClient,
+    cfg: "RLMConfig",
+    context: ExecutionContext,
+) -> str:
+    """One dspy-style extract pass (dspy.RLM._extract_fallback; issue #21):
+    when the loop exhausts max_iterations without answer['ready'], make a
+    single root-LLM call over a compact trajectory summary so the run returns
+    the best answer learnable from the work done, instead of scraps. Failures
+    fall back to the normal best-effort answer."""
+    try:
+        messages = [
+            {"role": "system", "content": EXTRACT_FALLBACK_SYSTEM_PROMPT},
+            {"role": "user", "content": _trajectory_summary(question, draft, trajectory)},
+        ]
+        response, usage = root_llm.responses_create(
+            messages,
+            model=cfg.root_model or "",
+            return_usage=True,
+        )
+        context.stats.total_tokens += total_tokens_from_usage(usage)
+        return str(response).strip()
+    except Exception:
+        return ""
+
+
+def _error_feedback(exec_error: Exception) -> str:
+    if isinstance(exec_error, PolicyError):
+        return (
+            f"{exec_error}\n\n"
+            "Your accumulated answer['content'] was kept, but answer['ready'] was "
+            "reset. Address the policy violation above, then set "
+            'answer["ready"] = True again.'
+        )
+    return f"That code failed with this error:\n{exec_error}\n\nFix the code and try again."
 
 
 def _resolved_output(answer: dict[str, Any], last_output: str) -> str:
@@ -212,7 +316,7 @@ def run_rlm(
             else:
                 refinement_content = refinement_prompt_template.format(
                     current_content=answer.get("content", ""),
-                    last_output=last_output,
+                    last_output=_feedback_output(last_output),
                 )
                 messages.append({"role": "assistant", "content": f"```python\n{code}\n```"})
                 messages.append({"role": "user", "content": refinement_content})
@@ -363,7 +467,7 @@ def run_rlm(
                         llm_input=str(messages),
                         llm_output=response,
                         code_executed=code,
-                        execution_result=last_output,
+                        execution_result=_feedback_output(last_output),
                         tokens_used=total_tokens_from_usage(usage),
                     )
                 )
@@ -373,8 +477,10 @@ def run_rlm(
                 if isinstance(exec_error, BatchLLMError):
                     details = {"errors": exec_error.errors}
                 if isinstance(exec_error, PolicyError):
+                    # Softened (issue #21): revoke readiness so the gate still
+                    # gates, but keep the accumulated content — the violation
+                    # is fed back as guidance, not punished with a wiped draft.
                     answer["ready"] = False
-                    answer["content"] = ""
                 error = RLMError(type=exec_error.__class__.__name__, message=str(exec_error), code=code, details=details)
                 if cfg.verbose:
                     print(f"\nExecution error: {exec_error}", file=sys.stderr)
@@ -388,7 +494,7 @@ def run_rlm(
                     {"role": "assistant", "content": f"```python\n{code}\n```"},
                     {
                         "role": "user",
-                        "content": f"That code failed with this error:\n{exec_error}\n\nFix the code and try again.",
+                        "content": _error_feedback(exec_error),
                     },
                 ]
                 try:
@@ -456,7 +562,7 @@ def run_rlm(
                                 llm_input=str(repair_messages),
                                 llm_output=repair_response,
                                 code_executed=repaired_code,
-                                execution_result=last_output,
+                                execution_result=_feedback_output(last_output),
                                 tokens_used=total_tokens_from_usage(repair_usage),
                             )
                         )
@@ -466,8 +572,8 @@ def run_rlm(
                         if isinstance(repair_exec_error, BatchLLMError):
                             details = {"errors": repair_exec_error.errors}
                         if isinstance(repair_exec_error, PolicyError):
+                            # Softened (issue #21): see the main handler above.
                             answer["ready"] = False
-                            answer["content"] = ""
                         error = RLMError(
                             type=repair_exec_error.__class__.__name__,
                             message=str(repair_exec_error),
@@ -477,7 +583,35 @@ def run_rlm(
                         if cfg.verbose:
                             print(f"\nRepair execution error: {repair_exec_error}", file=sys.stderr)
 
-        final_answer = _best_answer(answer, last_output, last_response)
+        # A run that ends with a PolicyError outstanding must not present the
+        # gated content as its answer. The draft stays intact in-loop (the
+        # model keeps it across repair attempts), but the final result
+        # withholds it, surfacing it under error.details for debugging.
+        policy_outstanding = error is not None and error.type == "PolicyError"
+        if policy_outstanding:
+            withheld = str(answer.get("content") or "")
+            if withheld:
+                details = dict(error.details or {})
+                details["withheld_content"] = withheld
+                error.details = details
+            final_answer = ""
+        else:
+            final_answer = _best_answer(answer, last_output, last_response)
+
+        # Extract fallback (issue #21): the loop exhausted its iteration budget
+        # without answer['ready']. Reaching here means the root client survived
+        # every prior call (root failures return early above), so one more
+        # extract call is affordable; a trajectory must exist or there is
+        # nothing to extract from.
+        if not answer.get("ready") and iterations >= cfg.max_iterations and trajectory:
+            context.emit_progress("Max iterations reached: extracting best final answer...")
+            draft = "" if policy_outstanding else str(answer.get("content") or "")
+            extracted = _extract_final_answer(
+                question, draft, trajectory, root_llm, cfg, context
+            )
+            if extracted:
+                final_answer = extracted
+
         if not final_answer:
             if error:
                 final_answer = f"Error: {error.message}"
