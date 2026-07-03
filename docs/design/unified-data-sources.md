@@ -67,7 +67,9 @@ The point of this spec: the **in-boundary mode** needs in-process SQL/fs data so
 
 ## 2. Problem: two things both called "data source"
 
-Today there are **two parallel, non-interoperating mechanisms**:
+*(This section frames the **pre-#11** state that motivated the work. #11 has since shipped the registry-through-runner unification described in §3.1/§7 — the runner now builds sources and passes a `DataSourceRegistry` into `RunnerEnvironment`. Read §2 as the problem statement, not current state.)*
+
+Before this work there were **two parallel, non-interoperating mechanisms**:
 
 1. **`wrapper_v1`** — `rlm_runner/runner.py::DataSourceWrapper`. A thin **remote HTTP** client (`/search`, `/get`, `/content`) with budgets + SSRF guards. The runner special-cases the request's `data_source` dict and injects flat globals `data_source_search` / `data_source_get` / `data_source_content`. **This is the only path the runner wires.**
 2. **`DataSource` protocol + `DataSourceRegistry`** — `rlm_core/protocols/data_source.py` + `registry.py`. A rich **in-process** abstraction: `capabilities` (`sql`/`search`/`get`) + `query(sql)` / `search` / `find` / `get` / `get_schema` / `get_stats` / `sample` / chat helpers. Exposed as **namespaced** globals (`env[name] = {query, search, ...}`, optionally flattened for a default source). **Exported for consumers (Cozy builds one); the runner never touches it; nothing in rlm-core constructs it.**
@@ -124,23 +126,26 @@ The registry already exposes `search`/`get` by capability and any extra method (
   "data_sources": [
     { "type": "wrapper_v1", "name": "partner", "base_url": "...", "token": "...",
       "allowed_hosts": [...], "limits": { "max_requests": 20, "max_response_bytes": 1048576 } },
-    { "type": "sql", "name": "db", "dsn": "postgres://readonly@db/app", "policy_ref": "..." },
+    { "type": "sql", "name": "db", "profile_id": "...", "source_id": "..." },
     { "type": "fs",  "name": "vault", "root": "/data/vault", "glob": "**/*.md" }
   ],
   "default_source": "db"        // optional: flattens that source's methods to top-level globals
 }
 ```
 
+The `sql` entry carries **declarative data only** — a `profile_id` (the validation policy, resolved cloud-side by `POST /sql/validate`, §4) and a `source_id`. It deliberately carries **no `dsn`/credentials**: the live read-only connection is supplied by the host through the factory `ctx` at the edge (§7.2/§7.3), never by the portable request. This is what keeps the request safe to originate from an untrusted caller and keeps credentials out of the cloud.
+
 Singular `data_source` may remain as sugar for a one-element list during migration, or be dropped (see §6 — clean break is acceptable).
 
 ### 3.4 Who constructs SQL/fs sources? (the key decision)
 
-rlm-core defines the protocol but ships **no concrete SQL/fs** source. Two options:
+rlm-core defines the protocol but ships **no concrete SQL/fs** source. Three options:
 
 - **Option A — rlm-core ships reference `sql` + `fs` DataSources.** `build_data_sources()` maps `type → class`. *Pro:* batteries-included; any consumer gets SQL/fs. *Con:* the engine takes on DB drivers / filesystem concerns — heavier, against the "minimal embeddable engine" positioning.
-- **Option B — keep the engine minimal; consumers inject sources via the `adapter_module` seam.** The runner already supports `request.adapter_module` → delegates to a consumer-provided `run(request)`. ModelRelay (and Cozy) implement their own `sql`/`fs` DataSources and build the registry in their adapter. *Pro:* engine stays protocol-only (on-brand "Flask, not Django"); DB drivers/policy live with the consumer that owns security. *Con:* each consumer implements the sources.
+- **Option B — consumers inject sources via the request-controlled `adapter_module` seam.** The runner supports `request.adapter_module` → delegates to a consumer-provided `run(request)`. *Pro:* engine stays protocol-only; DB drivers/policy live with the consumer. *Con:* the module path is **request-controlled**, so a hosted runner importing it is RCE-by-config — an import allowlist becomes mandatory (the whole of the old §7.2). Each consumer also re-implements the loop, not just the sources.
+- **Option C — consumers register source-type *factories* at build time; the request carries data only.** Each consumer ships its own thin runner entrypoint that calls `register_source_type("sql", factory)` once at startup. `build_data_sources(request)` maps `type → registered factory`; the request carries `{type: "sql", …}` (data, **no module path**). *Pro:* keeps B's principle — DB drivers/policy live with the consumer that owns the boundary (§4) — **without** a request-controlled import: no RCE-by-config, no allowlist needed; the public request stays declarative; cleanly multi-consumer (ModelRelay registers `sql`/`fs`, Cozy registers `messages`, a third consumer registers its own). *Con:* a consumer must register before serving (a build-time step, not per-request).
 
-**Recommendation: Option B as the contract, with a thin Option-A convenience later.** Do §3.1–3.3 (registry-through-runner + `WrapperV1DataSource` + request shape) in rlm-core now; let ModelRelay implement `sql`/`fs` DataSources behind its adapter (where `sqlvalidate`/path-policy already live). If a second consumer wants them, promote reference impls into an **optional** `rlm_core.sources` module — keeping the base engine minimal. This keeps DB drivers and security policy in the consumer that owns the boundary, which is also the right place for them (see §4).
+**Recommendation: Option C (locked in).** It gets Option B's minimal-engine, policy-with-the-consumer property without making a request-controlled import path load-bearing and security-relevant. The engine ships `register_source_type()` + `build_data_sources()` (type → registered factory); ModelRelay's runner entrypoint registers `sql`/`fs` (where `sqlvalidate`/path-policy already live); Cozy's keeps registering `messages`. The base engine still ships **no** concrete SQL/fs source — only the registry mechanism. This supersedes the original Option-B recommendation and the `adapter_module`-hardening plan (old §7.2 / decision 6); see §7.2 for the build-time-registration contract.
 
 ---
 
@@ -149,10 +154,10 @@ rlm-core defines the protocol but ships **no concrete SQL/fs** source. Two optio
 Each transport owns its guardrails — and they live with whoever owns the boundary, **not** the core loop:
 
 - **wrapper_v1**: keeps existing per-request **budgets** (`max_requests`, `max_response_bytes`, `timeout_ms`) — these live in `DataSourceWrapper` and move into `WrapperV1DataSource`. **Correction:** SSRF / `allowed_hosts` enforcement does **not** live in rlm-core — `DataSourceWrapper._call()` only checks `base_url`/`token` then calls `urlopen`. The host allowlist + network policy is enforced by **ModelRelay's Go layer** (`cmd/modelrelay-api/server/rlm_datasource.go`) before the request reaches the runner. `allowed_hosts` in the config is descriptive (surfaced in the prompt); the engine does not gate on it. Either keep SSRF in the host (current) or add it to `WrapperV1DataSource` — but the spec must not claim the engine enforces it.
-- **sql**: read-only, SELECT-only, **table/column allowlists** (note: `sqlprofiles.Policy` has **no row-level predicate** today — row/tenant scoping must be added before claiming it) — enforced by ModelRelay's `sqlvalidate`/`sqlprofiles` **inside its SQL `DataSource.query()`** before execution. rlm-core never sees credentials.
+- **sql**: read-only, SELECT-only, **table/column allowlists** (note: `sqlprofiles.Policy` has **no row-level predicate** today — row/tenant scoping must be added before claiming it). This policy check **already exists as a stateless cloud endpoint**: `POST /sql/validate` (`cmd/modelrelay-api/server/sql_validate_handlers.go`) loads a policy by `profile_id` and runs `sqlvalidate.Validate(sql_text, policy)` on the SQL **string** — no DB connection, no credentials (confirmed: the only `database/sql`/pgx in `cmd/` is ModelRelay's own control-plane Postgres). Execution happens **at the edge**, where the connection + data already live — Cozy does exactly this today via `SQLAgentDatabase.executeReadOnly(sql, limit)` against its local SQLite. So the SQL `DataSource.query()` **validates via the existing endpoint** (or a local `sqlvalidate` artifact later, as a latency/offline optimization) then **executes locally**: rlm-core never sees credentials, and the cloud never sees the data. The "no creds in cloud" constraint is solved by this validate/execute split — **not** by a customer-deployed gateway. **Migration note:** the current consumer of this split is Cozy's Swift `SQLAgentToolLoop` (`SQLAgent.swift`) — a *tool* loop (`buildTools()`, `maxIterations = 8`). #1553 **replaces** that tool-harness with the RLM data source ("data is a REPL variable, not a tool you call"), reusing the same validate/execute plumbing.
 - **fs**: read-only, root/path allowlist, glob scoping — enforced in ModelRelay's fs `DataSource`.
 
-This is why Option B is the safer default: **the engine stays credential- and policy-free**; the consumer that holds the data/connection also holds the policy.
+This is why Option C is the safer default: **the engine stays credential- and policy-free**; the consumer that registers the source (and holds the data/connection) also holds the policy.
 
 ---
 
@@ -171,7 +176,7 @@ Prompt: `registry.prompt_fragment()` emits a `## Data Sources` section listing e
 rlm-core's stated principle is **no backward-compat shims**; ModelRelay has **zero users**. So: clean break.
 
 1. **rlm-core**: land §3.1–3.3 + §3.2. Drop the flat `data_source_*` special-case (or keep only as a `default_source` convenience for a single `wrapper_v1`). Bump minor version.
-2. **ModelRelay**: re-sync embedded rlm-core (`sync-rlm-core.sh`); update `platform/rlmrunner` `RunnerRequest` to emit `data_sources`; implement `sql`/`fs` DataSources behind its adapter; update `/rlm/execute` request docs + the data-source docs (`integrations/wrapper-v1.md` reframed as "the remote data-source transport").
+2. **ModelRelay**: re-sync embedded rlm-core (`sync-rlm-core.sh`); update `platform/rlmrunner` `RunnerRequest` to emit `data_sources`; register `sql`/`fs` DataSource factories via its runner entrypoint (§7.2, Option C); update `/rlm/execute` request docs + the data-source docs (`integrations/wrapper-v1.md` reframed as "the remote data-source transport").
 3. **Cozy**: already builds a registry in-process — confirm it matches the (unchanged) `DataSourceRegistry` API. No transport change.
 
 Note: main's embedded copy is currently one commit behind `0.2.2` (the `find()` helper, #7) — the re-sync in step 2 picks that up too. **This drift is the symptom §7 fixes.**
@@ -180,7 +185,7 @@ Note: main's embedded copy is currently one commit behind `0.2.2` (the `find()` 
 
 ## 7. Engine integration contract (pinning + the adapter seam)
 
-This migration assumes two things that aren't currently guaranteed: (a) the rlm-core embedded in ModelRelay actually *is* the engine this spec describes, and (b) the `adapter_module` seam can safely carry production data sources. Both need hardening **before** §3 lands, because §3 is what makes them load-bearing.
+This migration assumes two things that aren't currently guaranteed: (a) the rlm-core embedded in ModelRelay actually *is* the engine this spec describes, and (b) the engine can safely load consumer-supplied data sources without a request-controlled import. (a) is solved by pinning + a CI parity gate (§7.1, shipped); (b) is solved by build-time source-type registration (§7.2, Option C) rather than the original `adapter_module` hardening.
 
 ### 7.1 Pin the engine; don't rsync-vendor it
 
@@ -198,37 +203,65 @@ Today ModelRelay embeds rlm-core by `rsync -a --delete` from a loose sibling che
 
 This is a process/CI change, not engine code — but it lives in this spec because §6 step 2 ("re-sync the embedded rlm-core") is only safe if re-syncing is verifiable and pinned.
 
-### 7.2 Harden the `adapter_module` seam
+**Status: shipped (0.3.0 re-sync).** `scripts/sync-rlm-core.sh` now pins `RLM_CORE_VERSION=v0.3.0`, materializes the tag in a throwaway worktree (immutable source), stages-then-swaps the assets atomically, and writes the `platform/rlmrunner/RLM_CORE_VERSION` stamp (tag + SHA). `scripts/check-rlm-assets.sh` is the sha256 parity gate (wired into `.github/workflows/lint.yml` as `rlm-assets-check`): CI fails if the embedded tree diverges from the pinned ref or is hand-edited. "Embedded == pinned engine" is now a checked invariant.
 
-Option B (§3.4, recommended) elevates `request.adapter_module → consumer.run(request)` from a convenience to **the official extension point** for SQL/fs sources. As-is it's a stringly-typed module path with an implicit `run(request)` contract and no validation — fine as an escape hatch, not fine as a load-bearing, security-relevant seam in a hosted runner. Before it carries production data sources it needs:
+### 7.2 The adapter seam: build-time source-type registration (Option C)
 
-- **A declared interface.** A typed `Adapter` protocol with an explicit `build_data_sources(request) -> list[DataSource]` hook (composing with §3.1's registry construction), not a bare `run(request)` that re-implements the whole loop. The engine builds the registry; the adapter only supplies sources.
-- **An import allowlist.** The hosted runner must not import an arbitrary, request-controlled module path — that's remote-code-execution-by-config, the code-side analogue of the wrapper's SSRF guard. Resolve `adapter_module` against a fixed allowlist (or a single configured adapter per deployment).
-- **A compat check.** Version/handshake between adapter and engine so a stale adapter against a newer engine fails loudly, not subtly — the same drift problem as §7.1, one layer up.
+The original plan hardened `request.adapter_module → consumer.run(request)` with a typed protocol + an **import allowlist** + a compat check, because a request-controlled module path in a hosted runner is RCE-by-config. The seam is real in raw `rlm_runner` — `runner.py` resolves `request.adapter_module` and `importlib`-imports it. (Note: ModelRelay's current `RunnerRequest` does **not** expose `adapter_module` — it only carries `data_source` — so this hole is **latent, not currently reachable** through ModelRelay's hosted path. The risk is in *making* it reachable to serve SQL/fs, which the old plan would have done.) **Option C removes the problem instead of guarding it:** there is no request-controlled import to allowlist, because the request never names a module — the engine's runnable source types are fixed by the deployment's own entrypoint.
 
-**Sequencing clarification (avoid the contradiction):** #11 ships §3.1–3.3 (registry-through-runner + `WrapperV1DataSource` + request shape) **without** using the adapter for any production source — `sql`/`fs` types *raise* and route nowhere yet. So the seam is **not load-bearing in #11**, and #11 does not require the hardening. The hardening (typed `Adapter` protocol + import allowlist + compat check) is a **prerequisite for #1553/#1561** — i.e. before any SQL/fs source is actually constructed and run via `adapter_module` — not for the #11 plumbing. Land it with the first consumer adapter.
+The contract:
+
+- **`register_source_type(type: str, factory)`** — a process-global registry in the engine, populated at **startup** by the consumer's runner entrypoint, never from the request. `factory(config, ctx) -> DataSource` builds a source from the request's per-source config (e.g. `{type: "sql", profile_id, name}`) plus a host-supplied context (the edge connection/handle — see §7.3).
+- **`build_data_sources(request)`** — maps each request `data_sources[i].type` to its **registered** factory and constructs the list (composing with §3.1's `RunnerEnvironment(registry=…)`). An unregistered `type` raises (loud, not silent). The request carries **data only** — no module path, no code.
+- **A typed `DataSource` protocol** is still the per-source interface (`capabilities()`, `query`/`search`/`get`/…); the factory's job is only to produce one.
+- **Compat check retained.** The engine exposes its source-protocol version; a consumer registering against a mismatched engine fails at startup, not subtly at request time (same drift discipline as §7.1, one layer up).
+
+Why this is better than the allowlist: an allowlist still *imports request-named code* and merely constrains *which* — a denylist-shaped defense on a code-execution path. Build-time registration means the set of runnable source types is fixed by the **deployment's own entrypoint**, identical to how any server wires its routes. It also makes the engine cleanly **multi-consumer**: ModelRelay's entrypoint registers `sql`/`fs`; Cozy's registers `messages`; each is its own binary/process with its own registrations. The public request stays declarative across all of them.
+
+**Sequencing:** #11 already shipped §3.1–3.3 (registry-through-runner + `WrapperV1DataSource` + request shape) with `sql`/`fs` types *raising* and routing nowhere. Option C lands **with the first SQL/fs source** (#1553): the engine gains `register_source_type()`/`build_data_sources(type→factory)`, and ModelRelay ships the runner entrypoint that registers `sql`. No `adapter_module` allowlist is built — that line of work is **dropped**.
+
+### 7.3 Host portability: in-process vs subprocess (the edge)
+
+The same engine is hosted two ways, and a `DataSource` must run in both:
+
+```
+ModelRelay (hosted/multi-tenant):  Go → go:embed → extract → exec a Python subprocess (rlm_runner)
+                                   isolation boundary is non-negotiable (untrusted model code, many tenants)
+Cozy / dev-embed (beachhead):      import rlm_core → RLMEnvironment in-process, same interpreter as the app
+                                   no extraction, no subprocess, no serialization boundary
+```
+
+The **`DataSource` is the portable unit**; the *only* thing that differs between hosts is **how a source acquires its edge resource** — the live DB connection/handle that §4 says stays at the edge (where creds + data already are):
+
+- **In-process (beachhead default):** the factory (`§7.2`) closes over a live read-only connection the host app already holds. `db.query(sql)` is a real driver call in the same interpreter; results are Python values with zero serialization. This is the purest "data is a REPL variable," it's exactly Cozy's `messages` model, and it matches the "connect your DB, ask anything" promise — a connection string in the developer's own app, **no gateway, no extra hop**. **Ship #1553 here first.**
+- **Subprocess (hosted/multi-tenant):** the source still executes at the edge, but the edge is *inside the child process*, so the host must hand the subprocess a **scoped, short-lived read-only connection** (or a narrow callback to one) via the factory's `ctx`. Same `DataSource` class, same `query()` surface; only the `ctx` wiring differs. This is the harder mode and is **not** the beachhead.
+
+So `register_source_type("sql", factory)` is identical in both hosts; the host differs only in what `ctx` it passes the factory. That single seam — *edge-resource acquisition via factory context* — is the whole of host portability. Validation is host-independent: both call the stateless `/sql/validate` (§4) or a local `sqlvalidate` artifact.
 
 ---
 
 ## 8. Sequencing
 
 ```
-rlm-core#9 (this spec)
-  ├─ registry-through-runner + WrapperV1DataSource + request shape   [rlm-core]
-  └─ then, in modelrelay:
-       ├─ #1553 SQL DataSource (sqlvalidate policy) + adapter wiring
-       └─ #1561 fs/Markdown DataSource
+rlm-core#11 (shipped)
+  └─ registry-through-runner + WrapperV1DataSource + request shape   [rlm-core 0.3.0]
+rlm-core (next): Option C
+  └─ register_source_type() + build_data_sources(type→factory)       [rlm-core]
+then, in modelrelay:
+  ├─ #1553 SQL DataSource (validate via /sql/validate, execute at edge) + runner entrypoint registers `sql`
+  └─ #1561 fs/Markdown DataSource + registers `fs`
 ```
 
-#1553 and #1561 become **consumer-side `DataSource` implementations** once #9 lands — the hard, shared part is the registry-through-runner plumbing here (shipped in #11). §7 applies to the **modelrelay steps**: §7.1 pinning gates the re-sync (re-sync must be verifiable), and §7.2 adapter hardening must land **with the first SQL/fs source** that goes through `adapter_module` — not before #11's wrapper-only plumbing.
+#1553 and #1561 are **consumer-side `DataSource` implementations** registered at build time (§7.2, Option C) — the hard, shared plumbing (registry-through-runner) shipped in #11. §7 applies to the **modelrelay steps**: §7.1 pinning gates the re-sync (**shipped** — verifiable + CI-gated), and §7.2's `register_source_type()` lands **with the first SQL/fs source** (#1553). Build #1553 against the **in-process host first** (§7.3); the subprocess/`ctx` wiring follows for hosted mode. No `adapter_module` allowlist is built.
 
 ---
 
 ## 9. Open decisions (confirm before building)
 
-1. **Option A vs B** for SQL/fs construction (recommended: **B** — engine stays minimal; consumers inject via adapter). 
+1. ~~**Option A vs B** for SQL/fs construction.~~ **RESOLVED → Option C** (§3.4): consumers register source-type factories at build time; the request carries data only. Supersedes the earlier B recommendation.
 2. **Keep singular `data_source`** as sugar, or require `data_sources` (clean break)?
 3. **`content` verb**: keep as a wrapper-only extra method (via `hasattr`), or promote to a first-class capability in `DataSourceCapabilities`?
 4. **Default-flatten behaviour**: keep top-level flattening for a `default_source`, or always namespace (clearer prompts, slightly more verbose model code)?
-5. **Engine distribution** (§7.1): keep manual rsync-vendor (status quo), or pin a SHA + CI parity gate, or fetch a versioned artifact (git tag / PyPI)? Recommended: **pin + CI parity gate now** (cheapest, kills the silent drift), versioned artifact later.
-6. **`adapter_module` hardening** (§7.2): keep the bare `run(request)` escape hatch, or require a typed `Adapter` protocol + import allowlist + compat check before Option B sources ship? Recommended: **typed protocol + allowlist**, since Option B makes this seam load-bearing and security-relevant.
+5. ~~**Engine distribution** (§7.1).~~ **RESOLVED → pin + CI parity gate, shipped** in the 0.3.0 re-sync (`sync-rlm-core.sh` pins `v0.3.0`; `check-rlm-assets.sh` is the gate). Versioned-artifact (PyPI) distribution remains a possible later step.
+6. ~~**`adapter_module` hardening** (§7.2).~~ **RESOLVED → dropped in favor of Option C.** No import allowlist is built, because the request no longer names a module to import. A compat check (engine source-protocol version vs consumer registrations) is retained (§7.2).
+7. **Host portability (§7.3):** confirmed — `DataSource` is the portable unit; in-process is the beachhead default, subprocess (hosted) differs only in the factory `ctx` that supplies the edge connection. Open sub-question: the exact shape of the **scoped read-only connection** handed to the subprocess in hosted mode (short-lived credential vs narrow callback) — decide when hosted SQL is built, not for the in-process beachhead.
