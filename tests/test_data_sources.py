@@ -12,10 +12,21 @@ import pytest
 from rlm_core.registry import DataSourceRegistry
 from rlm_core.testing import MockDataSource, MockSubcallClient
 from rlm_runner.runner import (
+    SOURCE_PROTOCOL_VERSION,
     RunnerEnvironment,
     WrapperV1DataSource,
+    _reset_source_types,
     build_data_sources,
+    register_source_type,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clean_source_registry():
+    """register_source_type is process-global; isolate it per test."""
+    _reset_source_types()
+    yield
+    _reset_source_types()
 
 
 # --- build_data_sources ----------------------------------------------------
@@ -56,15 +67,139 @@ def test_unknown_type_raises() -> None:
         build_data_sources({"data_sources": [{"type": "redis", "name": "r"}]})
 
 
-def test_sql_and_fs_must_come_from_adapter() -> None:
+def test_sql_and_fs_unregistered_raise_loudly() -> None:
     for stype in ("sql", "fs"):
-        with pytest.raises(ValueError, match="consumer adapter"):
+        with pytest.raises(ValueError, match="no registered factory"):
             build_data_sources({"data_sources": [{"type": stype, "name": "db"}]})
 
 
 def test_data_sources_entry_must_be_object() -> None:
     with pytest.raises(ValueError, match="must be an object"):
         build_data_sources({"data_sources": ["not-a-dict"]})
+
+
+# --- register_source_type (Option C, unified-data-sources §7.2) -------------
+
+
+def test_registered_factory_builds_source_with_config_and_ctx() -> None:
+    seen: dict[str, object] = {}
+
+    def factory(config, ctx):
+        seen["config"] = config
+        seen["ctx"] = ctx
+        return MockDataSource(schema="tables: t")
+
+    register_source_type("sql", factory)
+    ctx = object()
+    sources, default = build_data_sources(
+        {
+            "data_sources": [{"type": "sql", "name": "db", "profile_id": "p1"}],
+            "default_source": "db",
+        },
+        ctx,
+    )
+    assert len(sources) == 1 and default == "db"
+    assert seen["config"] == {"type": "sql", "name": "db", "profile_id": "p1"}
+    assert seen["ctx"] is ctx
+
+
+def test_factory_dispatch_is_not_limited_to_sql_fs() -> None:
+    register_source_type("messages", lambda config, ctx: MockDataSource(schema="m"))
+    sources, _ = build_data_sources(
+        {"data_sources": [{"type": "messages", "name": "chats"}]}
+    )
+    assert len(sources) == 1
+
+
+def test_factory_returning_none_raises() -> None:
+    register_source_type("sql", lambda config, ctx: None)
+    with pytest.raises(ValueError, match="returned no source"):
+        build_data_sources({"data_sources": [{"type": "sql", "name": "db"}]})
+
+
+def test_duplicate_registration_raises() -> None:
+    register_source_type("sql", lambda config, ctx: MockDataSource(schema="t"))
+    with pytest.raises(ValueError, match="already registered"):
+        register_source_type("sql", lambda config, ctx: MockDataSource(schema="t"))
+
+
+def test_wrapper_v1_cannot_be_reregistered() -> None:
+    with pytest.raises(ValueError, match="built in"):
+        register_source_type("wrapper_v1", lambda config, ctx: None)
+
+
+def test_blank_type_rejected() -> None:
+    with pytest.raises(ValueError, match="non-empty"):
+        register_source_type("  ", lambda config, ctx: None)
+
+
+def test_protocol_mismatch_fails_at_registration() -> None:
+    with pytest.raises(RuntimeError, match="protocol"):
+        register_source_type(
+            "sql",
+            lambda config, ctx: MockDataSource(schema="t"),
+            protocol=SOURCE_PROTOCOL_VERSION + 1,
+        )
+
+
+def test_request_cannot_name_a_module() -> None:
+    # The request stays declarative: an unregistered type never triggers an
+    # import, it just fails. (This is the whole point of Option C.)
+    with pytest.raises(ValueError, match="unknown data source type"):
+        build_data_sources(
+            {"data_sources": [{"type": "some.module.path", "name": "x"}]}
+        )
+
+
+def test_run_threads_source_ctx_to_factories(monkeypatch) -> None:
+    # Guard the run() -> build_data_sources(request, source_ctx) passthrough:
+    # a regression back to build_data_sources(request) would silently drop the
+    # host-supplied edge context.
+    import rlm_runner.runner as runner_mod
+
+    seen: dict[str, object] = {}
+
+    def factory(config, ctx):
+        seen["ctx"] = ctx
+        return MockDataSource(schema="t")
+
+    register_source_type("sql", factory)
+
+    from types import SimpleNamespace
+
+    def fake_run_rlm(question, **kwargs):
+        return SimpleNamespace(
+            answer="ok", ready=True, iterations=1, tokens_used=0,
+            sub_calls_made=0, trajectory=[], error=None,
+        )
+
+    monkeypatch.setattr(runner_mod, "run_rlm", fake_run_rlm)
+
+    ctx = object()
+    response = runner_mod.run(
+        {
+            "question": "q",
+            "token": "t",
+            "root_endpoint": "https://cloud/root",
+            "subcall_endpoint": "https://cloud/subcall",
+            "data_sources": [{"type": "sql", "name": "db"}],
+        },
+        source_ctx=ctx,
+    )
+    assert seen["ctx"] is ctx
+    assert response["answer"] == "ok"
+
+
+def test_main_rejects_adapter_module_from_request_file(monkeypatch, tmp_path) -> None:
+    # The request file is the untrusted boundary: it must never name code to
+    # import. Trusted in-process callers of run() keep the adapter seam.
+    import rlm_runner.runner as runner_mod
+
+    request_path = tmp_path / "request.json"
+    request_path.write_text('{"adapter_module": "evil.module"}')
+    monkeypatch.setenv("RLM_RUNNER_REQUEST_PATH", str(request_path))
+    with pytest.raises(RuntimeError, match="not accepted from the request file"):
+        runner_mod.main()
 
 
 # --- WrapperV1DataSource + registry wiring ---------------------------------

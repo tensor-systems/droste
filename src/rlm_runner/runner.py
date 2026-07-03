@@ -12,7 +12,7 @@ import time
 import traceback
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Callable
 
 PACKAGE_ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(PACKAGE_ROOT)
@@ -289,27 +289,87 @@ class WrapperV1DataSource:
         return self._wrapper.content(id, format, max_bytes)
 
 
-def _build_one_source(spec: dict[str, Any]) -> Any:
+# --- Option C: build-time source-type registration (unified-data-sources §7.2)
+#
+# Consumers register factories for their own source types at *startup* — never
+# from the request. The request stays declarative ({type, name, ...} — no module
+# paths, no code); the set of runnable types is fixed by the deployment's own
+# entrypoint, so there is no request-controlled import path.
+
+# Version of the DataSource/registration contract. A consumer built against a
+# different contract fails at registration (startup), not subtly at request time.
+SOURCE_PROTOCOL_VERSION = 1
+
+# factory(config, ctx) -> DataSource. `config` is the request's declarative
+# per-source entry; `ctx` is the host-supplied edge context (e.g. a live
+# read-only DB handle) threaded through build_data_sources — see §7.3.
+SourceFactory = Callable[[dict[str, Any], Any], Any]
+
+_source_factories: dict[str, SourceFactory] = {}
+
+
+def register_source_type(
+    stype: str,
+    factory: SourceFactory,
+    *,
+    protocol: int = SOURCE_PROTOCOL_VERSION,
+) -> None:
+    """Register a factory for a data source type (process-global, at startup)."""
+    if protocol != SOURCE_PROTOCOL_VERSION:
+        raise RuntimeError(
+            f"source type {stype!r} was registered against protocol {protocol}; "
+            f"this engine speaks protocol {SOURCE_PROTOCOL_VERSION}"
+        )
+    key = str(stype or "").strip()
+    if not key:
+        raise ValueError("source type must be a non-empty string")
+    if key == "wrapper_v1":
+        raise ValueError("source type 'wrapper_v1' is built in and cannot be re-registered")
+    if key in _source_factories:
+        raise ValueError(f"source type {key!r} is already registered")
+    if not callable(factory):
+        raise TypeError("factory must be callable")
+    _source_factories[key] = factory
+
+
+def _reset_source_types() -> None:
+    """Test hook: clear registered source-type factories."""
+    _source_factories.clear()
+
+
+def _build_one_source(spec: dict[str, Any], ctx: Any = None) -> Any:
     stype = str(spec.get("type") or "").strip()
     name = str(spec.get("name") or "").strip()
     if stype == "wrapper_v1":
         return WrapperV1DataSource(spec, name=name or "wrapper")
+    factory = _source_factories.get(stype)
+    if factory is not None:
+        source = factory(spec, ctx)
+        if source is None:
+            raise ValueError(f"factory for source type {stype!r} returned no source")
+        return source
     if stype in ("sql", "fs"):
-        # Minimal-engine contract (Option B): in-process sources carry DB drivers
+        # Minimal-engine contract (Option C): in-process sources carry DB drivers
         # and path/SQL policy, which live with the consumer that owns the data
-        # boundary — supplied via the adapter seam, never constructed here.
+        # boundary — registered via register_source_type() at startup, never
+        # constructed here.
         raise ValueError(
-            f"data source type '{stype}' must be supplied by a consumer adapter "
-            "(adapter_module); the base runner only builds remote wrapper_v1 sources"
+            f"data source type '{stype}' has no registered factory; the consumer's "
+            "runner entrypoint must call register_source_type() at startup "
+            "(the base runner only builds remote wrapper_v1 sources)"
         )
     raise ValueError(f"unknown data source type: {stype!r}")
 
 
-def build_data_sources(request: dict[str, Any]) -> tuple[list[Any], str | None]:
+def build_data_sources(
+    request: dict[str, Any], ctx: Any = None
+) -> tuple[list[Any], str | None]:
     """Resolve a request's data sources into `DataSource` objects + a default name.
 
     Accepts the new `data_sources` list shape, and the legacy singular
-    `data_source` wrapper_v1 config as sugar for a one-element list.
+    `data_source` wrapper_v1 config as sugar for a one-element list. Non-built-in
+    types dispatch to factories registered via `register_source_type`; `ctx` is
+    passed through to each factory as the host-supplied edge context.
     """
     default_name = request.get("default_source")
     if default_name is not None:
@@ -325,7 +385,7 @@ def build_data_sources(request: dict[str, Any]) -> tuple[list[Any], str | None]:
         for spec in raw:
             if not isinstance(spec, dict):
                 raise ValueError("each data_sources entry must be an object")
-            sources.append(_build_one_source(spec))
+            sources.append(_build_one_source(spec, ctx))
         return sources, default_name
 
     legacy = request.get("data_source")
@@ -609,13 +669,16 @@ def _run_adapter(request: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def run(request: dict[str, Any]) -> dict[str, Any]:
+def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
     adapter_module = request.get("adapter_module")
     if isinstance(adapter_module, str) and adapter_module.strip():
         return _run_adapter(request)
 
     context = _build_context(request)
-    sources, default_source = build_data_sources(request)
+    # source_ctx is the host-supplied edge context for registered source
+    # factories (unified-data-sources §7.3): in-process hosts pass live
+    # handles; subprocess hosts pass whatever their entrypoint assembled.
+    sources, default_source = build_data_sources(request, source_ctx)
     registry = (
         DataSourceRegistry(sources, default_source_name=default_source) if sources else None
     )
@@ -743,6 +806,15 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     request = _read_request()
+    # The request file is the untrusted boundary (hosted runners are fed one by
+    # the parent process). A request must never name code to import: source
+    # types come from register_source_type() in the entrypoint (Option C), and
+    # the in-process adapter seam is reserved for trusted callers of run().
+    if str(request.get("adapter_module") or "").strip():
+        raise RuntimeError(
+            "adapter_module is not accepted from the request file; register "
+            "source types via register_source_type() in the runner entrypoint"
+        )
     response = run(request)
     sys.stdout.write(json.dumps(response, ensure_ascii=True))
 
