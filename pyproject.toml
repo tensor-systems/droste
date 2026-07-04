@@ -3,6 +3,7 @@ name = "rlm-core"
 version = "0.6.0"
 description = "Core RLM loop and protocols"
 requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
 dependencies = []
 
 [project.scripts]

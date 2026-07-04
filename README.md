@@ -1,52 +1,69 @@
-# rlm-core
+# Droste
 
-Core library implementing the Recursive Language Model (RLM) - a scaffolding approach that enables LLMs to handle effectively unbounded context through recursive self-calls and code execution.
+**The recursive harness for your data.**
 
-## What is RLM?
+Droste is a [Recursive Language Model](https://alexzhang13.github.io/blog/2025/rlm/)
+(RLM) engine: instead of stuffing your data into a context window, the model
+gets it as a **variable in a sandboxed Python REPL**. It inspects the data,
+writes code over it, and fans out `llm_query` / `llm_query_batched` subcalls
+over the pieces that need semantic judgment — map-reduce, where the model
+writes both the map and the reduce.
 
-RLM lets language models manage large contexts by treating input as a programmable variable rather than direct context. The model writes Python code to inspect, partition, and delegate work to sub-LLM instances, keeping the primary context window lean.
+Coding harnesses bolt a model onto a transcript. Droste harnesses it to data.
 
-**Key insight:** LLMs should decide how to decompose problems, not humans. RLM provides "the illusion of near infinite context, while under the hood a language model manages, partitions, and recursively calls itself."
-
-Learn more:
-- [Recursive Language Models](https://alexzhang13.github.io/blog/2025/rlm/) - Alex Zhang
-- [RLM: Scalable Context with Recursive LLMs](https://www.primeintellect.ai/blog/rlm) - Prime Intellect
-
-## How It Works
-
-1. Root LLM receives a question (not the full context)
-2. LLM generates Python code to inspect/process data
-3. Code executes in a sandboxed REPL with access to `llm_query()` and `llm_batch()` for sub-calls
-4. Output feeds back to LLM for refinement
-5. Loop continues until `answer["ready"] = True`
-
-## Installation
-
+<!-- The package publishes as `droste`; in-repo it builds as rlm-core until
+the rename-at-publish (#31) flips pyproject in the same change. -->
 ```bash
-# From private index
-uv pip install --index-url "https://${PYPI_TOKEN}:x@rlm-pypi.hyperpredict.workers.dev/simple" rlm-core
+pip install droste
+export OPENAI_API_KEY=sk-...     # any OpenAI-compatible endpoint works
 
-# For offline builds
-uv pip download --dest wheelhouse --index-url "https://${PYPI_TOKEN}:x@rlm-pypi.hyperpredict.workers.dev/simple" rlm-core
-uv pip install --no-index --find-links wheelhouse rlm-core
+droste ask server.log "which customer had a failed charge, and why?"
+droste ask --db shop.db "which plan has the highest refund rate vs its MRR?"
 ```
 
-## Quick Start
+Both examples are real. The first, against a 231 KB log with
+`gemini-3.5-flash`:
 
-```python
-from rlm_core import run_rlm, RLMConfig
-
-result = run_rlm(
-    question="Summarize the key themes across these documents.",
-    environment=my_environment,  # RLMEnvironment implementation
-    root_llm=my_llm_client,      # LLMClient implementation
-    subcalls=my_subcall_client,  # SubcallClient for llm_query/llm_batch
-    config=RLMConfig(max_iterations=10),
-)
-
-print(result.answer)
-print(f"Completed in {result.iterations} iterations, {result.sub_calls_made} sub-calls")
 ```
+$ droste ask server.log "Which customer had a failed charge, for what amount,
+  and why? How many timeout errors are there, and which upstream do they blame?"
+
+1. Failed charge: customer cus_9982, amount 1499 ($14.99), reason card_declined
+2. Timeout errors: 66 total; all blame the upstream service payments-v2
+```
+
+The counts are exact because the model *counted them in Python* — it never
+read 4,000 log lines through its attention. In `--db` mode the model
+introspects your schema, writes read-only SQL, and computes over the rows;
+in the demo above it noticed the free plan makes refund-rate-vs-MRR
+undefined and answered for the paid plans instead.
+
+## Why
+
+Long-context models read everything and still miss things. Retrieval finds
+the right chunk but can't compute across all of them. An RLM does what you
+would do: look at the shape of the data, narrow mechanically (regex and SQL
+find *where*; subcalls understand *what*), delegate semantic judgment in
+bounded batches, and aggregate in code.
+
+Measured on OOLONG (131k-token contexts, 50 tasks, `gemini-3.5-flash`
+everywhere):
+
+| approach | score | cost/task | wall/task |
+|---|---|---|---|
+| **Droste** (server defaults) | **0.84** | ~$0.37 | 27s |
+| same model, full context inline | 0.52 | ~$0.26 | 44s |
+| dspy.RLM (matched models & budgets) | 0.74 | ~$0.26 | 73s |
+
++32 points over stuffing the window, at comparable cost. On
+[TAG-Bench](https://github.com/TAG-Research/TAG-Bench) (agentic analysis
+over SQL), Droste scores **50%** strict-match where published text-to-SQL
+baselines sit under 20% — no pipeline, just `droste ask --db`.
+
+<sub>Caveats, stated plainly: one dataset per benchmark, one context length,
+one model family, n=50. Per-task artifacts, cost derivations, and failure
+classifications ship with the benchmark harness. Numbers will move; the
+shape of the result has been stable across runs.</sub>
 
 ## The droste CLI
 
@@ -59,9 +76,10 @@ droste ask report.txt logs.txt "what changed between these?" --model gpt-5.2-min
 droste ask --db app.db "which customers churned last month?" --model gpt-5.2-mini
 ```
 
-Files are materialized as the sandbox's `context` variable (the model sees
-sizes and previews, not raw bytes, and pulls data in via code — multi-MB files
-are fine). `--db` uses the engine's local-mode SQL data source (read-only
+Files are materialized as the sandbox's `context` variable — the model is
+told each file's name and size (not its contents) and pulls data in via
+code, so multi-MB files are fine. What the model reads is whatever its code
+chooses to print. `--db` uses the engine's local-mode SQL data source (read-only
 policy as a guardrail, not a boundary; OS permissions are the boundary).
 
 Engine knobs mirror `RLMConfig`: `--subcall-model`,
@@ -69,6 +87,9 @@ Engine knobs mirror `RLMConfig`: `--subcall-model`,
 `--max-iterations`, `--max-subcalls`. `--json` prints a result object for
 scripting; `--verbose` streams progress to stderr. Exit code 0 means a
 confirmed (or extracted-with-note) answer.
+
+Three worked starting points live in [docs/recipes.md](docs/recipes.md)
+(logs, chat archives, SQLite).
 
 Pointing `--base-url` at ModelRelay lights up the platform features
 (validated SQL policies, server-enforced subcall cost controls, audit) —
@@ -82,7 +103,12 @@ chat-completions shape (OpenAI, OpenRouter, Google's OpenAI-compat endpoint,
 vLLM, Ollama, ...). Bring your own key — no ModelRelay account required.
 
 ```python
-from rlm_core import OpenAICompatClient, OpenAICompatSubcallClient, create_execution_context
+from rlm_core import (
+    OpenAICompatClient,
+    OpenAICompatSubcallClient,
+    create_execution_context,
+    run_rlm,
+)
 
 context = create_execution_context(max_calls=50, max_depth=1)
 root = OpenAICompatClient(model="gpt-5.2-mini")  # OPENAI_API_KEY / OPENAI_BASE_URL from env
@@ -92,6 +118,7 @@ subcalls = OpenAICompatSubcallClient(
     max_output_tokens=2048,        # per-subcall output bound (cost control)
 )
 
+env = ...  # your RLMEnvironment implementation (see Core Concepts below)
 result = run_rlm(question, environment=env, root_llm=root, subcalls=subcalls, context=context)
 ```
 
@@ -146,10 +173,10 @@ Implement these to integrate with your infrastructure:
 
 ```python
 RLMConfig(
-    max_iterations=10,      # Max refinement loops
-    max_depth=3,            # Max nested subcall depth
-    max_calls=50,           # Max total subcalls
-    max_output_chars=50000, # Output budget per iteration
+    max_iterations=20,      # Max refinement loops (default)
+    max_depth=1,            # Max nested subcall depth (default)
+    max_calls=50,           # Max total subcalls (default)
+    max_output_chars=25000, # Output budget per iteration (default)
 )
 ```
 
@@ -174,6 +201,22 @@ uv run pytest    # Run tests
 uv build         # Build wheel
 ```
 
+## The name
+
+The [Droste effect](https://en.wikipedia.org/wiki/Droste_effect) is the
+picture that contains itself. M.C. Escher's *Print Gallery* pushed it to its
+limit — a man in a gallery viewing a print that contains the gallery he is
+standing in — and Escher left the center of the spiral famously blank,
+signed but uncompleted, where the recursion outran his hand. Fifty years
+later, mathematicians completed it; their project was titled *"The
+Mathematics Behind the Droste Effect."*
+
+The answer at the center of the spiral — the part the picture couldn't hold
+— is what recursion computes.
+
 ## License
 
-Proprietary - Tensor Systems
+Apache-2.0. See [LICENSE](LICENSE). Contributions welcome —
+[CONTRIBUTING.md](CONTRIBUTING.md). Versioning is semver; the runner
+protocol and source-registry contract carry an explicit compatibility
+window (see [docs/architecture.md](docs/architecture.md)).

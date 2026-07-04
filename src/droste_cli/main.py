@@ -8,7 +8,7 @@ own key (BYOK, any OpenAI-compatible endpoint) and ask.
 
 Files are materialized as the sandbox's `context` variable
 (``{"files": [{path, name, text, size}, ...]}``); the model sees sizes and
-previews — not the raw bytes — and pulls data in via code. SQLite goes through
+sizes — not the raw bytes — and pulls data in via code. SQLite goes through
 the engine's local-mode SQL data source (read-only policy as a guardrail, not
 a boundary; OS permissions are the boundary).
 
@@ -100,7 +100,7 @@ def build_context(paths: list[str]) -> dict[str, Any] | None:
 
     Same shape as the bench harness / ModelRelay attachments
     ({"files": [{path, name, text, size}]}), so the runner environment's
-    size + preview prompt description (0.5.x prompt work) applies as-is.
+    name + size prompt description (0.5.x prompt work) applies as-is.
     """
     if not paths:
         return None
@@ -191,7 +191,7 @@ def run_ask(args: argparse.Namespace) -> int:
     )
 
     # RunnerEnvironment provides the in-process REPL plus the context
-    # size + preview prompt description (0.5.x prompt work) for free.
+    # name + size prompt description (0.5.x prompt work) for free.
     from rlm_runner.runner import RunnerEnvironment
 
     environment = RunnerEnvironment(
