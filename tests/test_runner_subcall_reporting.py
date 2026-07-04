@@ -104,3 +104,96 @@ def test_concurrent_batch_counts_each_issued_call() -> None:
     results = client.llm_batch([f"p{i}" for i in range(20)])
     assert results == ["ok"] * 20
     assert context.stats.calls_made == 20
+
+
+# --- Subcall cost controls (#25): payload includes overrides when set, omits
+# them when unset (the server owns the defaults).
+
+
+class _CapturingHandler(BaseHTTPRequestHandler):
+    subcall_payloads: list[dict[str, Any]] = []
+
+    def do_POST(self) -> None:  # noqa: N802 (http.server API)
+        length = int(self.headers.get("Content-Length") or 0)
+        raw_body = self.rfile.read(length)
+        if self.path == "/root":
+            body = {"result": ROOT_REPLY, "usage": {"input_tokens": 1, "output_tokens": 1}}
+        else:
+            type(self).subcall_payloads.append(json.loads(raw_body.decode("utf-8")))
+            body = {"result": "spam"}
+        raw = json.dumps(body).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+def _run_with_capture(request_extra: dict[str, Any]) -> list[dict[str, Any]]:
+    _CapturingHandler.subcall_payloads = []
+    server = HTTPServer(("127.0.0.1", 0), _CapturingHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        request: dict[str, Any] = {
+            "model": "test-model",
+            "question": "is it spam?",
+            "max_iterations": 3,
+            "max_depth": 2,
+            "max_subcalls": 10,
+            "token": "test-token",
+            "root_endpoint": f"{base}/root",
+            "subcall_endpoint": f"{base}/subcall",
+        }
+        request.update(request_extra)
+        response = run(request)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert response["error"] is None
+    assert response["subcalls"] == 1
+    return _CapturingHandler.subcall_payloads
+
+
+def test_subcall_payload_includes_cost_controls_when_set() -> None:
+    payloads = _run_with_capture(
+        {
+            "subcall_max_output_tokens": 1024,
+            "subcall_model": "grok-4-fast-non-reasoning",
+            "subcall_reasoning_effort": "none",
+        }
+    )
+    assert len(payloads) == 1
+    payload = payloads[0]
+    assert payload["max_output_tokens"] == 1024
+    assert payload["model"] == "grok-4-fast-non-reasoning"
+    assert payload["reasoning_effort"] == "none"
+
+
+def test_subcall_payload_omits_cost_controls_when_unset() -> None:
+    payloads = _run_with_capture({})
+    assert len(payloads) == 1
+    payload = payloads[0]
+    assert "max_output_tokens" not in payload
+    assert "model" not in payload
+    assert "reasoning_effort" not in payload
+
+
+def test_explicit_zero_subcall_max_output_tokens_is_rejected() -> None:
+    """A subcall cannot answer in 0 tokens; silently treating explicit 0 as
+    unset would mask a caller bug (codex catch on PR #26)."""
+    with pytest.raises(ValueError, match="subcall_max_output_tokens must be positive"):
+        run(
+            {
+                "model": "m",
+                "question": "q",
+                "subcall_max_output_tokens": 0,
+                "token": "t",
+                "root_endpoint": "http://127.0.0.1:1/root",
+                "subcall_endpoint": "http://127.0.0.1:1/subcall",
+            }
+        )

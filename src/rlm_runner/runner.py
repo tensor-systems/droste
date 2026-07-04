@@ -540,6 +540,9 @@ class HTTPSubcallClient(SubcallClient):
         max_calls: int,
         max_depth: int,
         context: Any,
+        max_output_tokens: int = 0,
+        model: str = "",
+        reasoning_effort: str = "",
     ) -> None:
         self._endpoint = endpoint
         self._token = token
@@ -551,6 +554,12 @@ class HTTPSubcallClient(SubcallClient):
         self._max_depth = int(max_depth)
         self._context = context
         self._depth = threading.local()
+        # Subcall cost controls (#25): included in each subcall payload when
+        # set; omitted when unset so the server owns the defaults (bounded
+        # output + no thinking).
+        self._max_output_tokens = int(max_output_tokens or 0)
+        self._model = str(model or "")
+        self._reasoning_effort = str(reasoning_effort or "")
 
     def _next_seq(self) -> int:
         with self._seq_lock:
@@ -607,13 +616,19 @@ class HTTPSubcallClient(SubcallClient):
             if self._max_depth >= 0 and depth > self._max_depth:
                 raise RuntimeError("max depth exceeded")
             self._increment_calls()
-            payload = {
+            payload: dict[str, Any] = {
                 "prompt": prompt,
                 "depth": depth,
                 "seq": self._next_seq(),
                 "session": self._session,
                 "session_index": self._session_index,
             }
+            if self._max_output_tokens > 0:
+                payload["max_output_tokens"] = self._max_output_tokens
+            if self._model:
+                payload["model"] = self._model
+            if self._reasoning_effort:
+                payload["reasoning_effort"] = self._reasoning_effort
             return self._request(payload)
         finally:
             if auto_depth:
@@ -874,6 +889,21 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
         session=session,
         session_index=session_index,
     )
+    # Subcall cost controls (#25): optional per-run overrides forwarded in
+    # every subcall payload; unset values are omitted so the server applies
+    # its defaults (bounded output + no thinking for subcalls). An explicit
+    # zero/negative budget is rejected: a subcall cannot answer in 0 tokens,
+    # and silently treating it as unset would mask a caller bug.
+    raw_subcall_max = request.get("subcall_max_output_tokens")
+    if raw_subcall_max in (None, ""):
+        subcall_max_output_tokens = 0
+    else:
+        subcall_max_output_tokens = int(raw_subcall_max)
+        if subcall_max_output_tokens <= 0:
+            raise ValueError("subcall_max_output_tokens must be positive when set")
+    subcall_model = str(request.get("subcall_model") or "")
+    subcall_reasoning_effort = str(request.get("subcall_reasoning_effort") or "")
+
     subcalls = HTTPSubcallClient(
         endpoint=subcall_endpoint,
         token=token,
@@ -882,6 +912,9 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
         max_calls=max_subcalls,
         max_depth=max_depth,
         context=exec_context,
+        max_output_tokens=subcall_max_output_tokens,
+        model=subcall_model,
+        reasoning_effort=subcall_reasoning_effort,
     )
 
     environment = RunnerEnvironment(
