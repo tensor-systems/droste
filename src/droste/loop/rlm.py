@@ -36,8 +36,7 @@ Last execution output:
 Continue refining. When done, set `answer[\"ready\"] = True`."""
 
 # Fed back instead of an empty string when executed code prints nothing, so the
-# model learns that only stdout is visible (adopted from dspy.RLM's
-# _format_output; issue #20).
+# model learns that only stdout is visible (issue #20).
 EMPTY_OUTPUT_NUDGE = "(no output - did you forget to print?)"
 
 # Compact per-iteration truncation budgets for the extract-fallback trajectory
@@ -148,7 +147,7 @@ def _extract_final_answer(
     cfg: "RLMConfig",
     context: ExecutionContext,
 ) -> str:
-    """One dspy-style extract pass (dspy.RLM._extract_fallback; issue #21):
+    """One extract pass (issue #21):
     when the loop exhausts max_iterations without answer['ready'], make a
     single root-LLM call over a compact trajectory summary so the run returns
     the best answer learnable from the work done, instead of scraps. Failures
@@ -279,9 +278,8 @@ def run_rlm(
     env_globals.setdefault("llm_query", subcalls.llm_query)
     env_globals.setdefault("llm_batch", subcalls.llm_batch)
     env_globals.setdefault("batch_llm_query", subcalls.llm_batch)
-    # llm_query_batched is the canonical name in the RLM paper's reference
-    # implementation and dspy.RLM; models primed on RLM literature reach for
-    # it first, so the sandbox must answer to it.
+    # llm_query_batched is the name models primed on RLM conventions reach
+    # for first, so the sandbox must answer to it.
     env_globals.setdefault("llm_query_batched", subcalls.llm_batch)
     _apply_batch_error_guard(subcalls, env_globals)
 

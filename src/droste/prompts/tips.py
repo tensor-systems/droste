@@ -5,13 +5,12 @@ from typing import Literal
 TipsProfile = Literal["full", "minimal", "none"]
 
 # Content informed by the two RLM reference implementations (issue #19):
-# - alexzhang13/rlm (the paper authors' repo), rlm/utils/prompts.py —
-#   ORCHESTRATOR_ADDENDUM (orchestrator-not-solver framing, batching budget,
-#   "just read it if search already pins it" nuance, worked chunking examples).
-# - stanfordnlp/dspy, dspy/predict/rlm.py ACTION_INSTRUCTIONS_TEMPLATE —
-#   EXPLORE FIRST / ITERATE / "string matching finds WHERE, llm_query
-#   understands WHAT" rules.
-# The text below is our own; only the patterns are adopted.
+# Design principles for the tips below (all original text):
+# - orchestrator-not-solver framing; a batching budget; "just read it if a
+#   search already pins the answer"; worked chunking examples.
+# - explore first; iterate; "string matching finds WHERE, llm_query
+#   understands WHAT."
+# These are general RLM orchestration patterns.
 
 _ORCHESTRATOR = (
     "You are an orchestrator, not a solver. Your own context window is small and the "

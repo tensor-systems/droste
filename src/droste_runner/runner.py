@@ -164,8 +164,8 @@ class RunnerEnvironment(RLMEnvironment):
         )
         # Size + preview signal (issue #20): without it the model reasonably
         # assumes the context fits in its own window and prints/counts in
-        # Python instead of subcalling. Mirrors dspy REPLVariable
-        # (type/length/preview) and alexzhang13/rlm's metadata turn.
+        # Python instead of subcalling. Showing the variable's type,
+        # length, and a short preview is the cue that keeps it subcalling.
         description = describe_context(self._context)
         if description:
             parts.append(description)
