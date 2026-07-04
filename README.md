@@ -48,6 +48,33 @@ print(result.answer)
 print(f"Completed in {result.iterations} iterations, {result.sub_calls_made} sub-calls")
 ```
 
+## The droste CLI
+
+The wheel ships a `droste` binary — ask questions over files and SQLite from
+the terminal, BYOK against any OpenAI-compatible endpoint:
+
+```bash
+export OPENAI_API_KEY=sk-...          # or --api-key
+droste ask report.txt logs.txt "what changed between these?" --model gpt-5.2-mini
+droste ask --db app.db "which customers churned last month?" --model gpt-5.2-mini
+```
+
+Files are materialized as the sandbox's `context` variable (the model sees
+sizes and previews, not raw bytes, and pulls data in via code — multi-MB files
+are fine). `--db` uses the engine's local-mode SQL data source (read-only
+policy as a guardrail, not a boundary; OS permissions are the boundary).
+
+Engine knobs mirror `RLMConfig`: `--subcall-model`,
+`--subcall-max-output-tokens` (default 2048), `--reasoning-effort`,
+`--max-iterations`, `--max-subcalls`. `--json` prints a result object for
+scripting; `--verbose` streams progress to stderr. Exit code 0 means a
+confirmed (or extracted-with-note) answer.
+
+Pointing `--base-url` at ModelRelay lights up the platform features
+(validated SQL policies, server-enforced subcall cost controls, audit) —
+documented, not required. `droste` is the engine CLI; `mrl` remains the
+ModelRelay platform CLI.
+
 ## BYOK: run against any OpenAI-compatible endpoint
 
 The engine ships built-in clients for any endpoint that speaks the OpenAI
