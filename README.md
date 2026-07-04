@@ -48,6 +48,36 @@ print(result.answer)
 print(f"Completed in {result.iterations} iterations, {result.sub_calls_made} sub-calls")
 ```
 
+## BYOK: run against any OpenAI-compatible endpoint
+
+The engine ships built-in clients for any endpoint that speaks the OpenAI
+chat-completions shape (OpenAI, OpenRouter, Google's OpenAI-compat endpoint,
+vLLM, Ollama, ...). Bring your own key — no ModelRelay account required.
+
+```python
+from rlm_core import OpenAICompatClient, OpenAICompatSubcallClient, create_execution_context
+
+context = create_execution_context(max_calls=50, max_depth=1)
+root = OpenAICompatClient(model="gpt-5.2-mini")  # OPENAI_API_KEY / OPENAI_BASE_URL from env
+subcalls = OpenAICompatSubcallClient(
+    model="gpt-5.2-mini",
+    context=context,               # shared call/token accounting
+    max_output_tokens=2048,        # per-subcall output bound (cost control)
+)
+
+result = run_rlm(question, environment=env, root_llm=root, subcalls=subcalls, context=context)
+```
+
+Explicit `base_url=` / `api_key=` constructor args win over the environment
+variables. Subcall batches run with bounded concurrency (5 workers) and every
+subcall's usage block is added to `result.tokens_used`.
+
+**Honest note on thinking control:** `reasoning_effort` and `extra_body` are
+passed through to the endpoint as-is. Server-side thinking control (e.g.
+disabling Gemini thinking per subcall) is a gateway capability — on ModelRelay
+these knobs are enforced server-side; BYOK gets whatever the raw endpoint
+honors (we measured litellm/gemini ignoring a client-side disable).
+
 ## Runner Architecture (rlm_runner)
 
 The `rlm_runner` package is a thin orchestration layer that wires `rlm_core` to

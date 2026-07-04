@@ -5,7 +5,6 @@ import importlib
 import io
 import json
 import os
-import re
 import signal
 import sys
 import threading
@@ -20,6 +19,7 @@ REPO_ROOT = os.path.dirname(PACKAGE_ROOT)
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from rlm_core.clients.errors import http_error_excerpt, redact_secrets  # type: ignore
 from rlm_core.execution.config import DEFAULT_MAX_CALLS, DEFAULT_MAX_ITERATIONS  # type: ignore
 from rlm_core.loop.rlm import RLMConfig, run_rlm  # type: ignore
 from rlm_core.protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment  # type: ignore
@@ -488,45 +488,11 @@ def build_data_sources(
 
 
 
-_SECRET_PATTERNS = (
-    re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+"),
-    re.compile(r'''(?i)\b(api[_-]?key|apikey|token|authorization|secret|password|key)\b(["\'\s]*[:=]["\'\s]*)[^\s"\'&,;}]+'''),
-    re.compile(r"\bsk-[A-Za-z0-9_-]{8,}"),
-)
-
-
-def _redact_secrets(text: str) -> str:
-    for pattern in _SECRET_PATTERNS:
-        text = pattern.sub(
-            lambda m: (m.group(1) + m.group(2) if m.lastindex and m.lastindex >= 2 else "") + "[redacted]",
-            text,
-        )
-    return text
-
-
-def _http_error_excerpt(exc: "urllib.error.HTTPError", limit: int = 300) -> str:
-    """Return a short, redacted response-body excerpt for an HTTP error.
-
-    Bare "HTTP 502: Bad Gateway" errors destroy the server's actual
-    explanation (e.g. a circuit-breaker rejection vs a provider error), which
-    has cost real diagnosis time. The read is byte-bounded (a chunked/stalled
-    error body must not hang the client or bypass response-size limits), the
-    excerpt is redacted (it flows into exception text and from there into the
-    repair prompt shown to the root LLM), and any failure degrades to the
-    empty string — never raise.
-    """
-    try:
-        body = exc.read(4 * limit)
-    except Exception:
-        return ""
-    if not body:
-        return ""
-    text = body.decode("utf-8", errors="replace").strip()
-    text = " ".join(text.split())
-    text = _redact_secrets(text)
-    if len(text) > limit:
-        text = text[:limit] + "..."
-    return text
+# The bounded-read + redaction HTTP-error helpers moved to rlm_core.clients.errors
+# so the BYOK OpenAI-compatible client shares them (#27). Aliased here because
+# this module's callers (and its tests) know them by the underscored names.
+_redact_secrets = redact_secrets
+_http_error_excerpt = http_error_excerpt
 
 
 class HTTPSubcallClient(SubcallClient):
