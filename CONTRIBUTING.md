@@ -9,7 +9,7 @@ Thanks for your interest. Ground rules, kept short:
   (the engine is deliberately stdlib-only).
 - **Security-sensitive areas**: the SQL policy gate and the sandbox are
   guardrails with documented threat models — read the docstrings in
-  `rlm_core/sources/sql_local.py` before changing them, and include
+  `droste/sources/sql_local.py` before changing them, and include
   adversarial tests (bypass attempts) with any change there.
 - **Protocol changes**: the runner request/response and source-registry
   protocol are versioned compatibility surfaces (hosts embed old engines).

@@ -19,13 +19,13 @@ REPO_ROOT = os.path.dirname(PACKAGE_ROOT)
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from rlm_core.clients.errors import http_error_excerpt, redact_secrets  # type: ignore
-from rlm_core.execution.config import DEFAULT_MAX_CALLS, DEFAULT_MAX_ITERATIONS  # type: ignore
-from rlm_core.loop.rlm import RLMConfig, run_rlm  # type: ignore
-from rlm_core.protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment  # type: ignore
-from rlm_core.protocols.llm_client import TokenUsage  # type: ignore
-from rlm_core.protocols.subcall_client import SubcallClient  # type: ignore
-from rlm_core.registry import DataSourceRegistry  # type: ignore
+from droste.clients.errors import http_error_excerpt, redact_secrets  # type: ignore
+from droste.execution.config import DEFAULT_MAX_CALLS, DEFAULT_MAX_ITERATIONS  # type: ignore
+from droste.loop.rlm import RLMConfig, run_rlm  # type: ignore
+from droste.protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment  # type: ignore
+from droste.protocols.llm_client import TokenUsage  # type: ignore
+from droste.protocols.subcall_client import SubcallClient  # type: ignore
+from droste.registry import DataSourceRegistry  # type: ignore
 
 
 class OutputBuffer(io.StringIO):
@@ -488,7 +488,7 @@ def build_data_sources(
 
 
 
-# The bounded-read + redaction HTTP-error helpers moved to rlm_core.clients.errors
+# The bounded-read + redaction HTTP-error helpers moved to droste.clients.errors
 # so the BYOK OpenAI-compatible client shares them (#27). Aliased here because
 # this module's callers (and its tests) know them by the underscored names.
 _redact_secrets = redact_secrets
@@ -826,7 +826,7 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
     session = str(request.get("session") or "")
     session_index = int(request.get("session_index") or 0)
 
-    from rlm_core.execution.context import create_execution_context  # type: ignore
+    from droste.execution.context import create_execution_context  # type: ignore
 
     exec_context = create_execution_context(
         max_depth=max_depth,

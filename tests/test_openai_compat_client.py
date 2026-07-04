@@ -13,13 +13,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from rlm_core import RLMConfig, run_rlm
-from rlm_core.clients.openai_compat import (
+from droste import RLMConfig, run_rlm
+from droste.clients.openai_compat import (
     OpenAICompatClient,
     OpenAICompatSubcallClient,
 )
-from rlm_core.execution.context import create_execution_context
-from rlm_core.testing import MockEnvironment
+from droste.execution.context import create_execution_context
+from droste.testing import MockEnvironment
 
 
 class StubOpenAIServer:
@@ -296,7 +296,7 @@ def test_run_rlm_end_to_end_with_byok_clients(stub_server):
 def test_message_content_tool_calls_without_text_raises():
     """A compat endpoint answering with tool_calls and null content must fail
     loudly — this client sends no tools and cannot honor them (codex #32)."""
-    from rlm_core.clients.openai_compat import _message_content
+    from droste.clients.openai_compat import _message_content
 
     data = {
         "choices": [
@@ -308,7 +308,7 @@ def test_message_content_tool_calls_without_text_raises():
 
 
 def test_message_content_null_without_tool_calls_is_empty():
-    from rlm_core.clients.openai_compat import _message_content
+    from droste.clients.openai_compat import _message_content
 
     data = {"choices": [{"message": {"content": None}}]}
     assert _message_content(data, label="root") == ""

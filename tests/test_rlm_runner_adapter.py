@@ -1,7 +1,7 @@
 import sys
 import types
 
-from rlm_runner import runner
+from droste_runner import runner
 
 
 def test_rlm_runner_adapter_delegates() -> None:

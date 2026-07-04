@@ -10,7 +10,7 @@
 
 from typing import Any
 
-from rlm_core import (
+from droste import (
     DEFAULT_MAX_CALLS,
     DEFAULT_MAX_ITERATIONS,
     ExecutionConfig,
@@ -18,12 +18,12 @@ from rlm_core import (
     RLMConfig,
     run_rlm,
 )
-from rlm_core.loop.rlm import EMPTY_OUTPUT_NUDGE
-from rlm_core.prompts import TIPS_PROFILES, SystemPromptBuilder
-from rlm_core.protocols.environment import ExecutionResult
-from rlm_core.protocols.llm_client import TokenUsage
-from rlm_core.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
-from rlm_runner.runner import RunnerEnvironment, describe_context
+from droste.loop.rlm import EMPTY_OUTPUT_NUDGE
+from droste.prompts import TIPS_PROFILES, SystemPromptBuilder
+from droste.protocols.environment import ExecutionResult
+from droste.protocols.llm_client import TokenUsage
+from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
+from droste_runner.runner import RunnerEnvironment, describe_context
 
 
 def _usage() -> TokenUsage:
@@ -221,7 +221,7 @@ def test_runner_omitted_budgets_use_core_defaults_and_allow_subcalls() -> None:
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
-    from rlm_runner.runner import run
+    from droste_runner.runner import run
 
     root_reply = (
         "```python\n"
@@ -276,8 +276,8 @@ def test_runner_omitted_budgets_use_core_defaults_and_allow_subcalls() -> None:
 def test_runner_explicit_zero_subcalls_is_honored() -> None:
     """max_subcalls=0 passed explicitly means NO subcalls — it must not be
     coerced to the omitted-value default (codex catch on PR #22)."""
-    from rlm_core.execution.context import create_execution_context
-    from rlm_runner.runner import HTTPSubcallClient, run
+    from droste.execution.context import create_execution_context
+    from droste_runner.runner import HTTPSubcallClient, run
 
     import json as jsonlib
     import threading
@@ -455,7 +455,7 @@ def test_policy_violation_resolved_in_loop_returns_answer_normally() -> None:
             self._context.stats.calls_made += 1
             return "sub-answer"
 
-    from rlm_core import create_execution_context
+    from droste import create_execution_context
 
     exec_context = create_execution_context(max_iterations=2, max_calls=10)
     repair = (

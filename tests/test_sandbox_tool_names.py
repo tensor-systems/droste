@@ -6,9 +6,9 @@ literature call it first. Our OOLONG bench showed models burning iterations
 on NameError discovering the local names, so the alias is contract.
 """
 
-from rlm_core import RLMConfig, run_rlm
-from rlm_core.protocols.llm_client import TokenUsage
-from rlm_core.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
+from droste import RLMConfig, run_rlm
+from droste.protocols.llm_client import TokenUsage
+from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
 
 
 def test_llm_query_batched_is_callable_in_sandbox():
@@ -39,7 +39,7 @@ def test_llm_query_batched_is_callable_in_sandbox():
 
 
 def test_policy_recognizes_llm_query_batched_as_llm_call():
-    from rlm_core.policy import LLM_CALL_REGEX
+    from droste.policy import LLM_CALL_REGEX
 
     assert LLM_CALL_REGEX.search("results = llm_query_batched(prompts)")
     assert not LLM_CALL_REGEX.search("results = my_llm_query_batched_helper")

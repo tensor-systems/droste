@@ -1,6 +1,6 @@
 """Unified data sources: registry-through-runner + WrapperV1DataSource.
 
-Covers the rlm-core#9 plumbing — build_data_sources(), the WrapperV1DataSource
+Covers the droste#9 plumbing — build_data_sources(), the WrapperV1DataSource
 remote adapter, and that RunnerEnvironment now sources its globals/prompt from a
 DataSourceRegistry instead of the old flat data_source_* special-case.
 """
@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from rlm_core.registry import DataSourceRegistry
-from rlm_core.testing import MockDataSource, MockSubcallClient
-from rlm_runner.runner import (
+from droste.registry import DataSourceRegistry
+from droste.testing import MockDataSource, MockSubcallClient
+from droste_runner.runner import (
     SOURCE_PROTOCOL_VERSION,
     RunnerEnvironment,
     WrapperV1DataSource,
@@ -155,7 +155,7 @@ def test_run_threads_source_ctx_to_factories(monkeypatch) -> None:
     # Guard the run() -> build_data_sources(request, source_ctx) passthrough:
     # a regression back to build_data_sources(request) would silently drop the
     # host-supplied edge context.
-    import rlm_runner.runner as runner_mod
+    import droste_runner.runner as runner_mod
 
     seen: dict[str, object] = {}
 
@@ -193,7 +193,7 @@ def test_run_threads_source_ctx_to_factories(monkeypatch) -> None:
 def test_main_rejects_adapter_module_from_request_file(monkeypatch, tmp_path) -> None:
     # The request file is the untrusted boundary: it must never name code to
     # import. Trusted in-process callers of run() keep the adapter seam.
-    import rlm_runner.runner as runner_mod
+    import droste_runner.runner as runner_mod
 
     request_path = tmp_path / "request.json"
     request_path.write_text('{"adapter_module": "evil.module"}')

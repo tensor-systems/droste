@@ -1,34 +1,34 @@
 # Unified Data Sources — design spec
 
 **Status:** draft / for review
-**Issue:** tensor-systems/rlm-core#9
+**Issue:** tensor-systems/droste#9
 **Consumers blocked on this:** modelrelay/modelrelay#1553 (SQL), #1561 (filesystem), epic #1556
 
 This spec does two things:
-1. Draws the boundaries between **Cozy**, **rlm-core**, and **ModelRelay** (shared context).
+1. Draws the boundaries between **Cozy**, **droste**, and **ModelRelay** (shared context).
 2. Specifies how to **unify the two parallel "data source" mechanisms** into one abstraction so SQL and filesystem sources become straightforward.
 
 ---
 
-## 1. Boundaries: Cozy / rlm-core / ModelRelay
+## 1. Boundaries: Cozy / droste / ModelRelay
 
 ### Who owns what
 
 | Layer | Repo | Language | Owns | Explicitly does NOT own |
 |---|---|---|---|---|
-| **rlm-core** (engine) | `tensor-systems/rlm-core` | Python (+ Pyodide/Deno substrate) | The RLM loop (`run_rlm`), the code-exec sandbox, the protocols (`RLMEnvironment`, `DataSource`, `LLMClient`, `SubcallClient`), the `DataSourceRegistry`, the `rlm_runner` entrypoint | Provider API keys, billing, auth, DB drivers, persistence. **LLM calls go *out* via host-provided HTTP endpoints** (`root_endpoint`/`subcall_endpoint` + token) — the engine never holds keys. |
-| **ModelRelay** (commercial host) | `modelrelay/modelrelay` | Go | Embeds rlm-core (vendored in `platform/rlmrunner/assets`, synced via `scripts/sync-rlm-core.sh`); drives the runner; **provides the LLM endpoints the runner calls back into** (multi-lab routing + managed keys); billing/metering/PAYGO; auth/customer tokens; Stripe Connect; hosted sandbox fleet; `wrapper_v1` *server*; `/rlm/execute` + `/rlm/context`; observability; VPC/compliance | The RLM algorithm itself (delegated to rlm-core) |
-| **Cozy** (consumer app) | `tensor-systems/cozybot` | Swift/macOS + Python | Runs rlm-core **in-process, on-device**; implements its **own concrete `DataSource`** over a local SQLite `chat.db` (iMessages); is a **ModelRelay customer** for inference + billing | The engine (uses rlm-core), inference (uses ModelRelay) |
+| **droste** (engine) | `tensor-systems/droste` | Python (+ Pyodide/Deno substrate) | The RLM loop (`run_rlm`), the code-exec sandbox, the protocols (`RLMEnvironment`, `DataSource`, `LLMClient`, `SubcallClient`), the `DataSourceRegistry`, the `droste_runner` entrypoint | Provider API keys, billing, auth, DB drivers, persistence. **LLM calls go *out* via host-provided HTTP endpoints** (`root_endpoint`/`subcall_endpoint` + token) — the engine never holds keys. |
+| **ModelRelay** (commercial host) | `modelrelay/modelrelay` | Go | Embeds droste (vendored in `platform/rlmrunner/assets`, synced via `scripts/sync-droste.sh`); drives the runner; **provides the LLM endpoints the runner calls back into** (multi-lab routing + managed keys); billing/metering/PAYGO; auth/customer tokens; Stripe Connect; hosted sandbox fleet; `wrapper_v1` *server*; `/rlm/execute` + `/rlm/context`; observability; VPC/compliance | The RLM algorithm itself (delegated to droste) |
+| **Cozy** (consumer app) | `tensor-systems/cozybot` | Swift/macOS + Python | Runs droste **in-process, on-device**; implements its **own concrete `DataSource`** over a local SQLite `chat.db` (iMessages); is a **ModelRelay customer** for inference + billing | The engine (uses droste), inference (uses ModelRelay) |
 
 ### The one-sentence version
-**rlm-core is the loop + the contracts (no keys, no DB, no billing). ModelRelay is the paid host that supplies inference + billing + remote data + hosted execution. Cozy is a consumer that runs the engine locally with a local data source and rents inference from ModelRelay.**
+**droste is the loop + the contracts (no keys, no DB, no billing). ModelRelay is the paid host that supplies inference + billing + remote data + hosted execution. Cozy is a consumer that runs the engine locally with a local data source and rents inference from ModelRelay.**
 
 ### Diagram
 
 ```mermaid
 flowchart TB
-    subgraph engine["rlm-core (open engine)"]
-      loop["RLM loop · sandbox · protocols<br/>DataSourceRegistry · rlm_runner"]
+    subgraph engine["droste (open engine)"]
+      loop["RLM loop · sandbox · protocols<br/>DataSourceRegistry · droste_runner"]
     end
 
     subgraph mr["ModelRelay (commercial host)"]
@@ -36,14 +36,14 @@ flowchart TB
       infer["multi-lab inference<br/>(managed keys, routing)"]
       bill["billing · auth · Stripe Connect"]
       wrap["wrapper_v1 server (remote data)"]
-      mrEngine["embedded rlm-core"]
+      mrEngine["embedded droste"]
       api --> mrEngine
       mrEngine -. "LLM calls (root/subcall endpoints)" .-> infer
       api --> bill
     end
 
     subgraph cozy["Cozy (consumer app, on-device)"]
-      cozyEngine["embedded rlm-core"]
+      cozyEngine["embedded droste"]
       cozyDS["local DataSource<br/>(SQLite chat.db)"]
       cozyEngine --> cozyDS
     end
@@ -71,8 +71,8 @@ The point of this spec: the **in-boundary mode** needs in-process SQL/fs data so
 
 Before this work there were **two parallel, non-interoperating mechanisms**:
 
-1. **`wrapper_v1`** — `rlm_runner/runner.py::DataSourceWrapper`. A thin **remote HTTP** client (`/search`, `/get`, `/content`) with budgets + SSRF guards. The runner special-cases the request's `data_source` dict and injects flat globals `data_source_search` / `data_source_get` / `data_source_content`. **This is the only path the runner wires.**
-2. **`DataSource` protocol + `DataSourceRegistry`** — `rlm_core/protocols/data_source.py` + `registry.py`. A rich **in-process** abstraction: `capabilities` (`sql`/`search`/`get`) + `query(sql)` / `search` / `find` / `get` / `get_schema` / `get_stats` / `sample` / chat helpers. Exposed as **namespaced** globals (`env[name] = {query, search, ...}`, optionally flattened for a default source). **Exported for consumers (Cozy builds one); the runner never touches it; nothing in rlm-core constructs it.**
+1. **`wrapper_v1`** — `droste_runner/runner.py::DataSourceWrapper`. A thin **remote HTTP** client (`/search`, `/get`, `/content`) with budgets + SSRF guards. The runner special-cases the request's `data_source` dict and injects flat globals `data_source_search` / `data_source_get` / `data_source_content`. **This is the only path the runner wires.**
+2. **`DataSource` protocol + `DataSourceRegistry`** — `droste/protocols/data_source.py` + `registry.py`. A rich **in-process** abstraction: `capabilities` (`sql`/`search`/`get`) + `query(sql)` / `search` / `find` / `get` / `get_schema` / `get_stats` / `sample` / chat helpers. Exposed as **namespaced** globals (`env[name] = {query, search, ...}`, optionally flattened for a default source). **Exported for consumers (Cozy builds one); the runner never touches it; nothing in droste constructs it.**
 
 Consequences:
 - The richer abstraction (with `query()` for SQL, `get_schema()` for introspection) is **unreachable through the hosted runner**.
@@ -139,9 +139,9 @@ Singular `data_source` may remain as sugar for a one-element list during migrati
 
 ### 3.4 Who constructs SQL/fs sources? (the key decision)
 
-rlm-core defines the protocol but ships **no concrete SQL/fs** source. Three options:
+droste defines the protocol but ships **no concrete SQL/fs** source. Three options:
 
-- **Option A — rlm-core ships reference `sql` + `fs` DataSources.** `build_data_sources()` maps `type → class`. *Pro:* batteries-included; any consumer gets SQL/fs. *Con:* the engine takes on DB drivers / filesystem concerns — heavier, against the "minimal embeddable engine" positioning.
+- **Option A — droste ships reference `sql` + `fs` DataSources.** `build_data_sources()` maps `type → class`. *Pro:* batteries-included; any consumer gets SQL/fs. *Con:* the engine takes on DB drivers / filesystem concerns — heavier, against the "minimal embeddable engine" positioning.
 - **Option B — consumers inject sources via the request-controlled `adapter_module` seam.** The runner supports `request.adapter_module` → delegates to a consumer-provided `run(request)`. *Pro:* engine stays protocol-only; DB drivers/policy live with the consumer. *Con:* the module path is **request-controlled**, so a hosted runner importing it is RCE-by-config — an import allowlist becomes mandatory (the whole of the old §7.2). Each consumer also re-implements the loop, not just the sources.
 - **Option C — consumers register source-type *factories* at build time; the request carries data only.** Each consumer ships its own thin runner entrypoint that calls `register_source_type("sql", factory)` once at startup. `build_data_sources(request)` maps `type → registered factory`; the request carries `{type: "sql", …}` (data, **no module path**). *Pro:* keeps B's principle — DB drivers/policy live with the consumer that owns the boundary (§4) — **without** a request-controlled import: no RCE-by-config, no allowlist needed; the public request stays declarative; cleanly multi-consumer (ModelRelay registers `sql`/`fs`, Cozy registers `messages`, a third consumer registers its own). *Con:* a consumer must register before serving (a build-time step, not per-request).
 
@@ -153,8 +153,8 @@ rlm-core defines the protocol but ships **no concrete SQL/fs** source. Three opt
 
 Each transport owns its guardrails — and they live with whoever owns the boundary, **not** the core loop:
 
-- **wrapper_v1**: keeps existing per-request **budgets** (`max_requests`, `max_response_bytes`, `timeout_ms`) — these live in `DataSourceWrapper` and move into `WrapperV1DataSource`. **Correction:** SSRF / `allowed_hosts` enforcement does **not** live in rlm-core — `DataSourceWrapper._call()` only checks `base_url`/`token` then calls `urlopen`. The host allowlist + network policy is enforced by **ModelRelay's Go layer** (`cmd/modelrelay-api/server/rlm_datasource.go`) before the request reaches the runner. `allowed_hosts` in the config is descriptive (surfaced in the prompt); the engine does not gate on it. Either keep SSRF in the host (current) or add it to `WrapperV1DataSource` — but the spec must not claim the engine enforces it.
-- **sql**: read-only, SELECT-only, **table/column allowlists** (note: `sqlprofiles.Policy` has **no row-level predicate** today — row/tenant scoping must be added before claiming it). This policy check **already exists as a stateless cloud endpoint**: `POST /sql/validate` (`cmd/modelrelay-api/server/sql_validate_handlers.go`) loads a policy by `profile_id` and runs `sqlvalidate.Validate(sql_text, policy)` on the SQL **string** — no DB connection, no credentials (confirmed: the only `database/sql`/pgx in `cmd/` is ModelRelay's own control-plane Postgres). Execution happens **at the edge**, where the connection + data already live — Cozy does exactly this today via `SQLAgentDatabase.executeReadOnly(sql, limit)` against its local SQLite. So the SQL `DataSource.query()` **validates via the existing endpoint** (or a local `sqlvalidate` artifact later, as a latency/offline optimization) then **executes locally**: rlm-core never sees credentials, and the cloud never sees the data. The "no creds in cloud" constraint is solved by this validate/execute split — **not** by a customer-deployed gateway. **Migration note:** the current consumer of this split is Cozy's Swift `SQLAgentToolLoop` (`SQLAgent.swift`) — a *tool* loop (`buildTools()`, `maxIterations = 8`). #1553 **replaces** that tool-harness with the RLM data source ("data is a REPL variable, not a tool you call"), reusing the same validate/execute plumbing.
+- **wrapper_v1**: keeps existing per-request **budgets** (`max_requests`, `max_response_bytes`, `timeout_ms`) — these live in `DataSourceWrapper` and move into `WrapperV1DataSource`. **Correction:** SSRF / `allowed_hosts` enforcement does **not** live in droste — `DataSourceWrapper._call()` only checks `base_url`/`token` then calls `urlopen`. The host allowlist + network policy is enforced by **ModelRelay's Go layer** (`cmd/modelrelay-api/server/rlm_datasource.go`) before the request reaches the runner. `allowed_hosts` in the config is descriptive (surfaced in the prompt); the engine does not gate on it. Either keep SSRF in the host (current) or add it to `WrapperV1DataSource` — but the spec must not claim the engine enforces it.
+- **sql**: read-only, SELECT-only, **table/column allowlists** (note: `sqlprofiles.Policy` has **no row-level predicate** today — row/tenant scoping must be added before claiming it). This policy check **already exists as a stateless cloud endpoint**: `POST /sql/validate` (`cmd/modelrelay-api/server/sql_validate_handlers.go`) loads a policy by `profile_id` and runs `sqlvalidate.Validate(sql_text, policy)` on the SQL **string** — no DB connection, no credentials (confirmed: the only `database/sql`/pgx in `cmd/` is ModelRelay's own control-plane Postgres). Execution happens **at the edge**, where the connection + data already live — Cozy does exactly this today via `SQLAgentDatabase.executeReadOnly(sql, limit)` against its local SQLite. So the SQL `DataSource.query()` **validates via the existing endpoint** (or a local `sqlvalidate` artifact later, as a latency/offline optimization) then **executes locally**: droste never sees credentials, and the cloud never sees the data. The "no creds in cloud" constraint is solved by this validate/execute split — **not** by a customer-deployed gateway. **Migration note:** the current consumer of this split is Cozy's Swift `SQLAgentToolLoop` (`SQLAgent.swift`) — a *tool* loop (`buildTools()`, `maxIterations = 8`). #1553 **replaces** that tool-harness with the RLM data source ("data is a REPL variable, not a tool you call"), reusing the same validate/execute plumbing.
 - **fs**: read-only, root/path allowlist, glob scoping — enforced in ModelRelay's fs `DataSource`.
 
 This is why Option C is the safer default: **the engine stays credential- and policy-free**; the consumer that registers the source (and holds the data/connection) also holds the policy.
@@ -173,10 +173,10 @@ Prompt: `registry.prompt_fragment()` emits a `## Data Sources` section listing e
 
 ## 6. Migration
 
-rlm-core's stated principle is **no backward-compat shims**; ModelRelay has **zero users**. So: clean break.
+droste's stated principle is **no backward-compat shims**; ModelRelay has **zero users**. So: clean break.
 
-1. **rlm-core**: land §3.1–3.3 + §3.2. Drop the flat `data_source_*` special-case (or keep only as a `default_source` convenience for a single `wrapper_v1`). Bump minor version.
-2. **ModelRelay**: re-sync embedded rlm-core (`sync-rlm-core.sh`); update `platform/rlmrunner` `RunnerRequest` to emit `data_sources`; register `sql`/`fs` DataSource factories via its runner entrypoint (§7.2, Option C); update `/rlm/execute` request docs + the data-source docs (`integrations/wrapper-v1.md` reframed as "the remote data-source transport").
+1. **droste**: land §3.1–3.3 + §3.2. Drop the flat `data_source_*` special-case (or keep only as a `default_source` convenience for a single `wrapper_v1`). Bump minor version.
+2. **ModelRelay**: re-sync embedded droste (`sync-droste.sh`); update `platform/rlmrunner` `RunnerRequest` to emit `data_sources`; register `sql`/`fs` DataSource factories via its runner entrypoint (§7.2, Option C); update `/rlm/execute` request docs + the data-source docs (`integrations/wrapper-v1.md` reframed as "the remote data-source transport").
 3. **Cozy**: already builds a registry in-process — confirm it matches the (unchanged) `DataSourceRegistry` API. No transport change.
 
 Note: main's embedded copy is currently one commit behind `0.2.2` (the `find()` helper, #7) — the re-sync in step 2 picks that up too. **This drift is the symptom §7 fixes.**
@@ -185,29 +185,29 @@ Note: main's embedded copy is currently one commit behind `0.2.2` (the `find()` 
 
 ## 7. Engine integration contract (pinning + the adapter seam)
 
-This migration assumes two things that aren't currently guaranteed: (a) the rlm-core embedded in ModelRelay actually *is* the engine this spec describes, and (b) the engine can safely load consumer-supplied data sources without a request-controlled import. (a) is solved by pinning + a CI parity gate (§7.1, shipped); (b) is solved by build-time source-type registration (§7.2, Option C) rather than the original `adapter_module` hardening.
+This migration assumes two things that aren't currently guaranteed: (a) the droste embedded in ModelRelay actually *is* the engine this spec describes, and (b) the engine can safely load consumer-supplied data sources without a request-controlled import. (a) is solved by pinning + a CI parity gate (§7.1, shipped); (b) is solved by build-time source-type registration (§7.2, Option C) rather than the original `adapter_module` hardening.
 
 ### 7.1 Pin the engine; don't rsync-vendor it
 
-Today ModelRelay embeds rlm-core by `rsync -a --delete` from a loose sibling checkout (`scripts/sync-rlm-core.sh`), run **manually**. Failure modes this already produces:
+Today ModelRelay embeds droste by `rsync -a --delete` from a loose sibling checkout (`scripts/sync-droste.sh`), run **manually**. Failure modes this already produces:
 
 - **Silent drift.** The embedded copy lags the real engine until a human remembers to re-run the script — exactly why main is "one commit behind `0.2.2`" (§6 note), and the divergence hit on the 1536 branch. Nothing flags it.
-- **No provenance.** Nothing records *which* rlm-core commit is embedded. You can't answer "is the vendored tree the spec'd engine?" without a manual diff.
+- **No provenance.** Nothing records *which* droste commit is embedded. You can't answer "is the vendored tree the spec'd engine?" without a manual diff.
 - **No enforcement.** `--delete` mirrors a mutable working tree; a hand-edit to the vendored copy (or an un-synced engine fix) is invisible to CI.
 
 **Fix — pin + assert parity:**
 
-1. **Record the pin.** Write the embedded engine's version/SHA next to the assets (e.g. `platform/rlmrunner/assets/RLM_CORE_VERSION` = a git tag or commit SHA), set by `sync-rlm-core.sh` when it syncs.
+1. **Record the pin.** Write the embedded engine's version/SHA next to the assets (e.g. `platform/rlmrunner/assets/RLM_CORE_VERSION` = a git tag or commit SHA), set by `sync-droste.sh` when it syncs.
 2. **CI parity gate.** A CI step re-runs the sync against the *pinned* ref into a temp dir and `git diff --exit-code` (or checksum) vs the committed assets. Fails the build if someone forgot to re-sync, hand-edited the vendored tree, or the pin and the tree disagree. This makes "embedded == spec'd engine" a *checked invariant*, not a hope.
-3. **Sync from an immutable ref, not a working tree.** Have the script fetch a tagged rlm-core release (git tag, or a published artifact — see decision 5) rather than `../../tensor-systems/rlm-core` as it happens to sit on disk.
+3. **Sync from an immutable ref, not a working tree.** Have the script fetch a tagged droste release (git tag, or a published artifact — see decision 5) rather than `../../tensor-systems/droste` as it happens to sit on disk.
 
-This is a process/CI change, not engine code — but it lives in this spec because §6 step 2 ("re-sync the embedded rlm-core") is only safe if re-syncing is verifiable and pinned.
+This is a process/CI change, not engine code — but it lives in this spec because §6 step 2 ("re-sync the embedded droste") is only safe if re-syncing is verifiable and pinned.
 
-**Status: shipped (0.3.0 re-sync).** `scripts/sync-rlm-core.sh` now pins `RLM_CORE_VERSION=v0.3.0`, materializes the tag in a throwaway worktree (immutable source), stages-then-swaps the assets atomically, and writes the `platform/rlmrunner/RLM_CORE_VERSION` stamp (tag + SHA). `scripts/check-rlm-assets.sh` is the sha256 parity gate (wired into `.github/workflows/lint.yml` as `rlm-assets-check`): CI fails if the embedded tree diverges from the pinned ref or is hand-edited. "Embedded == pinned engine" is now a checked invariant.
+**Status: shipped (0.3.0 re-sync).** `scripts/sync-droste.sh` now pins `RLM_CORE_VERSION=v0.3.0`, materializes the tag in a throwaway worktree (immutable source), stages-then-swaps the assets atomically, and writes the `platform/rlmrunner/RLM_CORE_VERSION` stamp (tag + SHA). `scripts/check-rlm-assets.sh` is the sha256 parity gate (wired into `.github/workflows/lint.yml` as `rlm-assets-check`): CI fails if the embedded tree diverges from the pinned ref or is hand-edited. "Embedded == pinned engine" is now a checked invariant.
 
 ### 7.2 The adapter seam: build-time source-type registration (Option C)
 
-The original plan hardened `request.adapter_module → consumer.run(request)` with a typed protocol + an **import allowlist** + a compat check, because a request-controlled module path in a hosted runner is RCE-by-config. The seam is real in raw `rlm_runner` — `runner.py` resolves `request.adapter_module` and `importlib`-imports it. (Note: ModelRelay's current `RunnerRequest` does **not** expose `adapter_module` — it only carries `data_source` — so this hole is **latent, not currently reachable** through ModelRelay's hosted path. The risk is in *making* it reachable to serve SQL/fs, which the old plan would have done.) **Option C removes the problem instead of guarding it:** there is no request-controlled import to allowlist, because the request never names a module — the engine's runnable source types are fixed by the deployment's own entrypoint.
+The original plan hardened `request.adapter_module → consumer.run(request)` with a typed protocol + an **import allowlist** + a compat check, because a request-controlled module path in a hosted runner is RCE-by-config. The seam is real in raw `droste_runner` — `runner.py` resolves `request.adapter_module` and `importlib`-imports it. (Note: ModelRelay's current `RunnerRequest` does **not** expose `adapter_module` — it only carries `data_source` — so this hole is **latent, not currently reachable** through ModelRelay's hosted path. The risk is in *making* it reachable to serve SQL/fs, which the old plan would have done.) **Option C removes the problem instead of guarding it:** there is no request-controlled import to allowlist, because the request never names a module — the engine's runnable source types are fixed by the deployment's own entrypoint.
 
 The contract:
 
@@ -225,9 +225,9 @@ Why this is better than the allowlist: an allowlist still *imports request-named
 The same engine is hosted two ways, and a `DataSource` must run in both:
 
 ```
-ModelRelay (hosted/multi-tenant):  Go → go:embed → extract → exec a Python subprocess (rlm_runner)
+ModelRelay (hosted/multi-tenant):  Go → go:embed → extract → exec a Python subprocess (droste_runner)
                                    isolation boundary is non-negotiable (untrusted model code, many tenants)
-Cozy / dev-embed (beachhead):      import rlm_core → RLMEnvironment in-process, same interpreter as the app
+Cozy / dev-embed (beachhead):      import droste → RLMEnvironment in-process, same interpreter as the app
                                    no extraction, no subprocess, no serialization boundary
 ```
 
@@ -243,10 +243,10 @@ So `register_source_type("sql", factory)` is identical in both hosts; the host d
 ## 8. Sequencing
 
 ```
-rlm-core#11 (shipped)
-  └─ registry-through-runner + WrapperV1DataSource + request shape   [rlm-core 0.3.0]
-rlm-core (next): Option C
-  └─ register_source_type() + build_data_sources(type→factory)       [rlm-core]
+droste#11 (shipped)
+  └─ registry-through-runner + WrapperV1DataSource + request shape   [droste 0.3.0]
+droste (next): Option C
+  └─ register_source_type() + build_data_sources(type→factory)       [droste]
 then, in modelrelay:
   ├─ #1553 SQL DataSource (validate via /sql/validate, execute at edge) + runner entrypoint registers `sql`
   └─ #1561 fs/Markdown DataSource + registers `fs`
@@ -262,6 +262,6 @@ then, in modelrelay:
 2. **Keep singular `data_source`** as sugar, or require `data_sources` (clean break)?
 3. **`content` verb**: keep as a wrapper-only extra method (via `hasattr`), or promote to a first-class capability in `DataSourceCapabilities`?
 4. **Default-flatten behaviour**: keep top-level flattening for a `default_source`, or always namespace (clearer prompts, slightly more verbose model code)?
-5. ~~**Engine distribution** (§7.1).~~ **RESOLVED → pin + CI parity gate, shipped** in the 0.3.0 re-sync (`sync-rlm-core.sh` pins `v0.3.0`; `check-rlm-assets.sh` is the gate). Versioned-artifact (PyPI) distribution remains a possible later step.
+5. ~~**Engine distribution** (§7.1).~~ **RESOLVED → pin + CI parity gate, shipped** in the 0.3.0 re-sync (`sync-droste.sh` pins `v0.3.0`; `check-rlm-assets.sh` is the gate). Versioned-artifact (PyPI) distribution remains a possible later step.
 6. ~~**`adapter_module` hardening** (§7.2).~~ **RESOLVED → dropped in favor of Option C.** No import allowlist is built, because the request no longer names a module to import. A compat check (engine source-protocol version vs consumer registrations) is retained (§7.2).
 7. **Host portability (§7.3):** confirmed — `DataSource` is the portable unit; in-process is the beachhead default, subprocess (hosted) differs only in the factory `ctx` that supplies the edge connection. Open sub-question: the exact shape of the **scoped read-only connection** handed to the subprocess in hosted mode (short-lived credential vs narrow callback) — decide when hosted SQL is built, not for the in-process beachhead.

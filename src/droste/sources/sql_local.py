@@ -401,8 +401,8 @@ def register() -> None:
     requests stay declarative). Spec shape: ``{"type": "sql", "name": ...,
     "sqlite_path": ..., "policy": {...optional overrides...}}``.
     """
-    # Imported lazily: rlm_runner already imports rlm_core, and this helper is
+    # Imported lazily: droste_runner already imports droste, and this helper is
     # the one place the dependency points the other way.
-    from rlm_runner.runner import SOURCE_PROTOCOL_VERSION, register_source_type
+    from droste_runner.runner import SOURCE_PROTOCOL_VERSION, register_source_type
 
     register_source_type("sql", local_sql_source_factory, protocol=SOURCE_PROTOCOL_VERSION)

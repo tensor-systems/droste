@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
-from rlm_core.execution.context import create_execution_context
-from rlm_runner.runner import HTTPSubcallClient, run
+from droste.execution.context import create_execution_context
+from droste_runner.runner import HTTPSubcallClient, run
 
 ROOT_REPLY = (
     "I'll query the model once and finish.\n"

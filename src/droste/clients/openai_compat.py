@@ -1,6 +1,6 @@
 """BYOK client for any OpenAI-compatible chat-completions endpoint (#27).
 
-The engine's HTTP clients in rlm_runner speak ModelRelay's root/subcall
+The engine's HTTP clients in droste_runner speak ModelRelay's root/subcall
 protocol only. This module lets an OSS user run the loop against any endpoint
 that speaks the OpenAI chat-completions shape (OpenAI, OpenRouter, Google's
 OpenAI-compat endpoint, vLLM, Ollama, ...) with just base_url + api_key +

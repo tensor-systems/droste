@@ -103,7 +103,7 @@ def test_build_context_missing_file_raises_cli_error(tmp_path):
         build_context([str(tmp_path / "missing.txt")])
 
 
-# --- --db wiring to the local SQL source (rlm-core#29) ---
+# --- --db wiring to the local SQL source (droste#29) ---
 
 
 def test_db_exposes_sqlite_as_source(tmp_path):

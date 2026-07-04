@@ -15,7 +15,7 @@ _PYODIDE_DIR = Path(__file__).resolve().parents[1] / "pyodide"
 sys.path.insert(0, str(_PYODIDE_DIR))
 
 from pyodide_runtime import _serialize_error  # noqa: E402
-from rlm_core.loop.rlm import RLMError  # noqa: E402
+from droste.loop.rlm import RLMError  # noqa: E402
 
 
 def test_serialize_error_dataclass_is_json_serializable() -> None:

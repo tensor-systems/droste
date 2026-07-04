@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Publish rlm-core package to R2-backed PyPI index.
+Publish droste package to R2-backed PyPI index.
 
 Usage:
     uv build
@@ -86,7 +86,7 @@ def main() -> None:
     print("✓ All files uploaded successfully!")
     print()
     print("To install:")
-    print("  uv pip install --index-url https://rlm-pypi.<your-subdomain>.workers.dev/simple rlm-core")
+    print("  uv pip install --index-url https://rlm-pypi.<your-subdomain>.workers.dev/simple droste")
 
 
 if __name__ == "__main__":

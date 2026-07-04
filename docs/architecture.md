@@ -42,7 +42,7 @@ especially) is where RLM runs go from cents to dollars.
 Hosts register source *types* at startup — never from a request:
 
 ```python
-from rlm_core.sources.sql_local import register
+from droste.sources.sql_local import register
 register()  # exposes type "sql": {"sqlite_path": ..., "policy": {...}}
 ```
 
@@ -59,7 +59,7 @@ enforced on host-supplied connections.
 
 ## The runner protocol (embedding)
 
-`python -m rlm_runner` is a one-shot JSON worker: a host writes a request
+`python -m droste_runner` is a one-shot JSON worker: a host writes a request
 file (question, budgets, endpoints or context, declarative data sources) and
 reads a response (answer, `ready`, `extracted`, iterations, subcalls,
 trajectory, usage). This is how non-Python hosts embed the engine.

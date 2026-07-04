@@ -1,4 +1,4 @@
-"""Local-mode SQL data source (rlm-core#29).
+"""Local-mode SQL data source (droste#29).
 
 Covers the local policy gate (SELECT-only, single statement, aggregate and
 subquery allowances, LIMIT injection, row cap, timeout) and the end-to-end
@@ -14,8 +14,8 @@ import threading
 
 import pytest
 
-from rlm_core.registry import DataSourceRegistry
-from rlm_core.sources.sql_local import (
+from droste.registry import DataSourceRegistry
+from droste.sources.sql_local import (
     DEFAULT_LOCAL_SQL_POLICY,
     LocalSqlDataSource,
     LocalSqlPolicy,
@@ -24,7 +24,7 @@ from rlm_core.sources.sql_local import (
     register,
     validate_local_sql,
 )
-from rlm_runner.runner import _reset_source_types, build_data_sources
+from droste_runner.runner import _reset_source_types, build_data_sources
 
 
 @pytest.fixture(autouse=True)

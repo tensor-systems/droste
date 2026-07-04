@@ -25,7 +25,7 @@ import os
 import sys
 from typing import Any
 
-from rlm_core import (
+from droste import (
     DEFAULT_MAX_CALLS,
     DEFAULT_MAX_ITERATIONS,
     DEFAULT_MAX_OUTPUT_CHARS,
@@ -35,8 +35,8 @@ from rlm_core import (
     create_execution_context,
     run_rlm,
 )
-from rlm_core.clients.openai_compat import DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS
-from rlm_core.registry import DataSourceRegistry
+from droste.clients.openai_compat import DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS
+from droste.registry import DataSourceRegistry
 
 
 
@@ -123,7 +123,7 @@ def build_context(paths: list[str]) -> dict[str, Any] | None:
 
 
 def _load_sql_source(db_path: str) -> Any:
-    """Build the local-mode read-only SQLite data source (rlm-core#29).
+    """Build the local-mode read-only SQLite data source (droste#29).
 
     Exposes the database as the `db` source: SELECT-only, policy-gated, opened
     mode=ro. The policy is a guardrail, not a security boundary — OS file
@@ -131,7 +131,7 @@ def _load_sql_source(db_path: str) -> Any:
     """
     if not os.path.isfile(db_path):
         raise CLIError(f"database not found (or not a file): {db_path}")
-    from rlm_core.sources.sql_local import local_sql_source_factory
+    from droste.sources.sql_local import local_sql_source_factory
 
     source = local_sql_source_factory({"name": "db", "sqlite_path": db_path})
     # Fail fast with a clean usage error if the file is not a readable SQLite
@@ -192,7 +192,7 @@ def run_ask(args: argparse.Namespace) -> int:
 
     # RunnerEnvironment provides the in-process REPL plus the context
     # name + size prompt description (0.5.x prompt work) for free.
-    from rlm_runner.runner import RunnerEnvironment
+    from droste_runner.runner import RunnerEnvironment
 
     environment = RunnerEnvironment(
         context=context_payload,

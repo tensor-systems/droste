@@ -11,7 +11,7 @@ writes both the map and the reduce.
 
 Coding harnesses bolt a model onto a transcript. Droste harnesses it to data.
 
-<!-- The package publishes as `droste`; in-repo it builds as rlm-core until
+<!-- The package publishes as `droste`; in-repo it builds as droste until
 the rename-at-publish (#31) flips pyproject in the same change. -->
 ```bash
 pip install droste
@@ -103,7 +103,7 @@ chat-completions shape (OpenAI, OpenRouter, Google's OpenAI-compat endpoint,
 vLLM, Ollama, ...). Bring your own key — no ModelRelay account required.
 
 ```python
-from rlm_core import (
+from droste import (
     OpenAICompatClient,
     OpenAICompatSubcallClient,
     create_execution_context,
@@ -132,9 +132,9 @@ disabling Gemini thinking per subcall) is a gateway capability — on ModelRelay
 these knobs are enforced server-side; BYOK gets whatever the raw endpoint
 honors (we measured litellm/gemini ignoring a client-side disable).
 
-## Runner Architecture (rlm_runner)
+## Runner Architecture (droste_runner)
 
-The `rlm_runner` package is a thin orchestration layer that wires `rlm_core` to
+The `droste_runner` package is a thin orchestration layer that wires `droste` to
 HTTP-backed root LLM calls and subcalls. It is shared across hosts (ModelRelay,
 Recall, etc.) so the loop logic stays in one place. For custom environments,
 set `adapter_module` in the runner request to delegate to an adapter module's
@@ -142,8 +142,8 @@ set `adapter_module` in the runner request to delegate to an adapter module's
 
 ```mermaid
 flowchart LR
-    Host[Host App] --> Runner[rlm_runner]
-    Runner --> Core[rlm_core run_rlm]
+    Host[Host App] --> Runner[droste_runner]
+    Runner --> Core[droste run_rlm]
     Runner --> Env[RunnerEnvironment]
     Env --> Sandbox[Python REPL execute]
 

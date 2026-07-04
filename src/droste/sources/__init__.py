@@ -2,7 +2,7 @@
 
 The engine's base runner only builds remote ``wrapper_v1`` sources; everything
 in this package is opt-in and must be registered by the consumer's entrypoint
-via :func:`rlm_runner.runner.register_source_type` (Option C,
+via :func:`droste_runner.runner.register_source_type` (Option C,
 unified-data-sources §7.2). See each module's ``register()`` helper.
 """
 

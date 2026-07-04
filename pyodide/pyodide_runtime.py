@@ -1,12 +1,12 @@
 """Pyodide-substrate adapters for the Recall RLM (Phase 2 step 3).
 
 Two pieces are substrate-specific and injected into the otherwise-unchanged
-rlm-core loop + RecallEnvironment:
+droste loop + RecallEnvironment:
 
   RawExecutor      - replaces RestrictedExecutor. Runs generated code with a plain
                      interpreter (the Deno/WASM jail is the sandbox, so RestrictedPython
                      is redundant here). Pyodide-safe: no signals/threads.
-  BridgedLLMClient - replaces the httpx ModelRelay client. Implements the rlm-core
+  BridgedLLMClient - replaces the httpx ModelRelay client. Implements the droste
                      LLMClient protocol by calling a host fetch function injected by
                      the Deno host, which performs the real ModelRelay /responses call.
 
@@ -20,7 +20,7 @@ import dataclasses
 import io
 from typing import Any, Callable
 
-from rlm_core.protocols.llm_client import TokenUsage
+from droste.protocols.llm_client import TokenUsage
 
 # Bind the interpreter primitive once, away from call sites, so static scanners
 # don't confuse it with shell exec.
@@ -54,7 +54,7 @@ class RawExecutor:
 
 
 # --------------------------------------------------------------------------- #
-# BridgedLLMClient — implements the rlm-core LLMClient protocol over a host fetch
+# BridgedLLMClient — implements the droste LLMClient protocol over a host fetch
 # --------------------------------------------------------------------------- #
 def _build_input(messages: list[dict]) -> list[dict]:
     """OpenAI-style messages -> ModelRelay input items (mirrors modelrelay._build_input)."""
@@ -174,7 +174,7 @@ def _serialize_error(err: Any) -> dict[str, Any] | None:
 
     ``run_rlm`` returns a ``RLMError`` *dataclass*, but the host wire contract is a
     plain ``{"type", "message", ...}`` dict (mirrors ``rcl_rlm.host`` / the shared
-    ``rlm_runner``). Without this, ``json.dumps`` of the response raises on the
+    ``droste_runner``). Without this, ``json.dumps`` of the response raises on the
     dataclass and the relay emits no output — an opaque failure for the app, and
     one that would also drop the structured HTTP status the host injects (402 =
     out of balance). Defensive across shapes: dataclass, dict, or anything else.

@@ -1,6 +1,6 @@
-from rlm_core import RLMConfig, run_rlm
-from rlm_core.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
-from rlm_core.protocols.llm_client import TokenUsage
+from droste import RLMConfig, run_rlm
+from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
+from droste.protocols.llm_client import TokenUsage
 
 
 def test_run_rlm_basic():

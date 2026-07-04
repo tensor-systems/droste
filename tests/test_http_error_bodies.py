@@ -15,8 +15,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from rlm_core.execution.context import create_execution_context
-from rlm_runner.runner import HTTPSubcallClient, _http_error_excerpt
+from droste.execution.context import create_execution_context
+from droste_runner.runner import HTTPSubcallClient, _http_error_excerpt
 
 
 def _http_error(body: bytes, code: int = 502) -> urllib.error.HTTPError:
