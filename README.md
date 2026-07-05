@@ -17,16 +17,16 @@ the rename-at-publish (#31) flips pyproject in the same change. -->
 pip install droste
 export OPENAI_API_KEY=sk-...     # any OpenAI-compatible endpoint works
 
-droste ask server.log "which customer had a failed charge, and why?"
-droste ask --db shop.db "which plan has the highest refund rate vs its MRR?"
+droste "which customer had a failed charge, and why?" server.log
+droste "which plan has the highest refund rate vs its MRR?" shop.db
 ```
 
 Both examples are real. The first, against a 231 KB log with
 `gemini-3.5-flash`:
 
 ```
-$ droste ask server.log "Which customer had a failed charge, for what amount,
-  and why? How many timeout errors are there, and which upstream do they blame?"
+$ droste "Which customer had a failed charge, for what amount, and why?
+  How many timeout errors are there, and which upstream do they blame?" server.log
 
 1. Failed charge: customer cus_9982, amount 1499 ($14.99), reason card_declined
 2. Timeout errors: 66 total; all blame the upstream service payments-v2
@@ -58,7 +58,7 @@ everywhere):
 +32 points over stuffing the window, at comparable cost. On
 [TAG-Bench](https://github.com/TAG-Research/TAG-Bench) (agentic analysis
 over SQL), Droste scores **50%** strict-match where published text-to-SQL
-baselines sit under 20% — no pipeline, just `droste ask --db`.
+baselines sit under 20% — no pipeline, just `droste` pointed at the .db file.
 
 <sub>Caveats, stated plainly: one dataset per benchmark, one context length,
 one model family, n=50. Per-task artifacts, cost derivations, and failure
@@ -67,14 +67,26 @@ shape of the result has been stable across runs.</sub>
 
 ## The droste CLI
 
-The wheel ships a `droste` binary — ask questions over files and SQLite from
-the terminal, BYOK against any OpenAI-compatible endpoint:
+The wheel ships a `droste` binary — ask questions over files, folders, and
+SQLite from the terminal, BYOK against any OpenAI-compatible endpoint. The
+contract: **args that exist are data, the one that doesn't is the question,
+no args means the current directory, pipes are data too — and it always
+prints one line saying what it read.**
 
 ```bash
 export OPENAI_API_KEY=sk-...          # or --api-key
-droste ask report.txt logs.txt "what changed between these?" --model gpt-5.2-mini
-droste ask --db app.db "which customers churned last month?" --model gpt-5.2-mini
+droste "what changed between these?" report.txt logs.txt --model gpt-5.2-mini
+droste "which customers churned last month?" app.db --model gpt-5.2-mini
+droste "how does auth work here?" ./docs --model gpt-5.2-mini
+cd ~/notes && droste "what did I decide about pricing?" --model gpt-5.2-mini
+tail -5000 app.log | droste "why did it crash?" --model gpt-5.2-mini
 ```
+
+SQLite files are recognized by their magic bytes — no flag needed (`--db`
+remains as an explicit override). Directory walks skip binaries, dotfiles,
+and the usual junk (`.git`, `node_modules`, …), cap file and total sizes
+(`--max-file-bytes`, `--max-bytes`), and report every skip — never a silent
+truncation. `droste ask …` still works as an alias.
 
 Files are materialized as the sandbox's `context` variable — the model is
 told each file's name and size (not its contents) and pulls data in via

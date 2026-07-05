@@ -1,16 +1,22 @@
-"""droste — ask questions over files and SQLite from the terminal (#28).
+"""droste — ask questions over files, folders, and SQLite from the terminal.
 
-The five-minute out-of-box moment: point the engine at your own data with your
-own key (BYOK, any OpenAI-compatible endpoint) and ask.
+The contract (#44): *args that exist are data, the one that doesn't is the
+question, no args means here, pipes are data too, and it always tells you
+what it read.*
 
-    droste ask report.txt logs.txt "what changed between these?" --model gpt-5.2-mini
-    droste ask --db app.db "which customers churned last month?" --model gpt-5.2-mini
+    droste "what changed between these?" report.txt logs.txt
+    droste "which customers churned last month?" app.db
+    droste "how does auth work here?" ./docs
+    cd ~/notes && droste "what did I decide about pricing?"
+    tail -5000 app.log | droste "why did it crash?"
 
+`ask` survives as an alias (``droste ask …``) for scripts and muscle memory.
 Files are materialized as the sandbox's `context` variable
-(``{"files": [{path, name, text, size}, ...]}``); the model sees sizes and
-sizes — not the raw bytes — and pulls data in via code. SQLite goes through
-the engine's local-mode SQL data source (read-only policy as a guardrail, not
-a boundary; OS permissions are the boundary).
+(``{"files": [{path, name, text, size}, ...]}``); the model sees names and
+sizes — not the raw bytes — and pulls data in via code. SQLite files are
+recognized by their magic bytes and go through the engine's local-mode SQL
+data source (read-only policy as a guardrail, not a boundary; OS permissions
+are the boundary).
 
 Pointing --base-url at ModelRelay lights up the platform features (validated
 SQL policies, server-enforced subcall cost controls, audit); it is documented,
@@ -38,88 +44,100 @@ from droste import (
 from droste.clients.openai_compat import DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS
 from droste.registry import DataSourceRegistry
 
+from .inputs import (
+    DEFAULT_MAX_FILE_BYTES,
+    DEFAULT_MAX_TOTAL_BYTES,
+    InputError,
+    classify,
+    load_inputs,
+    read_piped_stdin,
+)
 
 
 class CLIError(Exception):
     """User-facing CLI error: message to stderr, exit code 2."""
 
 
+def _package_version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("droste")
+    except Exception:
+        return "unknown"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="droste",
-        description="Ask questions over files and SQLite with a recursive language model.",
+        description=(
+            "Ask questions over files, folders, and SQLite with a recursive "
+            "language model. Args that exist are data; the one that doesn't "
+            "is the question; no data args means the current directory."
+        ),
     )
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    ask = sub.add_parser("ask", help="ask a question over files (and/or --db)")
-    ask.add_argument("files", nargs="*", help="files to load into the context")
-    ask.add_argument("question", help="the question to answer")
-    ask.add_argument("--db", metavar="PATH", help="SQLite database to expose as the `db` source")
-    ask.add_argument(
+    parser.add_argument("--version", action="version", version=f"droste {_package_version()}")
+    parser.add_argument(
+        "inputs",
+        nargs="*",
+        metavar="QUESTION|PATH",
+        help="the question (quoted) plus any files, directories, or SQLite databases",
+    )
+    parser.add_argument("--db", metavar="PATH", help="SQLite database to expose as the `db` source")
+    parser.add_argument(
         "--model",
         default=os.environ.get("DROSTE_MODEL", ""),
         help="root model id (env: DROSTE_MODEL)",
     )
-    ask.add_argument(
+    parser.add_argument(
         "--base-url",
         default=None,
         help="OpenAI-compatible endpoint base URL (env: OPENAI_BASE_URL; default: api.openai.com/v1)",
     )
-    ask.add_argument(
+    parser.add_argument(
         "--api-key",
         default=None,
         help="API key (env: OPENAI_API_KEY; the flag overrides the env)",
     )
-    ask.add_argument("--subcall-model", default="", help="model for llm_query subcalls (default: --model)")
-    ask.add_argument(
+    parser.add_argument("--subcall-model", default="", help="model for llm_query subcalls (default: --model)")
+    parser.add_argument(
         "--subcall-max-output-tokens",
         type=int,
         default=DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS,
         help=f"per-subcall output token bound (default: {DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS}; 0 disables)",
     )
-    ask.add_argument("--reasoning-effort", default="", help="reasoning effort passed through to the endpoint")
-    ask.add_argument(
+    parser.add_argument("--reasoning-effort", default="", help="reasoning effort passed through to the endpoint")
+    parser.add_argument(
         "--max-iterations",
         type=int,
         default=DEFAULT_MAX_ITERATIONS,
         help=f"max refinement iterations (default: {DEFAULT_MAX_ITERATIONS})",
     )
-    ask.add_argument(
+    parser.add_argument(
         "--max-subcalls",
         type=int,
         default=DEFAULT_MAX_CALLS,
         help=f"max total llm_query subcalls (default: {DEFAULT_MAX_CALLS})",
     )
-    ask.add_argument("--json", action="store_true", help="print a JSON result object for scripting")
-    ask.add_argument("--verbose", action="store_true", help="stream progress and loop traces to stderr")
+    parser.add_argument(
+        "--max-bytes",
+        type=int,
+        default=DEFAULT_MAX_TOTAL_BYTES,
+        help=f"total input budget in bytes (default: {DEFAULT_MAX_TOTAL_BYTES})",
+    )
+    parser.add_argument(
+        "--max-file-bytes",
+        type=int,
+        default=DEFAULT_MAX_FILE_BYTES,
+        help=(
+            "per-file cap for directory walks in bytes "
+            f"(default: {DEFAULT_MAX_FILE_BYTES}; explicit files are exempt)"
+        ),
+    )
+    parser.add_argument("--json", action="store_true", help="print a JSON result object for scripting")
+    parser.add_argument("--verbose", action="store_true", help="stream progress and loop traces to stderr")
+    parser.add_argument("-q", "--quiet", action="store_true", help="suppress the loaded-inputs report line")
     return parser
-
-
-def build_context(paths: list[str]) -> dict[str, Any] | None:
-    """Materialize files as the sandbox `context` variable.
-
-    Same shape as the bench harness / ModelRelay attachments
-    ({"files": [{path, name, text, size}]}), so the runner environment's
-    name + size prompt description (0.5.x prompt work) applies as-is.
-    """
-    if not paths:
-        return None
-    files: list[dict[str, Any]] = []
-    for path in paths:
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as handle:
-                text = handle.read()
-        except OSError as exc:
-            raise CLIError(f"cannot read {path}: {exc}") from exc
-        files.append(
-            {
-                "path": path,
-                "name": os.path.basename(path),
-                "text": text,
-                "size": len(text),
-            }
-        )
-    return {"files": files}
 
 
 def _load_sql_source(db_path: str) -> Any:
@@ -150,8 +168,6 @@ def _print_progress(status: str) -> None:
 def run_ask(args: argparse.Namespace) -> int:
     if not args.model:
         raise CLIError("--model is required (or set DROSTE_MODEL)")
-    if not args.files and not args.db:
-        raise CLIError("nothing to ask over: pass at least one file, or --db PATH")
     # Validate numeric budgets up front so bad values surface as clean usage
     # errors (exit 2) instead of crashing mid-run as exit 1.
     if args.subcall_max_output_tokens < 0:
@@ -160,11 +176,31 @@ def run_ask(args: argparse.Namespace) -> int:
         raise CLIError("--max-iterations must be >= 1")
     if args.max_subcalls < 0:
         raise CLIError("--max-subcalls must be >= 0")
+    if args.max_bytes < 1:
+        raise CLIError("--max-bytes must be >= 1")
+    if args.max_file_bytes < 1:
+        raise CLIError("--max-file-bytes must be >= 1")
 
-    context_payload = build_context(args.files)
+    try:
+        classified = classify(args.inputs, stdin_is_tty=sys.stdin is None or sys.stdin.isatty())
+        stdin_text = read_piped_stdin(limit=args.max_bytes) if classified.reads_stdin else None
+        loaded = load_inputs(
+            classified,
+            db_flag=args.db,
+            max_file_bytes=args.max_file_bytes,
+            max_total_bytes=args.max_bytes,
+            stdin_text=stdin_text,
+        )
+    except InputError as exc:
+        raise CLIError(str(exc)) from exc
+
+    # The trust line: everything the run reads, in one glance, before spend.
+    if not args.quiet:
+        print(f"droste: {loaded.report}", file=sys.stderr, flush=True)
+
     registry = None
-    if args.db:
-        source = _load_sql_source(args.db)
+    if loaded.db_path:
+        source = _load_sql_source(loaded.db_path)
         registry = DataSourceRegistry([source], default_source_name=source.name())
 
     exec_context = create_execution_context(
@@ -195,7 +231,7 @@ def run_ask(args: argparse.Namespace) -> int:
     from droste_runner.runner import RunnerEnvironment
 
     environment = RunnerEnvironment(
-        context=context_payload,
+        context=loaded.context,
         registry=registry,
         subcalls=subcalls,
         max_output_chars=DEFAULT_MAX_OUTPUT_CHARS,
@@ -210,7 +246,7 @@ def run_ask(args: argparse.Namespace) -> int:
     )
 
     result = run_rlm(
-        args.question,
+        loaded.question,
         environment=environment,
         root_llm=root,
         subcalls=subcalls,
@@ -227,6 +263,8 @@ def run_ask(args: argparse.Namespace) -> int:
             "tokens_used": result.tokens_used,
             "subcalls": result.sub_calls_made,
             "model": args.model,
+            "files": len(loaded.context["files"]) if loaded.context else 0,
+            "db": loaded.db_path,
             "error": None,
         }
         if result.error:
@@ -255,13 +293,14 @@ def run_ask(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # `ask` is a compatibility alias: the naked binary is the verb.
+    if argv and argv[0] == "ask":
+        argv = argv[1:]
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_intermixed_args(argv)
     try:
-        if args.command == "ask":
-            return run_ask(args)
-        parser.error(f"unknown command: {args.command}")
-        return 2
+        return run_ask(args)
     except CLIError as exc:
         print(f"droste: error: {exc}", file=sys.stderr)
         return 2

@@ -48,12 +48,16 @@ costs an LLM loop; it earns its keep only when scale or computation is the point
 ## How to call it
 
 ```bash
-# Over files (large files OK — subject to local memory; the model pulls in what it needs via code):
-droste ask <file...> "<question>" --model <model>
+# Args that exist are data; the one that doesn't is the question.
+# Over files or directories (large inputs OK — the model pulls in what it needs via code):
+droste "<question>" <file-or-dir...> --model <model>
 
-# Over a SQLite database (read-only, policy-gated; the model reads the schema
-# and writes SELECTs):
-droste ask --db <path.db> "<question>" --model <model>
+# Over a SQLite database (detected by magic bytes; read-only, policy-gated;
+# the model reads the schema and writes SELECTs):
+droste "<question>" <path.db> --model <model>
+
+# Piped input and bare invocation (current directory) also work:
+tail -5000 app.log | droste "<question>" --model <model>
 ```
 
 Key flags: `--model` (or env `DROSTE_MODEL`); `--json` for a machine-readable
