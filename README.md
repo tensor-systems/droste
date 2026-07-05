@@ -11,14 +11,11 @@ writes both the map and the reduce.
 
 Coding harnesses bolt a model onto a transcript. Droste harnesses it to data.
 
-<!-- The package publishes as `droste`; in-repo it builds as droste until
-the rename-at-publish (#31) flips pyproject in the same change. -->
 ```bash
-pip install droste
 export OPENAI_API_KEY=sk-...     # any OpenAI-compatible endpoint works
 
-droste "which customer had a failed charge, and why?" server.log
-droste "which plan has the highest refund rate vs its MRR?" shop.db
+uvx droste "which customer had a failed charge, and why?" server.log
+uvx droste "which plan has the highest refund rate vs its MRR?" shop.db
 ```
 
 Both examples are real. The first, against a 231 KB log with
@@ -65,13 +62,19 @@ one model family, n=50. Per-task artifacts, cost derivations, and failure
 classifications ship with the benchmark harness. Numbers will move; the
 shape of the result has been stable across runs.</sub>
 
-## The droste CLI
+## Use it
 
-The wheel ships a `droste` binary — ask questions over files, folders, and
-SQLite from the terminal, BYOK against any OpenAI-compatible endpoint. The
-contract: **args that exist are data, the one that doesn't is the question,
-no args means the current directory, pipes are data too — and it always
-prints one line saying what it read.**
+Ask questions over files, folders, and SQLite from the terminal — BYOK
+against any OpenAI-compatible endpoint. The contract: **args that exist are
+data, the one that doesn't is the question, no args means the current
+directory, pipes are data too — and it always prints one line saying what
+it read.**
+
+```bash
+uvx droste "…" ./docs        # zero-install, npx-style
+uv tool install droste       # or keep the binary around
+pipx install droste          # the older equivalent
+```
 
 ```bash
 export OPENAI_API_KEY=sk-...          # or --api-key
@@ -108,7 +111,21 @@ Pointing `--base-url` at ModelRelay lights up the platform features
 documented, not required. `droste` is the engine CLI; `mrl` remains the
 ModelRelay platform CLI.
 
-## BYOK: run against any OpenAI-compatible endpoint
+## Embed it
+
+The same wheel is the engine as a library — zero runtime dependencies,
+`urllib`-only. Add it to your app and point the loop at your own data
+sources:
+
+```bash
+uv add droste        # or: pip install droste
+```
+
+Using is asking questions over *your* data; embedding is building RLM
+answers into a product for *your users*. Everything below is for the second
+audience.
+
+### BYOK: any OpenAI-compatible endpoint
 
 The engine ships built-in clients for any endpoint that speaks the OpenAI
 chat-completions shape (OpenAI, OpenRouter, Google's OpenAI-compat endpoint,
@@ -144,7 +161,7 @@ disabling Gemini thinking per subcall) is a gateway capability — on ModelRelay
 these knobs are enforced server-side; BYOK gets whatever the raw endpoint
 honors (we measured litellm/gemini ignoring a client-side disable).
 
-## Runner Architecture (droste_runner)
+### Runner architecture (droste_runner)
 
 The `droste_runner` package is a thin orchestration layer that wires `droste` to
 HTTP-backed root LLM calls and subcalls. It is shared across hosts (ModelRelay,
@@ -170,9 +187,9 @@ flowchart LR
 - `root_endpoint` + `subcall_endpoint` + `token`: required for HTTP-backed runs.
 - `adapter_module`: optional Python module path to override the runner entirely.
 
-## Core Concepts
+### Core concepts
 
-### Protocols
+#### Protocols
 
 Implement these to integrate with your infrastructure:
 
@@ -181,7 +198,7 @@ Implement these to integrate with your infrastructure:
 - **`SubcallClient`** - Provides `llm_query()` and `llm_batch()` for sub-LLM calls
 - **`DataSource`** - Optional data source integration
 
-### Configuration
+#### Configuration
 
 ```python
 RLMConfig(
@@ -192,7 +209,7 @@ RLMConfig(
 )
 ```
 
-### Result
+#### Result
 
 ```python
 RLMResult(
