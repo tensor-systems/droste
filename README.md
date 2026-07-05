@@ -23,7 +23,11 @@ uvx droste "which customer had a failed charge, and why?" server.log
 uvx droste "which plan has the highest refund rate vs its MRR?" shop.db
 ```
 
-![droste answering a two-part question over a 435 kB server log — report line, iteration progress, exact answer](docs/assets/demo.gif)
+![droste answering a two-part question over a 435 kB server log, streaming its code as it works](docs/assets/demo.gif)
+
+<sub>Real recorded run. The log is generated with seeded ground truth
+(66 timeouts, one failed charge) so the answer is checkable —
+[regenerate it yourself](docs/assets/demo/).</sub>
 
 Both examples are real. The first, against a 231 KB log with
 `gemini-3.5-flash`:
@@ -64,10 +68,9 @@ everywhere):
 over SQL), Droste scores **50%** strict-match where published text-to-SQL
 baselines sit under 20% — no pipeline, just `droste` pointed at the .db file.
 
-<sub>Caveats, stated plainly: one dataset per benchmark, one context length,
-one model family, n=50. Per-task artifacts, cost derivations, and failure
-classifications ship with the benchmark harness. Numbers will move; the
-shape of the result has been stable across runs.</sub>
+<sub>Caveats: one dataset per benchmark, one context length, one model
+family, n=50. Per-task artifacts and cost derivations ship with the
+benchmark harness.</sub>
 
 ## Use it
 
@@ -94,9 +97,9 @@ tail -5000 app.log | droste "why did it crash?" --model gpt-5.2-mini
 
 SQLite files are recognized by their magic bytes — no flag needed (`--db`
 remains as an explicit override). Directory walks skip binaries, dotfiles,
-and the usual junk (`.git`, `node_modules`, …), cap file and total sizes
-(`--max-file-bytes`, `--max-bytes`), and report every skip — never a silent
-truncation. `droste ask …` still works as an alias.
+and the usual junk (`.git`, `node_modules`, …) and cap sizes
+(`--max-file-bytes`, `--max-bytes`); every skip is counted in the report
+line. `droste ask …` still works as an alias.
 
 Files are materialized as the sandbox's `context` variable — the model is
 told each file's name and size (not its contents) and pulls data in via
@@ -129,9 +132,8 @@ sources:
 uv add droste        # or: pip install droste
 ```
 
-Using is asking questions over *your* data; embedding is building RLM
-answers into a product for *your users*. Everything below is for the second
-audience.
+Using is asking over *your* data; embedding is building RLM answers into a
+product for *your users*.
 
 ### BYOK: any OpenAI-compatible endpoint
 
@@ -163,11 +165,9 @@ Explicit `base_url=` / `api_key=` constructor args win over the environment
 variables. Subcall batches run with bounded concurrency (5 workers) and every
 subcall's usage block is added to `result.tokens_used`.
 
-**Honest note on thinking control:** `reasoning_effort` and `extra_body` are
-passed through to the endpoint as-is. Server-side thinking control (e.g.
-disabling Gemini thinking per subcall) is a gateway capability — on ModelRelay
-these knobs are enforced server-side; BYOK gets whatever the raw endpoint
-honors (we measured litellm/gemini ignoring a client-side disable).
+`reasoning_effort` and `extra_body` pass through to the endpoint as-is.
+Disabling thinking per-subcall is a gateway capability: ModelRelay enforces
+it server-side; raw endpoints may ignore a client-side disable.
 
 ### Runner architecture (droste_runner)
 

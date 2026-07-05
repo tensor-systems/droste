@@ -157,6 +157,101 @@ class _ChatCompletionsTransport:
             raise RuntimeError(f"{self._label} returned a non-object JSON response")
         return data
 
+    def stream(self, payload: dict[str, Any], on_delta: Any) -> dict[str, Any]:
+        """POST with ``stream: true``; assemble SSE chunks into the same
+        response shape ``complete`` returns, invoking ``on_delta(text)`` per
+        content fragment as it arrives.
+
+        ``stream_options.include_usage`` is requested; endpoints that honor it
+        (OpenAI, vLLM, Ollama, Google's compat endpoint) report usage in the
+        final chunk. If the endpoint sends none, usage is absent from the
+        assembled response — the caller's usage parser treats that as zeros
+        rather than failing the run.
+        """
+        payload = dict(payload)
+        payload["stream"] = True
+        payload.setdefault("stream_options", {"include_usage": True})
+        try:
+            return self._stream_once(payload, on_delta)
+        except RuntimeError as exc:
+            # Some compat endpoints (older vLLM, thin proxies) reject unknown
+            # stream_options with a 400; usage-in-stream is best-effort, so
+            # retry once without it rather than failing verbose streaming.
+            if "HTTP 400" in str(exc) and "stream_options" in payload:
+                retry = dict(payload)
+                retry.pop("stream_options", None)
+                return self._stream_once(retry, on_delta)
+            raise
+
+    def _stream_once(self, payload: dict[str, Any], on_delta: Any) -> dict[str, Any]:
+        body = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+        if self._api_key:
+            headers["Authorization"] = "Bearer " + self._api_key
+        req = urllib.request.Request(self._url, data=body, headers=headers, method="POST")
+        parts: list[str] = []
+        finish_reason = ""
+        response_id = ""
+        model = ""
+        usage: dict[str, Any] | None = None
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[len("data:"):].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except Exception:
+                        continue  # tolerate keep-alive/partial noise
+                    if not isinstance(chunk, dict):
+                        continue
+                    if chunk.get("error"):
+                        # Mid-stream provider error: fail loudly, never return
+                        # partial text as a successful response.
+                        raise RuntimeError(
+                            f"{self._label} streamed an error: "
+                            f"{json.dumps(chunk['error'])[:500]}"
+                        )
+                    response_id = str(chunk.get("id") or response_id)
+                    model = str(chunk.get("model") or model)
+                    if isinstance(chunk.get("usage"), dict):
+                        usage = chunk["usage"]
+                    for choice in chunk.get("choices") or []:
+                        delta = choice.get("delta") or {}
+                        text = delta.get("content")
+                        if text:
+                            parts.append(text)
+                            on_delta(text)
+                        if choice.get("finish_reason"):
+                            finish_reason = str(choice["finish_reason"])
+        except urllib.error.HTTPError as exc:
+            status = getattr(exc, "code", 0)
+            excerpt = http_error_excerpt(exc)
+            detail = f": {excerpt}" if excerpt else f": {exc}"
+            raise RuntimeError(f"{self._label} failed with HTTP {status}{detail}") from exc
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"{self._label} failed: {exc}") from exc
+        assembled: dict[str, Any] = {
+            "id": response_id,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "".join(parts)},
+                    "finish_reason": finish_reason or "stop",
+                }
+            ],
+        }
+        if usage is not None:
+            assembled["usage"] = usage
+        return assembled
+
 
 class OpenAICompatClient:
     """Root ``LLMClient`` over an OpenAI-compatible chat-completions endpoint.
@@ -168,6 +263,12 @@ class OpenAICompatClient:
     entries are merged into every request payload last (they win), providing a
     passthrough for provider-specific params (``reasoning_effort``,
     ``reasoning``, ...).
+
+    ``on_delta`` (optional) streams the response: content fragments are
+    delivered to the callback as they generate (SSE) and the call still
+    returns the full assembled text — the ``LLMClient`` protocol is
+    unchanged. Used by the CLI's ``--verbose`` to show code as it is
+    written.
     """
 
     def __init__(
@@ -181,6 +282,7 @@ class OpenAICompatClient:
         max_output_tokens: int = 0,
         extra_body: dict[str, Any] | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        on_delta: Any | None = None,
     ) -> None:
         self._transport = _ChatCompletionsTransport(
             base_url=base_url, api_key=api_key, timeout=timeout, label="root llm"
@@ -190,6 +292,7 @@ class OpenAICompatClient:
         self._stop = list(stop) if stop else []
         self._max_output_tokens = int(max_output_tokens or 0)
         self._extra_body = dict(extra_body) if extra_body else {}
+        self._on_delta = on_delta
         # Parity with RootLLMClient's response metadata surface.
         self.last_provider = ""
         self.last_response_id = ""
@@ -218,7 +321,14 @@ class OpenAICompatClient:
         if self._stop:
             payload["stop"] = self._stop
         payload.update(self._extra_body)
-        data = self._transport.complete(payload)
+        # Streaming is a concrete-client concern, not a protocol one: with an
+        # on_delta callback the request streams (SSE) and fragments surface as
+        # they generate; the assembled response is shape-identical, so the
+        # loop never knows the difference.
+        if self._on_delta is not None:
+            data = self._transport.stream(payload, self._on_delta)
+        else:
+            data = self._transport.complete(payload)
         result = _message_content(data, label="root llm")
         choice = data["choices"][0]
         self.last_provider = str(data.get("provider") or "")

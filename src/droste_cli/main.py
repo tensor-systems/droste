@@ -170,6 +170,29 @@ def _load_sql_source(db_path: str) -> Any:
     return source
 
 
+class _StreamEcho:
+    """stderr echo for streamed root-model output (--verbose).
+
+    Fragments arrive mid-line; progress lines must start on a fresh line, so
+    the echo tracks whether the stream left the cursor mid-line and the
+    progress printer consults it.
+    """
+
+    def __init__(self) -> None:
+        self.mid_line = False
+
+    def __call__(self, text: str) -> None:
+        sys.stderr.write(text)
+        sys.stderr.flush()
+        self.mid_line = not text.endswith("\n")
+
+    def progress(self, status: str) -> None:
+        if self.mid_line:
+            sys.stderr.write("\n")
+            self.mid_line = False
+        print(f"droste: {status}", file=sys.stderr, flush=True)
+
+
 def _print_progress(status: str) -> None:
     print(f"droste: {status}", file=sys.stderr, flush=True)
 
@@ -212,19 +235,25 @@ def run_ask(args: argparse.Namespace) -> int:
         source = _load_sql_source(loaded.db_path)
         registry = DataSourceRegistry([source], default_source_name=source.name())
 
+    # --verbose/--trace stream the root model's output (the generated code)
+    # to stderr as it is written — the "watch it think" view. The echo also
+    # coordinates newlines with the one-line progress printer.
+    echo = _StreamEcho() if (args.verbose or args.trace) else None
+
     exec_context = create_execution_context(
         max_calls=args.max_subcalls,
         max_iterations=args.max_iterations,
         max_output_chars=DEFAULT_MAX_OUTPUT_CHARS,
         # Progress lines only stream with --verbose/--trace; the default
         # emitter would print JSON progress events to stderr unconditionally.
-        on_progress=_print_progress if (args.verbose or args.trace) else (lambda status: None),
+        on_progress=echo.progress if echo else (lambda status: None),
     )
 
     root = OpenAICompatClient(
         model=args.model,
         base_url=args.base_url,
         api_key=args.api_key,
+        on_delta=echo,
     )
     subcalls = OpenAICompatSubcallClient(
         model=args.subcall_model or args.model,

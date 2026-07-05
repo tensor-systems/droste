@@ -38,6 +38,10 @@ class StubOpenAIServer:
         self.root_responses: list[str] = []
         self.fail_status: int | None = None
         self.fail_body: bytes = b""
+        # Simulate endpoints that 400 on unknown stream_options.
+        self.reject_stream_options = False
+        # Emit an SSE error chunk mid-stream (after one content chunk).
+        self.stream_error_midway = False
         self.usage = {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
         self.max_in_flight = 0
         self._in_flight = 0
@@ -54,6 +58,13 @@ class StubOpenAIServer:
                     stub._in_flight += 1
                     stub.max_in_flight = max(stub.max_in_flight, stub._in_flight)
                 try:
+                    if stub.reject_stream_options and "stream_options" in payload:
+                        msg = b'{"error": "unknown parameter: stream_options"}'
+                        self.send_response(400)
+                        self.send_header("Content-Length", str(len(msg)))
+                        self.end_headers()
+                        self.wfile.write(msg)
+                        return
                     if stub.fail_status is not None:
                         self.send_response(stub.fail_status)
                         self.send_header("Content-Length", str(len(stub.fail_body)))
@@ -71,6 +82,38 @@ class StubOpenAIServer:
                             content = (
                                 stub.root_responses.pop(0) if stub.root_responses else "hi"
                             )
+                    if payload.get("stream"):
+                        # SSE: content split into 3 chunks, usage in the final
+                        # chunk iff the client asked for include_usage.
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream")
+                        self.end_headers()
+                        third = max(1, len(content) // 3)
+                        pieces = [content[:third], content[third : 2 * third], content[2 * third :]]
+                        for i, piece in enumerate(pieces):
+                            if not piece:
+                                continue
+                            if stub.stream_error_midway and i == 1:
+                                err = {"error": {"message": "provider exploded mid-stream", "code": 500}}
+                                self.wfile.write(f"data: {json.dumps(err)}\n\n".encode("utf-8"))
+                                self.wfile.write(b"data: [DONE]\n\n")
+                                return
+                            chunk = {
+                                "id": "chatcmpl-stub-1",
+                                "model": payload.get("model", ""),
+                                "choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": None}],
+                            }
+                            self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
+                        final = {
+                            "id": "chatcmpl-stub-1",
+                            "model": payload.get("model", ""),
+                            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                        }
+                        if (payload.get("stream_options") or {}).get("include_usage"):
+                            final["usage"] = dict(stub.usage)
+                        self.wfile.write(f"data: {json.dumps(final)}\n\n".encode("utf-8"))
+                        self.wfile.write(b"data: [DONE]\n\n")
+                        return
                     body = json.dumps(
                         {
                             "id": "chatcmpl-stub-1",
@@ -320,3 +363,76 @@ def test_batch_responses_preserves_explicit_zero_max_tokens(stub_server):
     client = OpenAICompatClient(base_url=stub_server.base_url, api_key="k", model="m")
     client.batch_responses([{"messages": [{"role": "user", "content": "hi"}], "max_tokens": 0}])
     assert "max_tokens" not in stub_server.requests[0]
+
+
+# --- root streaming (on_delta) ---
+
+
+def test_on_delta_streams_and_assembles(stub_server):
+    from droste import OpenAICompatClient
+
+    stub_server.root_responses = ["streamed answer body"]
+    deltas: list[str] = []
+    client = OpenAICompatClient(
+        model="root-model",
+        base_url=stub_server.base_url,
+        api_key="k",
+        on_delta=deltas.append,
+    )
+    text, usage = client.responses_create(
+        [{"role": "user", "content": "q"}], model="root-model", return_usage=True
+    )
+    assert text == "streamed answer body"
+    assert len(deltas) >= 2  # arrived in fragments
+    assert "".join(deltas) == "streamed answer body"
+    assert usage.total_tokens == 10  # include_usage honored end-to-end
+    assert stub_server.requests[0]["stream"] is True
+    assert stub_server.requests[0]["stream_options"] == {"include_usage": True}
+
+
+def test_without_on_delta_request_does_not_stream(stub_server):
+    from droste import OpenAICompatClient
+
+    stub_server.root_responses = ["plain"]
+    client = OpenAICompatClient(model="root-model", base_url=stub_server.base_url, api_key="k")
+    text = client.responses_create([{"role": "user", "content": "q"}], model="root-model")
+    assert text == "plain"
+    assert "stream" not in stub_server.requests[0]
+
+
+def test_on_delta_retries_without_stream_options(stub_server):
+    # codex review (#49): endpoints that 400 on stream_options still stream.
+    from droste import OpenAICompatClient
+
+    stub_server.reject_stream_options = True
+    stub_server.root_responses = ["retried stream"]
+    deltas: list[str] = []
+    client = OpenAICompatClient(
+        model="root-model",
+        base_url=stub_server.base_url,
+        api_key="k",
+        on_delta=deltas.append,
+    )
+    text, usage = client.responses_create(
+        [{"role": "user", "content": "q"}], model="root-model", return_usage=True
+    )
+    assert text == "retried stream"
+    assert "".join(deltas) == "retried stream"
+    assert usage.total_tokens == 0  # no usage without include_usage — tolerated
+    assert "stream_options" not in stub_server.requests[-1]
+
+
+def test_streamed_error_chunk_raises(stub_server):
+    # codex review (#49): an SSE error payload mid-stream must fail the call,
+    # not return partial text as success.
+    import pytest as _pytest
+
+    from droste import OpenAICompatClient
+
+    stub_server.stream_error_midway = True
+    stub_server.root_responses = ["will not complete"]
+    client = OpenAICompatClient(
+        model="root-model", base_url=stub_server.base_url, api_key="k", on_delta=lambda _t: None
+    )
+    with _pytest.raises(RuntimeError, match="streamed an error"):
+        client.responses_create([{"role": "user", "content": "q"}], model="root-model")

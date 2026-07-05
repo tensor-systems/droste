@@ -338,3 +338,29 @@ def test_trace_dumps_full_loop(stub_server, tmp_path, capsys):
     assert "droste: Iteration" in captured.err  # trace implies progress
     assert "LLM Response" in captured.err  # dump goes to stderr too
     assert captured.out.strip() == "content"  # stdout stays answer-only
+
+
+def test_verbose_streams_generated_code_live(stub_server, tmp_path, capsys):
+    # --verbose shows the root model's code AS IT GENERATES (SSE deltas on
+    # stderr), with progress lines starting on fresh lines.
+    doc = tmp_path / "doc.txt"
+    doc.write_text("content")
+    stub_server.root_responses = [ANSWER_FROM_FILE]
+    exit_code = main(_e2e_argv(stub_server, doc, "q", extra=["--verbose"]))
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    # The generated code itself appears on stderr (streamed)...
+    assert "answer['ready'] = True" in captured.err
+    # ...requested as a streaming call...
+    assert any(r.get("stream") for r in stub_server.requests)
+    # ...and stdout stays answer-only.
+    assert captured.out.strip() == "content"
+
+
+def test_default_run_does_not_stream(stub_server, tmp_path, capsys):
+    doc = tmp_path / "doc.txt"
+    doc.write_text("content")
+    stub_server.root_responses = [ANSWER_FROM_FILE]
+    exit_code = main(_e2e_argv(stub_server, doc, "q"))
+    assert exit_code == 0
+    assert not any(r.get("stream") for r in stub_server.requests)
