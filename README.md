@@ -25,12 +25,7 @@ uvx droste "which plan has the highest refund rate vs its MRR?" shop.db
 
 ![droste answering a two-part question over a 435 kB server log, streaming its code as it works](docs/assets/demo.gif)
 
-<sub>Real recorded run. The log is generated with seeded ground truth
-(66 timeouts, one failed charge) so the answer is checkable —
-[regenerate it yourself](docs/assets/demo/).</sub>
-
-Both examples are real. The first, against a 231 KB log with
-`gemini-3.5-flash`:
+The first example, against a 231 KB log with `gemini-3.5-flash`:
 
 ```
 $ droste "Which customer had a failed charge, for what amount, and why?
