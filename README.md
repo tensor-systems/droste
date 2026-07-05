@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/droste-dark.svg">
+  <img src="docs/assets/droste.svg" alt="Droste — nested frames converging on the answer" width="96">
+</picture>
+
 # Droste
 
 **The recursive harness for your data.**

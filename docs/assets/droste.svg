@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-50 -50 100 100">
+  <!-- The Droste mark: self-similar frames, each rotated 16° and scaled ×0.70
+       into the last — the Print Gallery transformation — converging on a
+       filled block: the next frame in the sequence, which is the answer.
+       Spec: docs/brand.md -->
+  <g transform="rotate(0)"><rect x="-40.0" y="-40.0" width="80.0" height="80.0" fill="none" stroke="#131313" stroke-width="6.4"/></g>
+            <g transform="rotate(16)"><rect x="-28.0" y="-28.0" width="56.0" height="56.0" fill="none" stroke="#131313" stroke-width="5.6"/></g>
+            <g transform="rotate(32)"><rect x="-19.6" y="-19.6" width="39.2" height="39.2" fill="none" stroke="#131313" stroke-width="5.0"/></g>
+            <g transform="rotate(48)"><rect x="-13.7" y="-13.7" width="27.4" height="27.4" fill="none" stroke="#131313" stroke-width="4.4"/></g>
+            <g transform="rotate(64)"><rect x="-6.6" y="-6.6" width="13.2" height="13.2" fill="#1f3cc4"/></g>
+</svg>
