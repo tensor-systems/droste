@@ -30,30 +30,14 @@ can omit them to keep behavior purely prompt-driven.
 - `droste_runner` expects HTTP endpoints for root and subcall execution (`root_endpoint`/`subcall_endpoint` + `token`).
 - `adapter_module` lets callers delegate the runner to a custom module with `run(request)` (used for non-HTTP environments like Recall).
 
-## Installing from Private Index
-
-To install `droste` from the private PyPI index:
-
-```bash
-uv pip install --index-url https://${PYPI_TOKEN}:x@rlm-pypi.hyperpredict.workers.dev/simple droste
-```
-
-Or add to your `pyproject.toml`:
-
-```toml
-[[tool.uv.index]]
-url = "https://rlm-pypi.hyperpredict.workers.dev/simple"
-```
-
-Then set `UV_INDEX_PYPI_TOKEN` or use a `.netrc` file for authentication.
 
 ## Offline Wheelhouse (macOS App Builds)
 
 For reproducible offline builds, download wheels to a local directory:
 
 ```bash
-# Download wheels
-uv pip download --dest wheelhouse --index-url "https://${PYPI_TOKEN}:x@rlm-pypi.hyperpredict.workers.dev/simple" droste
+# Download droste + its deps as wheels (from public PyPI)
+pip download droste --dest wheelhouse
 
 # Install offline (no network needed)
 uv pip install --no-index --find-links wheelhouse droste
@@ -61,11 +45,11 @@ uv pip install --no-index --find-links wheelhouse droste
 
 ## Publishing
 
-Publishing is automated via GitHub Actions on `v*` tags. To publish manually:
+The package ships on public PyPI. To build and publish a release:
 
 ```bash
 uv build
-uv run python scripts/publish.py
+uv publish        # requires a PyPI token (UV_PUBLISH_TOKEN)
 ```
 
-Requires `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` environment variables.
+Tag releases as `vX.Y.Z` and bump the version in `pyproject.toml`.
