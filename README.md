@@ -43,11 +43,26 @@ undefined and answered for the paid plans instead.
 
 ## Why
 
-Long-context models read everything and still miss things. Retrieval finds
-the right chunk but can't compute across all of them. An RLM does what you
-would do: look at the shape of the data, narrow mechanically (regex and SQL
-find *where*; subcalls understand *what*), delegate semantic judgment in
-bounded batches, and aggregate in code.
+Two things, at once: **better answers and bounded cost.**
+
+**Better answers.** Long-context models read everything and still miss
+things. Retrieval finds the right chunk but can't compute across all of
+them. An RLM does what you would do: look at the shape of the data, narrow
+mechanically (regex and SQL find *where*; subcalls understand *what*),
+delegate semantic judgment in bounded batches, and aggregate in code.
+
+**Bounded cost.** The naive version of this loop is ruinous — left to
+itself, one subcall spent 62,911 thinking tokens producing a 4-token
+answer, and tasks cost $4–6 each. Subcall work is extraction, not
+reasoning: with subcall reasoning off and the default 2,048-token output
+cap, the same tasks measured **~25× cheaper** at the same accuracy. The
+cap is a client default; reasoning-off is enforced server-side on
+ModelRelay and passed through on BYOK (`--reasoning-effort none`, for
+endpoints that honor it). And because the root writes the map *and* the
+reduce, you can put a strong model at the root and a cheap one in the
+fan-out (`--model gemini-3.5-pro --subcall-model gemini-3.5-flash`) —
+a few expensive tokens where judgment happens, thousands of cheap ones
+where reading happens.
 
 Measured on OOLONG (131k-token contexts, 50 tasks, `gemini-3.5-flash`
 everywhere):
