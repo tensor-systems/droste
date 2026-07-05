@@ -23,6 +23,8 @@ uvx droste "which customer had a failed charge, and why?" server.log
 uvx droste "which plan has the highest refund rate vs its MRR?" shop.db
 ```
 
+![droste answering a two-part question over a 435 kB server log — report line, iteration progress, exact answer](docs/assets/demo.gif)
+
 Both examples are real. The first, against a 231 KB log with
 `gemini-3.5-flash`:
 
@@ -105,7 +107,8 @@ policy as a guardrail, not a boundary; OS permissions are the boundary).
 Engine knobs mirror `RLMConfig`: `--subcall-model`,
 `--subcall-max-output-tokens` (default 2048), `--reasoning-effort`,
 `--max-iterations`, `--max-subcalls`. `--json` prints a result object for
-scripting; `--verbose` streams progress to stderr. Exit code 0 means a
+scripting; `--verbose` streams one-line progress to stderr (watch it think);
+`--trace` dumps the full loop (generated code, outputs, responses). Exit code 0 means a
 confirmed (or extracted-with-note) answer.
 
 Three worked starting points live in [docs/recipes.md](docs/recipes.md)

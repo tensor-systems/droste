@@ -135,7 +135,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--json", action="store_true", help="print a JSON result object for scripting")
-    parser.add_argument("--verbose", action="store_true", help="stream progress and loop traces to stderr")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="stream one-line progress to stderr (watch it think)",
+    )
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="full loop trace on stderr: generated code, execution output, LLM responses (implies --verbose)",
+    )
     parser.add_argument("-q", "--quiet", action="store_true", help="suppress the loaded-inputs report line")
     return parser
 
@@ -207,9 +216,9 @@ def run_ask(args: argparse.Namespace) -> int:
         max_calls=args.max_subcalls,
         max_iterations=args.max_iterations,
         max_output_chars=DEFAULT_MAX_OUTPUT_CHARS,
-        # Progress lines only stream with --verbose; the default emitter would
-        # print JSON progress events to stderr unconditionally.
-        on_progress=_print_progress if args.verbose else (lambda status: None),
+        # Progress lines only stream with --verbose/--trace; the default
+        # emitter would print JSON progress events to stderr unconditionally.
+        on_progress=_print_progress if (args.verbose or args.trace) else (lambda status: None),
     )
 
     root = OpenAICompatClient(
@@ -242,7 +251,9 @@ def run_ask(args: argparse.Namespace) -> int:
         max_iterations=args.max_iterations,
         max_calls=args.max_subcalls,
         root_model=args.model,
-        verbose=args.verbose,
+        # config.verbose is the FULL loop dump (code, outputs, responses) —
+        # that's --trace. --verbose alone is the clean one-line stream.
+        verbose=args.trace,
     )
 
     result = run_rlm(

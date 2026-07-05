@@ -311,3 +311,30 @@ def test_bad_byte_budgets_are_usage_errors(tmp_path, capsys):
     f.write_text("hi")
     assert main([str(f), "q", "--model", "m", "--max-bytes", "0"]) == 2
     assert main([str(f), "q", "--model", "m", "--max-file-bytes", "0"]) == 2
+
+
+def test_verbose_streams_clean_progress_without_loop_dump(stub_server, tmp_path, capsys):
+    # --verbose = one-line progress on stderr; the full loop trace (code
+    # blocks, "LLM Response:") stays behind --trace.
+    doc = tmp_path / "doc.txt"
+    doc.write_text("content")
+    stub_server.root_responses = [ANSWER_FROM_FILE]
+    exit_code = main(_e2e_argv(stub_server, doc, "q", extra=["--verbose"]))
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "droste: Iteration" in captured.err
+    assert "LLM Response" not in captured.err
+    assert "====" not in captured.err
+    assert captured.out.strip() == "content"  # stdout is the answer, only
+
+
+def test_trace_dumps_full_loop(stub_server, tmp_path, capsys):
+    doc = tmp_path / "doc.txt"
+    doc.write_text("content")
+    stub_server.root_responses = [ANSWER_FROM_FILE]
+    exit_code = main(_e2e_argv(stub_server, doc, "q", extra=["--trace"]))
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "droste: Iteration" in captured.err  # trace implies progress
+    assert "LLM Response" in captured.err  # dump goes to stderr too
+    assert captured.out.strip() == "content"  # stdout stays answer-only
