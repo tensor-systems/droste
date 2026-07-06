@@ -47,6 +47,7 @@ from droste import (
 from droste.clients.openai_compat import DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS
 from droste.registry import DataSourceRegistry
 
+from .credentials import Credentials, CredentialsError, load_credentials
 from .inputs import (
     DEFAULT_MAX_FILE_BYTES,
     DEFAULT_MAX_TOTAL_BYTES,
@@ -54,6 +55,12 @@ from .inputs import (
     classify,
     load_inputs,
     read_piped_stdin,
+)
+
+NO_CREDENTIALS_MESSAGE = (
+    "no credentials. run `droste login` to choose how to run (free credits, "
+    "or your own key); scripts can pass --api-key or set OPENAI_API_KEY / "
+    "ANTHROPIC_API_KEY"
 )
 
 
@@ -77,6 +84,12 @@ def build_parser() -> argparse.ArgumentParser:
             "Ask questions over files, folders, and SQLite with a recursive "
             "language model. Args that exist are data; the one that doesn't "
             "is the question; no data args means the current directory."
+        ),
+        epilog=(
+            "setup: droste login chooses how to run (ModelRelay free credits, "
+            "or your own key) and stores it; droste whoami / droste logout. "
+            "--api-key / --base-url override for a single run; scripts can "
+            "set OPENAI_API_KEY / ANTHROPIC_API_KEY."
         ),
     )
     parser.add_argument("--version", action="version", version=f"droste {_package_version()}")
@@ -224,13 +237,66 @@ def select_provider(args: argparse.Namespace) -> str:
     return "openai"
 
 
+def resolve_run_target(args: argparse.Namespace) -> tuple[str, Credentials | None]:
+    """Credential resolution (droste#55):
+
+    1. Per-run flags (``--base-url`` / ``--api-key``) always win: an explicit
+       flag is a statement about THIS run.
+    2. Stored credentials — set up once via `droste login` (ModelRelay with
+       free credits, or your own key). Choosing how droste runs is a
+       deliberate setup step, never a side effect of exported env vars.
+    3. No credentials on an interactive terminal: run the same chooser
+       in-line, then continue the run.
+    4. Non-interactive (scripts/CI): env keys (``OPENAI_BASE_URL`` /
+       ``OPENAI_API_KEY`` / ``ANTHROPIC_API_KEY``) as a fallback, else a
+       terse error pointing at `droste login`.
+    """
+    if args.base_url is not None or args.api_key is not None:
+        return select_provider(args), None
+    try:
+        creds = load_credentials()
+    except CredentialsError as exc:
+        raise CLIError(str(exc)) from exc
+    if creds is None and sys.stdin.isatty() and sys.stderr.isatty():
+        from . import auth
+
+        try:
+            creds = auth.run_interactive_setup()
+        except auth.AuthError as exc:
+            raise CLIError(str(exc)) from exc
+    if creds is not None:
+        if creds.provider == "byok":
+            # Stored credentials are authoritative: pin the endpoint too, so
+            # ambient OPENAI_BASE_URL can never redirect a stored key.
+            from droste.clients.anthropic import ANTHROPIC_KEY_PREFIX
+            from droste.clients.openai_compat import DEFAULT_BASE_URL
+
+            args.api_key = creds.api_key
+            if not args.model and creds.default_model:
+                args.model = creds.default_model
+            if creds.api_key.startswith(ANTHROPIC_KEY_PREFIX):
+                return "anthropic", None
+            args.base_url = creds.base_url or DEFAULT_BASE_URL
+            return "openai", None
+        return "modelrelay", creds
+    # ANY set env key counts — including a malformed one. A bad
+    # ANTHROPIC_API_KEY must fail loudly on the BYOK path, not be masked
+    # by the no-credentials error.
+    env_byok = (
+        bool(os.environ.get("OPENAI_BASE_URL"))
+        or bool(os.environ.get("OPENAI_API_KEY"))
+        or bool(os.environ.get("ANTHROPIC_API_KEY"))
+    )
+    if env_byok:
+        return select_provider(args), None
+    raise CLIError(NO_CREDENTIALS_MESSAGE)
+
+
 def _print_progress(status: str) -> None:
     print(f"droste: {status}", file=sys.stderr, flush=True)
 
 
 def run_ask(args: argparse.Namespace) -> int:
-    if not args.model:
-        raise CLIError("--model is required (or set DROSTE_MODEL)")
     # Validate numeric budgets up front so bad values surface as clean usage
     # errors (exit 2) instead of crashing mid-run as exit 1.
     if args.subcall_max_output_tokens < 0:
@@ -278,7 +344,14 @@ def run_ask(args: argparse.Namespace) -> int:
         source = _load_sql_source(loaded.db_path)
         registry = DataSourceRegistry([source], default_source_name=source.name())
 
-    provider = select_provider(args)
+    provider, creds = resolve_run_target(args)
+
+    # Logged-in runs default the model from the stored credentials; BYOK
+    # still requires an explicit model (we won't guess someone's bill).
+    if provider == "modelrelay" and not args.model and creds is not None:
+        args.model = creds.default_model
+    if not args.model:
+        raise CLIError("--model is required (or set DROSTE_MODEL)")
 
     # The default endpoint (api.openai.com) always requires a key, so a
     # keyless run there can only die mid-flight with a raw 401 — catch it
@@ -316,7 +389,29 @@ def run_ask(args: argparse.Namespace) -> int:
         on_progress=echo.progress if echo else (lambda status: None),
     )
 
-    if provider == "anthropic":
+    if provider == "modelrelay":
+        from droste.clients.modelrelay import ModelRelayClient, ModelRelaySubcallClient
+
+        assert creds is not None
+        root = ModelRelayClient(
+            model=args.model,
+            base_url=creds.base_url,
+            api_key=creds.api_key,
+            reasoning_effort=args.reasoning_effort,
+            on_delta=echo,
+        )
+        # Subcalls default to reasoning_effort="none" + a bounded output
+        # budget (ModelRelay's own server-side subcall defaults);
+        # --reasoning-effort overrides both root and subcalls.
+        subcalls = ModelRelaySubcallClient(
+            model=args.subcall_model or args.model,
+            context=exec_context,
+            base_url=creds.base_url,
+            api_key=creds.api_key,
+            max_output_tokens=args.subcall_max_output_tokens,
+            reasoning_effort=args.reasoning_effort or "none",
+        )
+    elif provider == "anthropic":
         from droste import AnthropicClient, AnthropicSubcallClient
 
         root = AnthropicClient(
@@ -416,8 +511,39 @@ def run_ask(args: argparse.Namespace) -> int:
     return 1
 
 
+def _run_auth_command(argv: list[str]) -> int:
+    from . import auth
+
+    command, rest = argv[0], argv[1:]
+    if command == "login":
+        login_parser = argparse.ArgumentParser(prog="droste login")
+        login_parser.add_argument(
+            "--base-url",
+            default=None,
+            help=f"ModelRelay API base URL (default: {auth.DEFAULT_BASE_URL})",
+        )
+        login_args = login_parser.parse_args(rest)
+        return auth.run_login(login_args.base_url)
+    if rest:
+        raise CLIError(f"droste {command} takes no arguments")
+    if command == "logout":
+        return auth.run_logout()
+    return auth.run_whoami()
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in ("login", "logout", "whoami"):
+        from . import auth
+
+        try:
+            return _run_auth_command(argv)
+        except (CLIError, auth.AuthError) as exc:
+            print(f"droste: error: {exc}", file=sys.stderr)
+            return 2
+        except KeyboardInterrupt:
+            print("droste: interrupted", file=sys.stderr)
+            return 130
     # `ask` is a compatibility alias: the naked binary is the verb.
     if argv and argv[0] == "ask":
         argv = argv[1:]

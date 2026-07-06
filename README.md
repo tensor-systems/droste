@@ -17,8 +17,6 @@ writes both the map and the reduce.
 Coding harnesses bolt a model onto a transcript. Droste harnesses it to data.
 
 ```bash
-export OPENAI_API_KEY=sk-...     # any OpenAI-compatible endpoint works
-
 uvx droste "which customer had a failed charge, and why?" server.log
 uvx droste "which plan has the highest refund rate vs its MRR?" shop.db
 ```
@@ -84,11 +82,10 @@ benchmark harness.</sub>
 
 ## Use it
 
-Ask questions over files, folders, and SQLite from the terminal — BYOK
-against any OpenAI-compatible endpoint. The contract: **args that exist are
-data, the one that doesn't is the question, no args means the current
-directory, pipes are data too — and it always prints one line saying what
-it read.**
+Ask questions over files, folders, and SQLite from the terminal. The
+contract: **args that exist are data, the one that doesn't is the question,
+no args means the current directory, pipes are data too — and it always
+prints one line saying what it read.**
 
 ```bash
 uvx droste "…" ./docs        # zero-install, npx-style
@@ -97,12 +94,12 @@ pipx install droste          # the older equivalent
 ```
 
 ```bash
-export OPENAI_API_KEY=sk-...          # or --api-key
-droste "what changed between these?" report.txt logs.txt --model gpt-5.2-mini
-droste "which customers churned last month?" app.db --model gpt-5.2-mini
-droste "how does auth work here?" ./docs --model gpt-5.2-mini
-cd ~/notes && droste "what did I decide about pricing?" --model gpt-5.2-mini
-tail -5000 app.log | droste "why did it crash?" --model gpt-5.2-mini
+droste login                 # one-time setup: free credits, or your own key
+droste "what changed between these?" report.txt logs.txt
+droste "which customers churned last month?" app.db
+droste "how does auth work here?" ./docs
+cd ~/notes && droste "what did I decide about pricing?"
+tail -5000 app.log | droste "why did it crash?"
 ```
 
 SQLite files are recognized by their magic bytes — no flag needed (`--db`
@@ -150,7 +147,7 @@ product for *your users*.
 The engine ships built-in clients for any endpoint that speaks the OpenAI
 chat-completions shape (OpenAI, OpenRouter, Google's OpenAI-compat endpoint,
 vLLM, Ollama, ...) — plus a native client for Anthropic's Messages API
-(their compat layer is a testing shim, so Claude gets first-class support).
+(their compat layer is a testing shim, so Claude gets its own client).
 Bring your own key — no ModelRelay account required. The CLI detects the
 provider from facts: an `sk-ant-…` key (or `ANTHROPIC_API_KEY`) routes to
 Anthropic; an explicit `--base-url`/`OPENAI_BASE_URL` always wins.

@@ -29,3 +29,37 @@ jobs:
         run: uv sync --locked
       - name: Tests
         run: uv run pytest -q
+
+  hygiene:
+    name: public-repo hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No internal or third-party product references
+        run: |
+          # This repo is public: no references to internal strategy, private
+          # repos, or unrelated products. integrations/ is exempt (it may
+          # name the platform an integration ships for).
+          PATTERN='\bhermes\b|\bnous\b|modelrelay#[0-9]|tensor-systems/modelrelay|\bfounders?\b|\bfunnel\b|\bsybil\b'
+          if git grep -n -i -E "$PATTERN" -- . ':(exclude)integrations/' ':(exclude).github/workflows/ci.yml'; then
+            echo "::error::internal/product references found (see matches above)"
+            exit 1
+          fi
+      - name: No committed secrets
+        run: |
+          # Real key material must never land in the repo; test fixtures use
+          # obvious placeholders shorter than any real key.
+          PATTERN='(sk-ant-[A-Za-z0-9_-]{24,}|sk-(proj-)?[A-Za-z0-9_-]{32,}|mr_sk_[A-Za-z0-9]{24,})'
+          if git grep -n -E "$PATTERN"; then
+            echo "::error::possible committed secret (see matches above)"
+            exit 1
+          fi
+
+  build:
+    name: package builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: uv build
+        run: uv build

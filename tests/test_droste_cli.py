@@ -65,11 +65,23 @@ def test_model_env_default(monkeypatch):
 
 
 def test_missing_model_is_usage_error(tmp_path, monkeypatch, capsys):
-    monkeypatch.delenv("DROSTE_MODEL", raising=False)
+    # BYOK (env key present) still requires an explicit model.
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
     f = tmp_path / "a.txt"
     f.write_text("hello")
     assert main([str(f), "q"]) == 2
     assert "--model is required" in capsys.readouterr().err
+
+
+def test_no_credentials_error_points_at_login(tmp_path, capsys):
+    # Nothing configured, non-interactive (pytest stdin is not a TTY):
+    # a terse error pointing at the setup command (droste#55).
+    f = tmp_path / "a.txt"
+    f.write_text("hello")
+    assert main([str(f), "q"]) == 2
+    err = capsys.readouterr().err
+    assert "no credentials" in err
+    assert "droste login" in err
 
 
 def test_empty_cwd_is_usage_error(tmp_path, monkeypatch, capsys):
@@ -367,13 +379,14 @@ def test_default_run_does_not_stream(stub_server, tmp_path, capsys):
 
 
 def test_keyless_default_endpoint_fails_upfront(tmp_path, monkeypatch, capsys):
-    # Against api.openai.com a keyless run can only die mid-flight with a raw
-    # 401 — fail before loading anything, with one clean line.
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    # An explicit api.openai.com endpoint without a key can only die
+    # mid-flight with a raw 401 — fail upfront with one clean line.
     f = tmp_path / "a.txt"
     f.write_text("x")
-    code = main([str(f), "q", "--model", "gpt-5.2-mini"])
+    code = main([
+        str(f), "q", "--model", "gpt-5.2-mini",
+        "--base-url", "https://api.openai.com/v1",
+    ])
     assert code == 2
     err = capsys.readouterr().err
     assert "no API key" in err
@@ -432,3 +445,234 @@ def test_key_check_matches_hostname_not_substring(tmp_path, monkeypatch, capsys)
     code = main([str(f), "q", "--model", "m", "--base-url", "https://API.OPENAI.COM/v1"])
     assert code == 2
     assert "no API key" in capsys.readouterr().err
+
+
+# --- stored ModelRelay credentials: resolution order + e2e (droste#55) ---
+
+
+def _write_credentials(base_url: str, model: str = "cred-model") -> None:
+    from droste_cli.credentials import Credentials, save_credentials
+
+    save_credentials(
+        Credentials(
+            base_url=base_url,
+            api_key="mr_sk_stored",
+            email="dev@example.com",
+            default_model=model,
+        )
+    )
+
+
+@pytest.fixture()
+def stub_native_server():
+    from test_modelrelay_client import StubResponsesServer
+
+    server = StubResponsesServer()
+    yield server
+    server.shutdown()
+
+
+def test_stored_credentials_run_end_to_end(stub_native_server, tmp_path, capsys):
+    # No flags, no env keys: the stored login runs over native /responses
+    # and the model defaults from the credentials.
+    _write_credentials(stub_native_server.base_url)
+    doc = tmp_path / "doc.txt"
+    doc.write_text("logged-in content")
+    stub_native_server.root_responses = [ANSWER_FROM_FILE]
+
+    exit_code = main([str(doc), "what does it say?", "--max-iterations", "2"])
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out.strip() == "logged-in content"
+
+    request = stub_native_server.requests[0]
+    assert request["model"] == "cred-model"
+    headers = stub_native_server.headers[0]
+    assert headers.get("x-modelrelay-api-key") == "mr_sk_stored"
+
+
+def test_stored_login_wins_over_ambient_env_keys(stub_server, stub_native_server, tmp_path, monkeypatch, capsys):
+    # Running `droste login` IS the explicit choice, so ModelRelay stays
+    # the default even with OPENAI_* exported in the shell (most developers
+    # have ambient keys; the free credits must not be silently bypassed).
+    # Flags or `droste logout` switch back to BYOK.
+    _write_credentials(stub_native_server.base_url)
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", stub_server.base_url)
+    doc = tmp_path / "doc.txt"
+    doc.write_text("logged-in content")
+    stub_native_server.root_responses = [ANSWER_FROM_FILE]
+
+    exit_code = main([str(doc), "q", "--max-iterations", "2"])
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "logged-in content"
+    assert stub_native_server.requests, "the stored login must be used"
+    assert not stub_server.requests, "ambient env keys must not shadow the login"
+
+
+def test_flags_override_stored_login_for_one_run(stub_server, stub_native_server, tmp_path, capsys):
+    # Per-run flags are the BYOK escape hatch while logged in.
+    _write_credentials(stub_native_server.base_url)
+    doc = tmp_path / "doc.txt"
+    doc.write_text("byok content")
+    stub_server.root_responses = [ANSWER_FROM_FILE]
+
+    exit_code = main([
+        str(doc), "q", "--model", "root-model",
+        "--base-url", stub_server.base_url, "--api-key", "k",
+        "--max-iterations", "2",
+    ])
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "byok content"
+    assert stub_server.requests, "flags must route to BYOK"
+    assert not stub_native_server.requests, "stored credentials must not be used"
+
+
+def test_env_keys_used_when_not_logged_in(stub_server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("OPENAI_API_KEY", "byok-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", stub_server.base_url)
+    doc = tmp_path / "doc.txt"
+    doc.write_text("byok content")
+    stub_server.root_responses = [ANSWER_FROM_FILE]
+    exit_code = main([str(doc), "q", "--model", "root-model", "--max-iterations", "2"])
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "byok content"
+
+
+def test_malformed_env_key_without_login_fails_loudly(tmp_path, monkeypatch, capsys):
+    # A set-but-malformed key still selects the BYOK path (when not logged
+    # in): fail loudly there, never mask it with the no-credentials error.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "not-a-real-anthropic-key")
+    doc = tmp_path / "doc.txt"
+    doc.write_text("x")
+    code = main([str(doc), "q", "--model", "gpt-5.2-mini"])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "no API key" in err
+    assert "no credentials" not in err
+
+
+def test_explicit_model_beats_credentials_default(stub_native_server, tmp_path, capsys):
+    _write_credentials(stub_native_server.base_url)
+    doc = tmp_path / "doc.txt"
+    doc.write_text("x")
+    stub_native_server.root_responses = [ANSWER_FROM_FILE]
+    exit_code = main([str(doc), "q", "--model", "override-model", "--max-iterations", "2"])
+    assert exit_code == 0
+    assert stub_native_server.requests[0]["model"] == "override-model"
+
+
+def test_corrupt_credentials_file_is_actionable(tmp_path, capsys):
+    import os
+
+    from droste_cli.credentials import credentials_path
+
+    path = credentials_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("not json")
+    doc = tmp_path / "doc.txt"
+    doc.write_text("x")
+    assert main([str(doc), "q"]) == 2
+    assert "droste login" in capsys.readouterr().err
+
+
+def test_stored_byok_credentials_run_end_to_end(stub_server, tmp_path, capsys):
+    # A key chosen during setup is stored and runs the BYOK path — no env
+    # vars involved (droste#55: choosing keys is a setup step, not an export).
+    from droste_cli.credentials import Credentials, save_credentials
+
+    save_credentials(
+        Credentials(
+            api_key="sk-stored-byok",
+            base_url=stub_server.base_url,
+            provider="byok",
+            default_model="root-model",
+        )
+    )
+    doc = tmp_path / "doc.txt"
+    doc.write_text("byok stored content")
+    stub_server.root_responses = [ANSWER_FROM_FILE]
+    exit_code = main([str(doc), "q", "--max-iterations", "2"])
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "byok stored content"
+    assert stub_server.requests[0]["model"] == "root-model"
+
+
+def test_first_run_interactive_setup_then_continues(stub_server, tmp_path, monkeypatch, capsys):
+    # No credentials + interactive terminal: the chooser runs in-line and
+    # the original ask continues with the stored choice.
+    monkeypatch.setattr("sys.stdin", type("T", (), {"isatty": staticmethod(lambda: True)})())
+    monkeypatch.setattr("sys.stderr.isatty", lambda: True)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-import-1")
+    answers = ["2", "", stub_server.base_url, "root-model"]
+    monkeypatch.setattr("builtins.input", lambda *a: answers.pop(0))
+
+    doc = tmp_path / "doc.txt"
+    doc.write_text("setup then run")
+    stub_server.root_responses = [ANSWER_FROM_FILE]
+    exit_code = main([str(doc), "q", "--max-iterations", "2"])
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "setup then run"
+
+    from droste_cli.credentials import load_credentials
+
+    creds = load_credentials()
+    assert creds is not None and creds.provider == "byok"
+
+
+def test_stored_byok_ignores_ambient_base_url(stub_server, tmp_path, monkeypatch, capsys):
+    # Stored credentials pin the endpoint: ambient OPENAI_BASE_URL must not
+    # redirect a stored key to a different server.
+    from droste_cli.credentials import Credentials, save_credentials
+
+    save_credentials(
+        Credentials(
+            api_key="sk-stored-byok",
+            base_url=stub_server.base_url,
+            provider="byok",
+            default_model="root-model",
+        )
+    )
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9/nowhere")
+    doc = tmp_path / "doc.txt"
+    doc.write_text("pinned endpoint")
+    stub_server.root_responses = [ANSWER_FROM_FILE]
+    exit_code = main([str(doc), "q", "--max-iterations", "2"])
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "pinned endpoint"
+    assert stub_server.requests, "the stored endpoint must be used"
+
+
+def test_stored_anthropic_key_routes_to_anthropic_despite_env(tmp_path, monkeypatch):
+    # A stored sk-ant key selects the Anthropic client even when
+    # OPENAI_BASE_URL is exported (never send an Anthropic key elsewhere).
+    from droste_cli.credentials import Credentials, save_credentials
+    from droste_cli.main import build_parser, resolve_run_target
+
+    save_credentials(
+        Credentials(api_key="sk-ant-stored", provider="byok", default_model="claude-x")
+    )
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9/nowhere")
+    args = build_parser().parse_args(["q"])
+    provider, creds = resolve_run_target(args)
+    assert provider == "anthropic"
+    assert creds is None
+    assert args.api_key == "sk-ant-stored"
+    assert args.model == "claude-x"
+
+
+def test_unknown_provider_in_credentials_is_rejected(tmp_path, capsys):
+    import json
+    import os as _os
+
+    from droste_cli.credentials import credentials_path
+
+    path = credentials_path()
+    _os.makedirs(_os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({"provider": "byo", "api_key": "k", "base_url": "https://x"}, fh)
+    doc = tmp_path / "doc.txt"
+    doc.write_text("x")
+    assert main([str(doc), "q"]) == 2
+    assert "unknown provider" in capsys.readouterr().err

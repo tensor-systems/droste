@@ -1,0 +1,237 @@
+"""Native ModelRelay /responses clients against a stub server (droste#55).
+
+Covers: root call with usage + auth header, input-item conversion, NDJSON
+streaming with on_delta, subcall accounting into the shared ExecutionContext
+(max_calls, usage), and the platform-mirroring subcall cost defaults
+(bounded output, reasoning_effort="none").
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
+
+from droste.clients.modelrelay import ModelRelayClient, ModelRelaySubcallClient
+from droste.execution.context import create_execution_context
+
+
+class StubResponsesServer:
+    """Minimal native /responses stub.
+
+    - model == "sub-model": echoes the input text as "echo: <prompt>".
+    - otherwise: pops the next queued root response (or "hi").
+    Streams NDJSON when the responses-stream Accept profile is requested.
+    """
+
+    def __init__(self) -> None:
+        self.requests: list[dict] = []
+        self.headers: list[dict[str, str]] = []
+        self.root_responses: list[str] = []
+        self.fail_status: int | None = None
+        self.fail_body: bytes = b'{"error":"boom"}'
+        self.stream_error_midway = False
+        self.stream_truncate = False  # drop the connection before completion
+        self.usage = {"input_tokens": 7, "output_tokens": 3, "total_tokens": 10}
+        stub = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length") or 0)
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                with threading.Lock():
+                    stub.requests.append(payload)
+                    stub.headers.append({k.lower(): v for k, v in self.headers.items()})
+                if stub.fail_status is not None:
+                    self.send_response(stub.fail_status)
+                    self.send_header("Content-Length", str(len(stub.fail_body)))
+                    self.end_headers()
+                    self.wfile.write(stub.fail_body)
+                    return
+                if payload.get("model") == "sub-model":
+                    prompt = payload["input"][-1]["content"][0]["text"]
+                    content = f"echo: {prompt}"
+                else:
+                    content = stub.root_responses.pop(0) if stub.root_responses else "hi"
+                accept = str(self.headers.get("Accept") or "")
+                if "responses-stream" in accept:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-ndjson")
+                    self.end_headers()
+                    third = max(1, len(content) // 3)
+                    pieces = [content[:third], content[third : 2 * third], content[2 * third :]]
+                    self.wfile.write(
+                        (json.dumps({"type": "start", "model": payload.get("model")}) + "\n").encode()
+                    )
+                    for i, piece in enumerate(p for p in pieces if p):
+                        if stub.stream_error_midway and i == 1:
+                            event = {"type": "error", "code": "PROVIDER_ERROR", "message": "exploded"}
+                            self.wfile.write((json.dumps(event) + "\n").encode())
+                            return
+                        event = {"type": "update", "delta": piece, "stream_version": "v2"}
+                        self.wfile.write((json.dumps(event) + "\n").encode())
+                    if stub.stream_truncate:
+                        return  # connection drops before the completion event
+                    completion = {
+                        "type": "completion",
+                        "request_id": "req-stub-1",
+                        "content": content,
+                        "model": payload.get("model"),
+                        "provider": "stub",
+                        "stop_reason": "stop",
+                        "usage": dict(stub.usage),
+                    }
+                    self.wfile.write((json.dumps(completion) + "\n").encode())
+                    return
+                body = json.dumps(
+                    {
+                        "id": "resp-stub-1",
+                        "model": payload.get("model"),
+                        "provider": "stub",
+                        "stop_reason": "stop",
+                        "output": [
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"type": "text", "text": content}],
+                            }
+                        ],
+                        "usage": dict(stub.usage),
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args) -> None:
+                pass
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self._server.server_address[1]}/api/v1"
+
+    def shutdown(self) -> None:
+        self._server.shutdown()
+
+
+@pytest.fixture()
+def stub_native():
+    server = StubResponsesServer()
+    yield server
+    server.shutdown()
+
+
+def test_root_returns_text_usage_and_sends_api_key_header(stub_native):
+    client = ModelRelayClient(model="root-model", base_url=stub_native.base_url, api_key="mr_sk_t")
+    stub_native.root_responses = ["the answer"]
+    text, usage = client.responses_create(
+        [{"role": "system", "content": "sys"}, {"role": "user", "content": "q"}],
+        model="",
+        return_usage=True,
+    )
+    assert text == "the answer"
+    assert usage.total_tokens == 10
+    assert client.last_provider == "stub"
+    assert client.last_stop_reason == "stop"
+
+    request = stub_native.requests[0]
+    assert request["model"] == "root-model"
+    assert request["input"][0] == {
+        "type": "message",
+        "role": "system",
+        "content": [{"type": "text", "text": "sys"}],
+    }
+    headers = stub_native.headers[0]
+    assert headers.get("x-modelrelay-api-key") == "mr_sk_t"
+    assert "authorization" not in headers
+
+
+def test_root_streaming_delivers_deltas(stub_native):
+    deltas: list[str] = []
+    client = ModelRelayClient(
+        model="root-model",
+        base_url=stub_native.base_url,
+        api_key="mr_sk_t",
+        on_delta=deltas.append,
+    )
+    stub_native.root_responses = ["streamed answer text"]
+    text, usage = client.responses_create(
+        [{"role": "user", "content": "q"}], model="", return_usage=True
+    )
+    assert text == "streamed answer text"
+    assert "".join(deltas) == "streamed answer text"
+    assert len(deltas) > 1
+    assert usage.total_tokens == 10
+
+
+def test_root_stream_error_fails_loudly(stub_native):
+    client = ModelRelayClient(
+        model="root-model",
+        base_url=stub_native.base_url,
+        api_key="mr_sk_t",
+        on_delta=lambda _: None,
+    )
+    stub_native.root_responses = ["long enough content to split"]
+    stub_native.stream_error_midway = True
+    with pytest.raises(RuntimeError, match="streamed an error"):
+        client.responses_create([{"role": "user", "content": "q"}], model="")
+
+
+def test_root_stream_truncation_fails_loudly(stub_native):
+    # A dropped connection must never surface partial generated code as a
+    # successful root response (codex review finding).
+    client = ModelRelayClient(
+        model="root-model",
+        base_url=stub_native.base_url,
+        api_key="mr_sk_t",
+        on_delta=lambda _: None,
+    )
+    stub_native.root_responses = ["long enough content to split"]
+    stub_native.stream_truncate = True
+    with pytest.raises(RuntimeError, match="without a completion event"):
+        client.responses_create([{"role": "user", "content": "q"}], model="")
+
+
+def test_root_http_error_is_bounded(stub_native):
+    client = ModelRelayClient(model="root-model", base_url=stub_native.base_url, api_key="mr_sk_t")
+    stub_native.fail_status = 402
+    stub_native.fail_body = b'{"error":"insufficient account balance - please add funds"}'
+    with pytest.raises(RuntimeError, match="HTTP 402"):
+        client.responses_create([{"role": "user", "content": "q"}], model="")
+
+
+def test_subcall_accounting_and_cost_defaults(stub_native):
+    context = create_execution_context(max_calls=3, max_iterations=5)
+    client = ModelRelaySubcallClient(
+        model="sub-model",
+        context=context,
+        base_url=stub_native.base_url,
+        api_key="mr_sk_t",
+    )
+    assert client.llm_query("first") == "echo: first"
+    assert context.stats.calls_made == 1
+    assert context.stats.total_tokens == 10
+    request = stub_native.requests[0]
+    # ModelRelay's server-side subcall defaults, applied client-side too.
+    assert request["max_output_tokens"] == 2048
+    assert request["reasoning_effort"] == "none"
+
+    assert client.llm_batch(["a", "b"]) == ["echo: a", "echo: b"]
+    assert context.stats.calls_made == 3
+
+    with pytest.raises(RuntimeError, match="max subcalls exceeded"):
+        client.llm_query("over budget")
+    assert context.stats.calls_made == 3  # rejected attempt not counted
+
+
+def test_subcall_requires_api_key():
+    context = create_execution_context(max_calls=1, max_iterations=1)
+    with pytest.raises(ValueError, match="api_key"):
+        ModelRelaySubcallClient(model="m", context=context, api_key="")

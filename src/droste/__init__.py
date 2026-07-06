@@ -21,6 +21,7 @@ from .protocols.subcall_client import SubcallClient
 from .prompts.builder import SystemPromptBuilder
 from .registry import DataSourceRegistry
 from .clients.anthropic import AnthropicClient, AnthropicSubcallClient
+from .clients.modelrelay import ModelRelayClient, ModelRelaySubcallClient
 from .clients.openai_compat import OpenAICompatClient, OpenAICompatSubcallClient
 
 __all__ = [
@@ -54,6 +55,8 @@ __all__ = [
     "DataSourceRegistry",
     "AnthropicClient",
     "AnthropicSubcallClient",
+    "ModelRelayClient",
+    "ModelRelaySubcallClient",
     "OpenAICompatClient",
     "OpenAICompatSubcallClient",
 ]
