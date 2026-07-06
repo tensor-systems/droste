@@ -22,7 +22,7 @@ class MockLLMClient(LLMClient):
         messages: list[dict[str, Any]],
         model: str,
         max_tokens: int = 4096,
-        temperature: float = 0.0,
+        temperature: float | None = None,
         return_usage: bool = False,
     ) -> str | tuple[str, TokenUsage]:
         if self._call_count >= len(self._responses):

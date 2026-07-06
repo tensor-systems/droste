@@ -2,7 +2,7 @@
 
 Covers the local policy gate (SELECT-only, single statement, aggregate and
 subquery allowances, LIMIT injection, row cap, timeout) and the end-to-end
-path ported from ModelRelay's TestSqlDataSource_PythonEndToEnd: register() ->
+path ported from the hosted platform's end-to-end suite: register() ->
 build_data_sources -> DataSourceRegistry -> query()/get_schema() over a real
 SQLite file opened mode=ro.
 """

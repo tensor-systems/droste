@@ -197,3 +197,56 @@ def test_explicit_zero_subcall_max_output_tokens_is_rejected() -> None:
                 "subcall_endpoint": "http://127.0.0.1:1/subcall",
             }
         )
+
+
+def test_wrapper_call_enforces_allowed_hosts():
+    # The wrapper's allowed_hosts is an enforced allowlist, not prompt
+    # decoration: a request-supplied base_url outside it must be refused
+    # before any connection is attempted (pre-publish read-through).
+    from droste_runner.runner import DataSourceWrapper
+
+    wrapper = DataSourceWrapper(
+        {
+            "base_url": "http://evil.internal:9",
+            "token": "t",
+            "allowed_hosts": ["partner.example.com"],
+        }
+    )
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="not in allowed_hosts"):
+        wrapper._call("/search", {"query": "q"})
+
+
+def test_wrapper_rejects_redirect_to_disallowed_host():
+    # SSRF-via-redirect: a call starting at an allowed host must still refuse
+    # a 30x to a host outside the allowlist (codex review, #54).
+    from droste_runner.runner import _allowlist_opener
+
+    opener = _allowlist_opener({"partner.example.com"})
+    handler = next(h for h in opener.handlers if hasattr(h, "redirect_request"))
+    import pytest as _pytest
+
+    class _Req:
+        pass
+
+    with _pytest.raises(ValueError, match="not in allowed_hosts"):
+        handler.redirect_request(_Req(), None, 302, "Found", {}, "http://169.254.169.254/latest/meta-data")
+
+
+def test_wrapper_malformed_allowed_hosts_fails_closed():
+    # A present-but-malformed allowed_hosts (string / empty list) is a config
+    # error, not an allow-all — fail closed (codex review, #54).
+    from droste_runner.runner import DataSourceWrapper
+    import pytest as _pytest
+
+    for bad in ("partner.example.com", [], ["", "  "]):
+        w = DataSourceWrapper({"base_url": "http://h/x", "token": "t", "allowed_hosts": bad})
+        with _pytest.raises(ValueError, match="allowed_hosts"):
+            w._call("/search", {"query": "q"})
+
+    # Absent key still means allow-all (no raise for the host check; will fail
+    # later at connection instead).
+    w = DataSourceWrapper({"base_url": "http://127.0.0.1:9/x", "token": "t"})
+    with _pytest.raises(ValueError, match="request failed"):
+        w._call("/search", {"query": "q"})

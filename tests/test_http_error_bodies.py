@@ -1,8 +1,8 @@
 """HTTP errors from the runner's clients must carry the response body.
 
 Bare "HTTP 502: Bad Gateway" destroyed the server's actual explanation during
-the 2026-07 provider-health incident (a circuit-breaker rejection was
-indistinguishable from an upstream provider error). See modelrelay #1596.
+a 2026-07 provider incident (a circuit-breaker rejection was
+indistinguishable from an upstream provider error).
 """
 
 from __future__ import annotations

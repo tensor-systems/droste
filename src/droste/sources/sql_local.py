@@ -48,7 +48,7 @@ from typing import Any
 # Read-only policy used when the spec carries no policy: SELECT-only with sane
 # limits, but otherwise permissive (aggregates, joins, subqueries) — it's the
 # user's own local file, and the restrictive knobs exist for locked-down
-# profiles, not for this. Mirrors ModelRelay's defaultLocalSQLPolicy.
+# profiles, not for this. Mirrors the hosted platform's default SQL policy.
 DEFAULT_LOCAL_SQL_POLICY: dict[str, Any] = {
     "dialect": "sqlite",
     "read_only": True,

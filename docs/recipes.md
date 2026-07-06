@@ -7,9 +7,8 @@ non-OpenAI providers; see the README's BYOK section).
 ## 1. Interrogate a huge log file
 
 ```bash
-droste ask server.log \
-  "Group the errors by service and root cause. Which failure started first,
-   and did it cascade? Give me counts, not vibes."
+droste "Group the errors by service and root cause. Which failure started
+   first, and did it cascade? Give me counts, not vibes." server.log
 ```
 
 Multi-megabyte files are fine: the model is told the file's name and size,
@@ -22,7 +21,7 @@ Point it at an export directory's files — Slack, WhatsApp, or any
 line-oriented dump:
 
 ```bash
-droste ask export/channel-eng.txt export/channel-support.txt \
+droste export/channel-eng.txt export/channel-support.txt \
   "What did we promise customers about the migration, and did engineering's
    internal discussion match what support was telling people?"
 ```
@@ -35,7 +34,7 @@ actual reading.
 ## 3. Analyze a SQLite database
 
 ```bash
-droste ask --db app.db \
+droste app.db \
   "Which customers churned in Q2, what did they have in common, and how much
    MRR walked out the door?"
 ```

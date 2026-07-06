@@ -26,7 +26,7 @@ Honest note on reasoning/thinking control: ``reasoning_effort`` and
 ``extra_body`` are passed through as-is. Server-side thinking control (e.g.
 disabling Gemini thinking per subcall) is a gateway capability — on
 ModelRelay these knobs are enforced server-side; BYOK gets whatever the raw
-endpoint honors (we measured litellm/gemini ignoring client-side disable).
+endpoint honors (providers do not reliably honor client-side thinking disables).
 
 Dependency-free by design: urllib only, like the rest of the engine.
 """

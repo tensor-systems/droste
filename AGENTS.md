@@ -24,11 +24,11 @@ can omit them to keep behavior purely prompt-driven.
 
 ## droste_runner Package
 
-- `droste_runner` is a shared HTTP-backed runner used by host apps (ModelRelay, Recall). It reads the request JSON from `RLM_RUNNER_REQUEST_PATH` (or argv) and returns a JSON response payload.
+- `droste_runner` is a shared HTTP-backed runner used by host apps (ModelRelay's hosted runner, in-process embedders like Cozy). It reads the request JSON from `RLM_RUNNER_REQUEST_PATH` (or argv) and returns a JSON response payload.
 - The runner wraps `droste` and supplies an HTTP `LLMClient` + `SubcallClient` plus a sandboxed `RunnerEnvironment`.
 - Timeouts in `RunnerEnvironment.execute` use `signal.setitimer` and restore the previous handler (`old_handler`) after each execution to avoid clobbering host signal handlers.
 - `droste_runner` expects HTTP endpoints for root and subcall execution (`root_endpoint`/`subcall_endpoint` + `token`).
-- `adapter_module` lets callers delegate the runner to a custom module with `run(request)` (used for non-HTTP environments like Recall).
+- `adapter_module` lets callers delegate the runner to a custom module with `run(request)` (used by in-process embedders).
 
 
 ## Offline Wheelhouse (macOS App Builds)

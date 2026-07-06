@@ -11,7 +11,10 @@ what it read.*
     tail -5000 app.log | droste "why did it crash?"
 
 `ask` survives as an alias (``droste ask …``) for scripts and muscle memory.
-Files are materialized as the sandbox's `context` variable
+The model's generated Python runs **in-process with your privileges** — the
+CLI is a power tool with the trust level of running a script the model wrote
+(the SQL source is read-only-gated; the Python is not sandboxed). Files are
+materialized as the REPL's `context` variable
 (``{"files": [{path, name, text, size}, ...]}``); the model sees names and
 sizes — not the raw bytes — and pulls data in via code. SQLite files are
 recognized by their magic bytes and go through the engine's local-mode SQL
@@ -138,7 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="stream one-line progress to stderr (watch it think)",
+        help="stream progress and the model's code as it is written to stderr (watch it think)",
     )
     parser.add_argument(
         "--trace",
@@ -264,8 +267,8 @@ def run_ask(args: argparse.Namespace) -> int:
 
 
     # --verbose/--trace stream the root model's output (the generated code)
-    # to stderr as it is written — the "watch it think" view. The echo also
-    # coordinates newlines with the one-line progress printer.
+    # to stderr as it is written, between one-line progress markers — the
+    # "watch it think" view. --trace additionally dumps the full loop.
     echo = _StreamEcho() if (args.verbose or args.trace) else None
 
     exec_context = create_execution_context(
@@ -293,7 +296,7 @@ def run_ask(args: argparse.Namespace) -> int:
     )
 
     # RunnerEnvironment provides the in-process REPL plus the context
-    # name + size prompt description (0.5.x prompt work) for free.
+    # name + size prompt description for free.
     from droste_runner.runner import RunnerEnvironment
 
     environment = RunnerEnvironment(
@@ -347,7 +350,7 @@ def run_ask(args: argparse.Namespace) -> int:
     if result.ready:
         return 0
     if result.extracted:
-        # Like mrl: usable answer, honest provenance.
+        # Usable answer, honest provenance.
         print(
             "droste: note: max iterations reached; answer extracted from partial work (unconfirmed)",
             file=sys.stderr,

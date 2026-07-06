@@ -15,9 +15,9 @@ Thanks for your interest. Ground rules, kept short:
   protocol are versioned compatibility surfaces (hosts embed old engines).
   Additive and optional by default; breaking changes need a protocol bump and
   a documented migration.
-- **Benchmarks**: claims about accuracy or cost need artifacts. The benchmark
-  harness lives with the ModelRelay platform; results referenced in the
-  README link to per-task JSONs.
+- **Benchmarks**: claims about accuracy or cost need artifacts (per-task
+  result JSONs at minimum). The maintainers' harness runs are archived and
+  available on request while the harness itself is being open-sourced.
 
 Development:
 

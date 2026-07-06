@@ -182,8 +182,8 @@ it server-side; raw endpoints may ignore a client-side disable.
 ### Runner architecture (droste_runner)
 
 The `droste_runner` package is a thin orchestration layer that wires `droste` to
-HTTP-backed root LLM calls and subcalls. It is shared across hosts (ModelRelay,
-Recall, etc.) so the loop logic stays in one place. For custom environments,
+HTTP-backed root LLM calls and subcalls. It is shared across hosts (ModelRelay's
+hosted runner, in-process embedders) so the loop logic stays in one place. For custom environments,
 set `adapter_module` in the runner request to delegate to an adapter module's
 `run(request)` function.
 

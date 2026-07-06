@@ -36,10 +36,15 @@ class LLMClient(Protocol):
         messages: list[dict[str, Any]],
         model: str,
         max_tokens: int = 4096,
-        temperature: float = 0.0,
+        temperature: float | None = None,
         return_usage: bool = False,
     ) -> str | tuple[str, TokenUsage]:
-        """Create a response from a list of messages."""
+        """Create a response from a list of messages.
+
+        ``temperature=None`` means "don't send the parameter" — modern models
+        (gpt-5.x, opus-4.x) reject it outright, so implementations must only
+        include it when explicitly set.
+        """
         ...
 
     def batch_responses(self, requests: list[dict[str, Any]]) -> list[str]:

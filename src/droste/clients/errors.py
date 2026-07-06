@@ -2,7 +2,7 @@
 
 Bare "HTTP 502: Bad Gateway" errors destroy the server's actual explanation
 (e.g. a circuit-breaker rejection vs a provider error), which has cost real
-diagnosis time. These helpers were born in droste_runner (modelrelay #1596) and
+diagnosis time. These helpers were born in droste_runner (a 2026-07 incident where an oversized upstream error body leaked verbatim) and
 moved here so the BYOK OpenAI-compatible client and the ModelRelay runner
 clients share one bounded-read + redaction implementation.
 """

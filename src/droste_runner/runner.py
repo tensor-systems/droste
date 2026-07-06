@@ -225,6 +225,27 @@ class RunnerEnvironment(RLMEnvironment):
         return
 
 
+def _require_allowed_host(url: str, allowed: set[str]) -> None:
+    from urllib.parse import urlparse
+
+    host = (urlparse(url).hostname or "").lower()
+    if host not in allowed:
+        raise ValueError(f"data_source host {host!r} is not in allowed_hosts")
+
+
+def _allowlist_opener(allowed: set[str]) -> Any:
+    """A urllib opener that re-checks every redirect target against the
+    allowlist, closing the SSRF-via-redirect hole (a 30x from an allowed
+    host to an internal one)."""
+
+    class _Guard(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+            _require_allowed_host(newurl, allowed)
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    return urllib.request.build_opener(_Guard)
+
+
 class DataSourceWrapper:
     def __init__(self, config: dict[str, Any] | None) -> None:
         self._config = config or {}
@@ -253,6 +274,21 @@ class DataSourceWrapper:
         if max_requests is not None and self._requests_made > max_requests:
             raise ValueError("data_source max_requests exceeded")
 
+    def _allowed_hosts(self) -> set[str] | None:
+        # Absent key = allow all (the deployer's explicit opt-out). Present but
+        # malformed (a bare string, an empty list, all-blank entries) reads as
+        # an intended restriction typed wrong — fail closed rather than
+        # silently allowing every host.
+        if not isinstance(self._config, dict) or "allowed_hosts" not in self._config:
+            return None
+        raw = self._config.get("allowed_hosts")
+        if not isinstance(raw, list):
+            raise ValueError("allowed_hosts must be a list of hostnames")
+        hosts = {str(h).lower() for h in raw if str(h).strip()}
+        if not hosts:
+            raise ValueError("allowed_hosts is present but empty — remove it to allow all hosts")
+        return hosts
+
     def _timeout_seconds(self) -> float | None:
         timeout_ms = self._int_limit(self._limits().get("timeout_ms"))
         if timeout_ms is None or timeout_ms < 0:
@@ -275,6 +311,15 @@ class DataSourceWrapper:
         token = self._config.get("token")
         if not base_url or not token:
             raise ValueError("data_source missing base_url or token")
+        # Host allowlist: when the host configures allowed_hosts, the request
+        # target must resolve to an allowed hostname — checked here AND on
+        # every redirect hop (see _allowlist_opener), so a 30x from an allowed
+        # endpoint to an internal host can't slip through. Without this the
+        # wrapper is an SSRF primitive in hosted deployments. No allowlist
+        # configured = the deployer accepts arbitrary hosts (explicit choice).
+        allowed = self._allowed_hosts()
+        if allowed is not None:
+            _require_allowed_host(str(base_url), allowed)
         self._check_request_budget()
         url = str(base_url).rstrip("/") + "/" + path.lstrip("/")
         body = json.dumps(payload).encode("utf-8")
@@ -285,11 +330,12 @@ class DataSourceWrapper:
             method="POST",
         )
         timeout = self._timeout_seconds()
+        opener = _allowlist_opener(allowed) if allowed is not None else urllib.request
         try:
             if timeout is None:
-                resp = urllib.request.urlopen(req)
+                resp = opener.urlopen(req)
             else:
-                resp = urllib.request.urlopen(req, timeout=timeout)
+                resp = opener.urlopen(req, timeout=timeout)
             with resp:
                 raw = self._read_response(resp)
         except urllib.error.HTTPError as exc:
@@ -328,9 +374,11 @@ class WrapperV1DataSource:
 
     Lets the remote search/get/content partner API participate in the
     `DataSourceRegistry` like any in-process source instead of being a parallel
-    special-case. Budgets and SSRF/host guards stay in the wrapped
-    `DataSourceWrapper`. `content` is exposed as an extra method (the registry
-    binds it via its `hasattr` path); it is not a first-class capability.
+    special-case. Request budgets and the `allowed_hosts` allowlist are
+    enforced per-request by the wrapped `DataSourceWrapper` (no allowlist
+    configured = the deployer accepts arbitrary hosts). `content` is exposed
+    as an extra method (the registry binds it via its `hasattr` path); it is
+    not a first-class capability.
     """
 
     def __init__(self, config: dict[str, Any] | None, *, name: str = "wrapper") -> None:

@@ -50,7 +50,7 @@ class DataSource(Protocol):
         table: str = "messages",
         filters: dict[str, Any] | None = None,
     ) -> list[SearchResult]:
-        """Full-text search (supports Recall-style args plus filters)."""
+        """Full-text search (supports chat-archive-style args plus filters)."""
         ...
 
     def query(self, sql: str) -> list[dict[str, Any]]:
