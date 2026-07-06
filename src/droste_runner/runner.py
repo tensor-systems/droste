@@ -22,7 +22,11 @@ if REPO_ROOT not in sys.path:
 from droste.clients.errors import http_error_excerpt, redact_secrets  # type: ignore
 from droste.execution.config import DEFAULT_MAX_CALLS, DEFAULT_MAX_ITERATIONS  # type: ignore
 from droste.loop.rlm import RLMConfig, run_rlm  # type: ignore
-from droste.protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment  # type: ignore
+from droste.protocols.environment import (  # type: ignore
+    EnvCapabilities,
+    ExecutionResult,
+    RLMEnvironment,
+)
 from droste.protocols.llm_client import TokenUsage  # type: ignore
 from droste.protocols.subcall_client import SubcallClient  # type: ignore
 from droste.registry import DataSourceRegistry  # type: ignore
@@ -192,9 +196,7 @@ class RunnerEnvironment(RLMEnvironment):
         # (the v1 substrate) signals are unavailable, so the per-exec timeout is
         # enforced by the host instead (Deno wall-clock kill of the run).
         use_signal_timeout = bool(
-            self._exec_timeout_ms
-            and self._exec_timeout_ms > 0
-            and hasattr(signal, "setitimer")
+            self._exec_timeout_ms and self._exec_timeout_ms > 0 and hasattr(signal, "setitimer")
         )
         old_handler = None
         if use_signal_timeout:
@@ -498,9 +500,7 @@ def _build_one_source(spec: dict[str, Any], ctx: Any = None) -> Any:
     raise ValueError(f"unknown data source type: {stype!r}")
 
 
-def build_data_sources(
-    request: dict[str, Any], ctx: Any = None
-) -> tuple[list[Any], str | None]:
+def build_data_sources(request: dict[str, Any], ctx: Any = None) -> tuple[list[Any], str | None]:
     """Resolve a request's data sources into `DataSource` objects + a default name.
 
     Accepts the new `data_sources` list shape, and the legacy singular
@@ -533,7 +533,6 @@ def build_data_sources(
         if default_name is None:
             default_name = "wrapper"
     return sources, default_name
-
 
 
 # The bounded-read + redaction HTTP-error helpers moved to droste.clients.errors
@@ -697,14 +696,18 @@ class HTTPSubcallClient(SubcallClient):
         errors: list[dict[str, object]] = []
         if not prompts:
             return results, errors
+
         def _run_one(idx: int, prompt: str, ctx: str) -> None:
             try:
                 results[idx] = self.llm_query(prompt, ctx)
             except Exception as exc:
                 errors.append({"index": idx, "error": str(exc)})
+
         threads = []
         for idx, (prompt, ctx) in enumerate(zip(prompts, contexts)):
-            t = threading.Thread(target=lambda i=idx, p=prompt, c=ctx: _run_one(i, p, c), daemon=True)
+            t = threading.Thread(
+                target=lambda i=idx, p=prompt, c=ctx: _run_one(i, p, c), daemon=True
+            )
             threads.append(t)
         for t in threads:
             t.start()
@@ -837,7 +840,9 @@ def _run_adapter(request: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError(f"adapter module {adapter_module} missing run(request) function")
     result = run_fn(request)
     if not isinstance(result, dict):
-        raise RuntimeError(f"adapter module {adapter_module} returned {type(result)}; expected dict")
+        raise RuntimeError(
+            f"adapter module {adapter_module} returned {type(result)}; expected dict"
+        )
     return result
 
 
@@ -851,9 +856,7 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
     # factories (unified-data-sources §7.3): in-process hosts pass live
     # handles; subprocess hosts pass whatever their entrypoint assembled.
     sources, default_source = build_data_sources(request, source_ctx)
-    registry = (
-        DataSourceRegistry(sources, default_source_name=default_source) if sources else None
-    )
+    registry = DataSourceRegistry(sources, default_source_name=default_source) if sources else None
 
     # Omitted budgets fall back to the core loop defaults instead of the old
     # runner-local 1 iteration / 0 subcalls (0 made the FIRST llm_query raise

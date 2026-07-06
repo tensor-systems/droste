@@ -1,25 +1,24 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import sys
+from dataclasses import dataclass
 from typing import Any
 
 from ..exceptions import BatchLLMError, PolicyError, RLMError, SandboxError
-from ..execution.context import ExecutionContext, create_execution_context
 from ..execution.config import (
     DEFAULT_MAX_CALLS,
     DEFAULT_MAX_DEPTH,
     DEFAULT_MAX_ITERATIONS,
     DEFAULT_MAX_OUTPUT_CHARS,
 )
+from ..execution.context import ExecutionContext, create_execution_context
+from ..policy import PolicyHints, contract_violations, is_numeric_output
+from ..prompts.builder import SystemPromptBuilder
 from ..protocols.environment import ExecutionResult, RLMEnvironment
 from ..protocols.llm_client import LLMClient, total_tokens_from_usage
 from ..protocols.subcall_client import SubcallClient
-from ..prompts.builder import SystemPromptBuilder
-from ..policy import PolicyHints, contract_violations, is_numeric_output
 from .code_extractor import extract_code_block
 from .trajectory import IterationRecord
-
 
 DEFAULT_USER_PROMPT_TEMPLATE = "Question: {question}"
 
@@ -63,6 +62,7 @@ EXTRACT_FALLBACK_SYSTEM_PROMPT = (
 @dataclass
 class RLMConfig:
     """Configuration for RLM execution."""
+
     max_iterations: int = DEFAULT_MAX_ITERATIONS
     max_depth: int = DEFAULT_MAX_DEPTH
     max_calls: int = DEFAULT_MAX_CALLS
@@ -78,6 +78,7 @@ class RLMConfig:
 @dataclass
 class RLMResult:
     """Result from RLM execution."""
+
     answer: str
     ready: bool
     iterations: int
@@ -197,6 +198,7 @@ def _best_answer(answer: dict[str, Any], last_output: str, last_response: str) -
 
 def _apply_batch_error_guard(subcalls: SubcallClient, env_globals: dict[str, Any]) -> None:
     if hasattr(subcalls, "llm_batch_with_errors"):
+
         def _wrapped_batch(prompts: list[str], contexts: list[str] | None = None) -> list[str]:
             results, errors = subcalls.llm_batch_with_errors(prompts, contexts)
             if errors:
@@ -205,6 +207,7 @@ def _apply_batch_error_guard(subcalls: SubcallClient, env_globals: dict[str, Any
                     errors,
                 )
             return results
+
         env_globals["llm_batch"] = _wrapped_batch
         env_globals["batch_llm_query"] = _wrapped_batch
         env_globals["llm_query_batched"] = _wrapped_batch
@@ -286,7 +289,11 @@ def run_rlm(
     if system_prompt is None:
         prompt_additions = environment.prompt_fragment()
         if system_prompt_additions:
-            prompt_additions = f"{prompt_additions}\n\n{system_prompt_additions}" if prompt_additions else system_prompt_additions
+            prompt_additions = (
+                f"{prompt_additions}\n\n{system_prompt_additions}"
+                if prompt_additions
+                else system_prompt_additions
+            )
         builder = SystemPromptBuilder().with_tips(cfg.tips_profile).with_additions(prompt_additions)
         system_prompt = builder.build()
 
@@ -323,11 +330,16 @@ def run_rlm(
                 messages.append({"role": "assistant", "content": f"```python\n{code}\n```"})
                 messages.append({"role": "user", "content": refinement_content})
 
-            context.emit_progress(f"Iteration {iterations}/{cfg.max_iterations}: Generating code...")
+            context.emit_progress(
+                f"Iteration {iterations}/{cfg.max_iterations}: Generating code..."
+            )
             if cfg.verbose:
-                print(f"\n{'='*60}", file=sys.stderr)
-                print(f"Iteration {iterations}/{cfg.max_iterations}: Generating code...", file=sys.stderr)
-                print(f"{'='*60}", file=sys.stderr)
+                print(f"\n{'=' * 60}", file=sys.stderr)
+                print(
+                    f"Iteration {iterations}/{cfg.max_iterations}: Generating code...",
+                    file=sys.stderr,
+                )
+                print(f"{'=' * 60}", file=sys.stderr)
 
             try:
                 response, usage = root_llm.responses_create(
@@ -356,7 +368,10 @@ def run_rlm(
             if not code:
                 if cfg.enforce_contract:
                     if cfg.verbose:
-                        print("\nNo code block found, retrying with contract enforcement", file=sys.stderr)
+                        print(
+                            "\nNo code block found, retrying with contract enforcement",
+                            file=sys.stderr,
+                        )
                     repair_messages = messages + [
                         {"role": "assistant", "content": response},
                         {
@@ -373,7 +388,9 @@ def run_rlm(
                         context.stats.total_tokens += total_tokens_from_usage(repair_usage)
                         last_response = repair_response
                     except Exception as repair_exc:
-                        error = RLMError(type=repair_exc.__class__.__name__, message=str(repair_exc))
+                        error = RLMError(
+                            type=repair_exc.__class__.__name__, message=str(repair_exc)
+                        )
                         final_answer = _best_answer(answer, last_output, last_response)
                         return RLMResult(
                             answer=final_answer,
@@ -405,7 +422,9 @@ def run_rlm(
                     messages = repair_messages
                 else:
                     if cfg.verbose:
-                        print("\nNo code block found, returning response as answer", file=sys.stderr)
+                        print(
+                            "\nNo code block found, returning response as answer", file=sys.stderr
+                        )
                     final_answer = _best_answer(answer, last_output, last_response) or response
                     return RLMResult(
                         answer=final_answer,
@@ -483,7 +502,12 @@ def run_rlm(
                     # gates, but keep the accumulated content — the violation
                     # is fed back as guidance, not punished with a wiped draft.
                     answer["ready"] = False
-                error = RLMError(type=exec_error.__class__.__name__, message=str(exec_error), code=code, details=details)
+                error = RLMError(
+                    type=exec_error.__class__.__name__,
+                    message=str(exec_error),
+                    code=code,
+                    details=details,
+                )
                 if cfg.verbose:
                     print(f"\nExecution error: {exec_error}", file=sys.stderr)
 
@@ -609,9 +633,7 @@ def run_rlm(
         if not answer.get("ready") and iterations >= cfg.max_iterations and trajectory:
             context.emit_progress("Max iterations reached: extracting best final answer...")
             draft = "" if policy_outstanding else str(answer.get("content") or "")
-            extracted = _extract_final_answer(
-                question, draft, trajectory, root_llm, cfg, context
-            )
+            extracted = _extract_final_answer(question, draft, trajectory, root_llm, cfg, context)
             if extracted:
                 final_answer = extracted
                 was_extracted = True

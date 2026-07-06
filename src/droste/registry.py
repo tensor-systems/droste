@@ -92,9 +92,7 @@ class DataSourceRegistry:
             'e.g. `rows = db.query("SELECT ...")`, then process `rows` in Python, then '
             "fan out over chunks with `llm_batch`. Only print the reduced result you need."
         )
-        parts.append(
-            'Call them namespaced: `db.query("SELECT ...")`, `vault.search("...")`.'
-        )
+        parts.append('Call them namespaced: `db.query("SELECT ...")`, `vault.search("...")`.')
         if self._default_source_name:
             parts.append(
                 f"The default source '{self._default_source_name}' is also available "

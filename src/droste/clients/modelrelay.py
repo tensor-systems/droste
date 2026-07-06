@@ -165,7 +165,7 @@ class _ResponsesTransport:
                     if not line:
                         continue
                     if line.startswith("data:"):
-                        line = line[len("data:"):].strip()
+                        line = line[len("data:") :].strip()
                     try:
                         event = json.loads(line)
                     except Exception:
@@ -179,7 +179,9 @@ class _ResponsesTransport:
                         message = str(event.get("message") or "stream error")
                         code = event.get("code")
                         detail = f" ({code})" if code else ""
-                        raise RuntimeError(f"{self._label} streamed an error{detail}: {message[:500]}")
+                        raise RuntimeError(
+                            f"{self._label} streamed an error{detail}: {message[:500]}"
+                        )
                     if event_type == "update":
                         delta = event.get("delta")
                         if delta:
@@ -317,7 +319,9 @@ class ModelRelayClient:
                 model=str(request.get("model") or ""),
                 max_tokens=max_tokens,
                 temperature=(
-                    float(request["temperature"]) if request.get("temperature") is not None else None
+                    float(request["temperature"])
+                    if request.get("temperature") is not None
+                    else None
                 ),
             )
             results.append(str(response))
@@ -434,9 +438,7 @@ class ModelRelaySubcallClient(SubcallClient):
     ) -> tuple[list[str], list[dict[str, object]]]:
         results, errors = self._run_batch(prompts, contexts)
         structured = [
-            {"index": idx, "error": str(err)}
-            for idx, err in enumerate(errors)
-            if err is not None
+            {"index": idx, "error": str(err)} for idx, err in enumerate(errors) if err is not None
         ]
         return results, structured
 

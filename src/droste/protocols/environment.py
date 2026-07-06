@@ -6,6 +6,7 @@ from typing import Any, Protocol, TypedDict
 
 class EnvCapabilities(TypedDict):
     """Capabilities and limits for the RLM environment."""
+
     tools_in_root: bool
     max_output_chars: int
 
@@ -13,6 +14,7 @@ class EnvCapabilities(TypedDict):
 @dataclass
 class ExecutionResult:
     """Result from environment execution."""
+
     stdout: str
     stderr: str
     timed_out: bool

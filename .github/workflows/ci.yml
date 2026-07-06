@@ -30,6 +30,21 @@ jobs:
       - name: Tests
         run: uv run pytest -q
 
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync (locked)
+        run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check src tests
+      - name: Format
+        run: uv run ruff format --check src tests
+
   hygiene:
     name: public-repo hygiene
     runs-on: ubuntu-latest

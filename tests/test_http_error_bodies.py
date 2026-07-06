@@ -8,7 +8,6 @@ indistinguishable from an upstream provider error).
 from __future__ import annotations
 
 import io
-import json
 import threading
 import urllib.error
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -27,7 +26,10 @@ def _http_error(body: bytes, code: int = 502) -> urllib.error.HTTPError:
 
 def test_excerpt_returns_normalized_body():
     exc = _http_error(b'provider "google-ai-studio" is temporarily\ncircuit-broken until T')
-    assert _http_error_excerpt(exc) == 'provider "google-ai-studio" is temporarily circuit-broken until T'
+    assert (
+        _http_error_excerpt(exc)
+        == 'provider "google-ai-studio" is temporarily circuit-broken until T'
+    )
 
 
 def test_excerpt_truncates_long_bodies():
@@ -66,7 +68,7 @@ def test_llm_query_error_includes_server_body():
             max_depth=5,
             context=create_execution_context(max_calls=5, max_depth=5),
         )
-        with pytest.raises(RuntimeError, match=r'HTTP 503: no healthy provider offers model'):
+        with pytest.raises(RuntimeError, match=r"HTTP 503: no healthy provider offers model"):
             client.llm_query("hi")
     finally:
         server.shutdown()

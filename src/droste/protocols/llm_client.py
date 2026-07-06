@@ -7,6 +7,7 @@ from typing import Any, Protocol
 @dataclass
 class TokenUsage:
     """Token usage from an LLM call."""
+
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int

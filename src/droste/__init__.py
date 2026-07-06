@@ -1,7 +1,9 @@
 """Core RLM loop and protocol definitions."""
 
-from .loop.rlm import run_rlm, RLMConfig, RLMResult
-from .loop.code_extractor import extract_code_block
+from .clients.anthropic import AnthropicClient, AnthropicSubcallClient
+from .clients.modelrelay import ModelRelayClient, ModelRelaySubcallClient
+from .clients.openai_compat import OpenAICompatClient, OpenAICompatSubcallClient
+from .exceptions import PolicyError, RLMError
 from .execution.config import (
     DEFAULT_MAX_CALLS,
     DEFAULT_MAX_DEPTH,
@@ -9,20 +11,18 @@ from .execution.config import (
     DEFAULT_MAX_OUTPUT_CHARS,
     ExecutionConfig,
 )
-from .execution.stats import ExecutionStats
 from .execution.context import ExecutionContext, create_execution_context
 from .execution.progress import ProgressCallback, emit_progress
-from .exceptions import RLMError, PolicyError
+from .execution.stats import ExecutionStats
+from .loop.code_extractor import extract_code_block
+from .loop.rlm import RLMConfig, RLMResult, run_rlm
 from .policy import PolicyHints
-from .protocols.environment import RLMEnvironment, EnvCapabilities, ExecutionResult
-from .protocols.data_source import DataSource, SearchResult, DataSourceCapabilities
+from .prompts.builder import SystemPromptBuilder
+from .protocols.data_source import DataSource, DataSourceCapabilities, SearchResult
+from .protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
 from .protocols.llm_client import LLMClient, TokenUsage
 from .protocols.subcall_client import SubcallClient
-from .prompts.builder import SystemPromptBuilder
 from .registry import DataSourceRegistry
-from .clients.anthropic import AnthropicClient, AnthropicSubcallClient
-from .clients.modelrelay import ModelRelayClient, ModelRelaySubcallClient
-from .clients.openai_compat import OpenAICompatClient, OpenAICompatSubcallClient
 
 __all__ = [
     "run_rlm",

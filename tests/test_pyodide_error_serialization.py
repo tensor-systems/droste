@@ -5,6 +5,7 @@ host response. Without serializing the dataclass, that dump raises and the relay
 emits no output — an opaque failure, and one that also drops the HTTP status the
 host injects (402 = out of balance). These guard that regression.
 """
+
 import json
 import sys
 from pathlib import Path
@@ -15,6 +16,7 @@ _PYODIDE_DIR = Path(__file__).resolve().parents[1] / "pyodide"
 sys.path.insert(0, str(_PYODIDE_DIR))
 
 from pyodide_runtime import _serialize_error  # noqa: E402
+
 from droste.loop.rlm import RLMError  # noqa: E402
 
 

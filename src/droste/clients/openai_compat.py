@@ -200,7 +200,7 @@ class _ChatCompletionsTransport:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line.startswith("data:"):
                         continue
-                    data_str = line[len("data:"):].strip()
+                    data_str = line[len("data:") :].strip()
                     if data_str == "[DONE]":
                         break
                     try:
@@ -213,8 +213,7 @@ class _ChatCompletionsTransport:
                         # Mid-stream provider error: fail loudly, never return
                         # partial text as a successful response.
                         raise RuntimeError(
-                            f"{self._label} streamed an error: "
-                            f"{json.dumps(chunk['error'])[:500]}"
+                            f"{self._label} streamed an error: {json.dumps(chunk['error'])[:500]}"
                         )
                     response_id = str(chunk.get("id") or response_id)
                     model = str(chunk.get("model") or model)
@@ -399,7 +398,11 @@ class OpenAICompatClient:
                 request.get("messages") or [],
                 model=str(request.get("model") or ""),
                 max_tokens=max_tokens,
-                temperature=(float(request["temperature"]) if request.get("temperature") is not None else None),
+                temperature=(
+                    float(request["temperature"])
+                    if request.get("temperature") is not None
+                    else None
+                ),
             )
             results.append(str(response))
         return results
@@ -522,9 +525,7 @@ class OpenAICompatSubcallClient(SubcallClient):
     ) -> tuple[list[str], list[dict[str, object]]]:
         results, errors = self._run_batch(prompts, contexts)
         structured = [
-            {"index": idx, "error": str(err)}
-            for idx, err in enumerate(errors)
-            if err is not None
+            {"index": idx, "error": str(err)} for idx, err in enumerate(errors) if err is not None
         ]
         return results, structured
 

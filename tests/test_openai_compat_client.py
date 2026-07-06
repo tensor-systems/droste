@@ -68,9 +68,11 @@ class StubOpenAIServer:
                         self.wfile.write(msg)
                         return
                     if stub.reject_max_tokens and "max_tokens" in payload:
-                        msg = (b'{"error": {"message": "Unsupported parameter: '
-                               b"'max_tokens' is not supported with this model. "
-                               b"Use 'max_completion_tokens' instead.\"}}")
+                        msg = (
+                            b'{"error": {"message": "Unsupported parameter: '
+                            b"'max_tokens' is not supported with this model. "
+                            b"Use 'max_completion_tokens' instead.\"}}"
+                        )
                         self.send_response(400)
                         self.send_header("Content-Length", str(len(msg)))
                         self.end_headers()
@@ -90,9 +92,7 @@ class StubOpenAIServer:
                         content = f"echo: {prompt}"
                     else:
                         with stub._lock:
-                            content = (
-                                stub.root_responses.pop(0) if stub.root_responses else "hi"
-                            )
+                            content = stub.root_responses.pop(0) if stub.root_responses else "hi"
                     if payload.get("stream"):
                         # SSE: content split into 3 chunks, usage in the final
                         # chunk iff the client asked for include_usage.
@@ -105,14 +105,21 @@ class StubOpenAIServer:
                             if not piece:
                                 continue
                             if stub.stream_error_midway and i == 1:
-                                err = {"error": {"message": "provider exploded mid-stream", "code": 500}}
+                                err = {
+                                    "error": {
+                                        "message": "provider exploded mid-stream",
+                                        "code": 500,
+                                    }
+                                }
                                 self.wfile.write(f"data: {json.dumps(err)}\n\n".encode("utf-8"))
                                 self.wfile.write(b"data: [DONE]\n\n")
                                 return
                             chunk = {
                                 "id": "chatcmpl-stub-1",
                                 "model": payload.get("model", ""),
-                                "choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": None}],
+                                "choices": [
+                                    {"index": 0, "delta": {"content": piece}, "finish_reason": None}
+                                ],
                             }
                             self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
                         final = {
@@ -303,7 +310,9 @@ def test_error_body_surfaced_and_redacted(stub_server):
         b'no healthy provider offers model "gemini-3.5-flash"; api_key=supersecret'
     )
     client = OpenAICompatClient(model="root-model", base_url=stub_server.base_url, api_key="k")
-    with pytest.raises(RuntimeError, match=r'HTTP 503: no healthy provider offers model') as exc_info:
+    with pytest.raises(
+        RuntimeError, match=r"HTTP 503: no healthy provider offers model"
+    ) as exc_info:
         client.responses_create([{"role": "user", "content": "x"}], model="")
     assert "supersecret" not in str(exc_info.value)
     assert "[redacted]" in str(exc_info.value)
@@ -474,8 +483,12 @@ def test_max_tokens_param_self_heals_for_modern_openai(stub_server):
     stub_server.reject_max_tokens = True
     stub_server.root_responses = ["first", "second"]
     client = OpenAICompatClient(model="root-model", base_url=stub_server.base_url, api_key="k")
-    assert client.responses_create([{"role": "user", "content": "q"}], model="root-model") == "first"
-    assert client.responses_create([{"role": "user", "content": "q"}], model="root-model") == "second"
+    assert (
+        client.responses_create([{"role": "user", "content": "q"}], model="root-model") == "first"
+    )
+    assert (
+        client.responses_create([{"role": "user", "content": "q"}], model="root-model") == "second"
+    )
     # Call 1: max_tokens (rejected) → retry with max_completion_tokens.
     # Call 2: goes straight to max_completion_tokens — no wasted round trip.
     sent = [("max_tokens" in r, "max_completion_tokens" in r) for r in stub_server.requests]
@@ -508,8 +521,11 @@ def test_subcalls_share_token_param_migration(stub_server):
     stub_server.reject_max_tokens = True
     ctx = create_execution_context(max_calls=10, max_iterations=5)
     sub = OpenAICompatSubcallClient(
-        model="sub-model", context=ctx, base_url=stub_server.base_url,
-        api_key="k", max_output_tokens=2048,
+        model="sub-model",
+        context=ctx,
+        base_url=stub_server.base_url,
+        api_key="k",
+        max_output_tokens=2048,
     )
     assert sub.llm_query("alpha") == "echo: alpha"
     assert sub.llm_query("beta") == "echo: beta"
@@ -526,8 +542,11 @@ def test_concurrent_batch_all_migrate_despite_state_race(stub_server):
     stub_server.reject_max_tokens = True
     ctx = create_execution_context(max_calls=20, max_iterations=5)
     sub = OpenAICompatSubcallClient(
-        model="sub-model", context=ctx, base_url=stub_server.base_url,
-        api_key="k", max_output_tokens=2048,
+        model="sub-model",
+        context=ctx,
+        base_url=stub_server.base_url,
+        api_key="k",
+        max_output_tokens=2048,
     )
     results = sub.llm_batch([f"p{i}" for i in range(8)])
     assert results == [f"echo: p{i}" for i in range(8)]

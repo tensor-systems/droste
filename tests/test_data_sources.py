@@ -33,9 +33,7 @@ def _clean_source_registry():
 
 
 def test_legacy_singular_data_source_is_wrapper_sugar() -> None:
-    sources, default = build_data_sources(
-        {"data_source": {"base_url": "https://x", "token": "t"}}
-    )
+    sources, default = build_data_sources({"data_source": {"base_url": "https://x", "token": "t"}})
     assert len(sources) == 1
     assert isinstance(sources[0], WrapperV1DataSource)
     assert sources[0].name() == "wrapper"
@@ -105,9 +103,7 @@ def test_registered_factory_builds_source_with_config_and_ctx() -> None:
 
 def test_factory_dispatch_is_not_limited_to_sql_fs() -> None:
     register_source_type("messages", lambda config, ctx: MockDataSource(schema="m"))
-    sources, _ = build_data_sources(
-        {"data_sources": [{"type": "messages", "name": "chats"}]}
-    )
+    sources, _ = build_data_sources({"data_sources": [{"type": "messages", "name": "chats"}]})
     assert len(sources) == 1
 
 
@@ -146,9 +142,7 @@ def test_request_cannot_name_a_module() -> None:
     # The request stays declarative: an unregistered type never triggers an
     # import, it just fails. (This is the whole point of Option C.)
     with pytest.raises(ValueError, match="unknown data source type"):
-        build_data_sources(
-            {"data_sources": [{"type": "some.module.path", "name": "x"}]}
-        )
+        build_data_sources({"data_sources": [{"type": "some.module.path", "name": "x"}]})
 
 
 def test_run_threads_source_ctx_to_factories(monkeypatch) -> None:
@@ -169,8 +163,13 @@ def test_run_threads_source_ctx_to_factories(monkeypatch) -> None:
 
     def fake_run_rlm(question, **kwargs):
         return SimpleNamespace(
-            answer="ok", ready=True, iterations=1, tokens_used=0,
-            sub_calls_made=0, trajectory=[], error=None,
+            answer="ok",
+            ready=True,
+            iterations=1,
+            tokens_used=0,
+            sub_calls_made=0,
+            trajectory=[],
+            error=None,
         )
 
     monkeypatch.setattr(runner_mod, "run_rlm", fake_run_rlm)
@@ -207,7 +206,12 @@ def test_main_rejects_adapter_module_from_request_file(monkeypatch, tmp_path) ->
 
 def test_wrapper_capabilities_and_schema() -> None:
     src = WrapperV1DataSource(
-        {"base_url": "https://x", "token": "t", "allowed_hosts": ["x"], "limits": {"max_requests": 5}},
+        {
+            "base_url": "https://x",
+            "token": "t",
+            "allowed_hosts": ["x"],
+            "limits": {"max_requests": 5},
+        },
         name="partner",
     )
     caps = src.capabilities()
@@ -292,9 +296,7 @@ def test_query_is_attribute_callable_in_sandbox() -> None:
     environment = _env(DataSourceRegistry([src]))
     # Exactly what the prompt tells the model to write — attribute access, then
     # arbitrary Python over the returned rows.
-    result = environment.execute(
-        "rows = mock.query('SELECT x')\ntotal = sum(r['x'] for r in rows)"
-    )
+    result = environment.execute("rows = mock.query('SELECT x')\ntotal = sum(r['x'] for r in rows)")
     assert result.exit_code == 0
     g = environment.globals()
     assert g["rows"] == [{"x": 1}, {"x": 2}]

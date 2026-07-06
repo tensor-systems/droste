@@ -29,7 +29,7 @@ _WHERE_VS_WHAT = (
 
 _EXPLORE_FIRST = (
     "EXPLORE FIRST. Inspect `context` before processing it: print its type, size, and "
-    "a small sample, then plan. Do not set answer[\"ready\"] = True on your first "
+    'a small sample, then plan. Do not set answer["ready"] = True on your first '
     "turn — use it to understand the data. Iterate in small steps and verify "
     "intermediate results before finalizing."
 )

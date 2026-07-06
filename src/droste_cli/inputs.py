@@ -120,10 +120,7 @@ def classify(positionals: list[str], *, stdin_is_tty: bool = True) -> Classified
         elif os.path.exists(path):
             raise InputError(f"{arg}: not a regular file or directory")
         elif not _has_whitespace(arg) and (
-            os.sep in arg
-            or (os.altsep and os.altsep in arg)
-            or "/" in arg
-            or _PATHLIKE.match(arg)
+            os.sep in arg or (os.altsep and os.altsep in arg) or "/" in arg or _PATHLIKE.match(arg)
         ):
             # No-whitespace only: "what is the client/server split?" is a
             # question; "missing/dir" is a typo.
@@ -137,8 +134,7 @@ def classify(positionals: list[str], *, stdin_is_tty: bool = True) -> Classified
     if len(question_candidates) > 1:
         listed = " | ".join(question_candidates)
         raise InputError(
-            f"multiple question candidates ({listed}); quote the question as a "
-            "single argument"
+            f"multiple question candidates ({listed}); quote the question as a single argument"
         )
     if question_candidates:
         result.question = question_candidates[0]
@@ -254,9 +250,7 @@ def load_inputs(
     if db_flag:
         dbs.append(os.path.expanduser(db_flag))
     if len(dbs) > 1:
-        raise InputError(
-            "multiple databases (" + ", ".join(dbs) + "); pass exactly one"
-        )
+        raise InputError("multiple databases (" + ", ".join(dbs) + "); pass exactly one")
     db_path = dbs[0] if dbs else None
 
     stats = _WalkStats()
@@ -302,7 +296,6 @@ def load_inputs(
                 "files, a directory, or --db PATH"
             )
 
-
     files: list[dict[str, Any]] = []
     total = 0  # budget + report are byte-based (UTF-8), not character-based
     for path in paths:
@@ -344,7 +337,9 @@ def load_inputs(
     parts: list[str] = []
     if files:
         origin = " from ." if walked_cwd else ""
-        parts.append(f"loaded {len(files)} file{'s' if len(files) != 1 else ''} ({_human_bytes(total)}){origin}")
+        parts.append(
+            f"loaded {len(files)} file{'s' if len(files) != 1 else ''} ({_human_bytes(total)}){origin}"
+        )
     if db_path:
         parts.append(f"db: {db_path}")
     skips: list[str] = []

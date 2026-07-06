@@ -115,14 +115,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="API key (env: OPENAI_API_KEY; the flag overrides the env)",
     )
-    parser.add_argument("--subcall-model", default="", help="model for llm_query subcalls (default: --model)")
+    parser.add_argument(
+        "--subcall-model", default="", help="model for llm_query subcalls (default: --model)"
+    )
     parser.add_argument(
         "--subcall-max-output-tokens",
         type=int,
         default=DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS,
         help=f"per-subcall output token bound (default: {DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS}; 0 disables)",
     )
-    parser.add_argument("--reasoning-effort", default="", help="reasoning effort passed through to the endpoint")
+    parser.add_argument(
+        "--reasoning-effort", default="", help="reasoning effort passed through to the endpoint"
+    )
     parser.add_argument(
         "--max-iterations",
         type=int,
@@ -150,7 +154,9 @@ def build_parser() -> argparse.ArgumentParser:
             f"(default: {DEFAULT_MAX_FILE_BYTES}; explicit files are exempt)"
         ),
     )
-    parser.add_argument("--json", action="store_true", help="print a JSON result object for scripting")
+    parser.add_argument(
+        "--json", action="store_true", help="print a JSON result object for scripting"
+    )
     parser.add_argument(
         "--verbose",
         action="store_true",
@@ -161,7 +167,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="full loop trace on stderr: generated code, execution output, LLM responses (implies --verbose)",
     )
-    parser.add_argument("-q", "--quiet", action="store_true", help="suppress the loaded-inputs report line")
+    parser.add_argument(
+        "-q", "--quiet", action="store_true", help="suppress the loaded-inputs report line"
+    )
     return parser
 
 
@@ -373,7 +381,6 @@ def run_ask(args: argparse.Namespace) -> int:
             "--reasoning-effort is not an Anthropic API parameter; Claude "
             "thinking is controlled via the API's thinking params"
         )
-
 
     # --verbose/--trace stream the root model's output (the generated code)
     # to stderr as it is written, between one-line progress markers — the

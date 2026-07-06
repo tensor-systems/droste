@@ -16,6 +16,7 @@ from .stats import ExecutionStats
 @dataclass
 class ExecutionContext:
     """Context for tracking recursive LLM calls within sandbox execution."""
+
     config: ExecutionConfig = field(default_factory=ExecutionConfig)
     stats: ExecutionStats = field(default_factory=ExecutionStats)
 

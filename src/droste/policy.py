@@ -4,18 +4,18 @@ import re
 from dataclasses import dataclass
 from typing import Iterable
 
-
 AGGREGATE_REGEX = re.compile(r"\b(COUNT|SUM|AVG|MIN|MAX|ROUND)\s*\(", re.IGNORECASE)
-LLM_CALL_REGEX = re.compile(r"\b(llm_query_batched|llm_query|batch_llm_query|llm_batch)\s*\(", re.IGNORECASE)
-LEN_SEARCH_REGEX = re.compile(r"\blen\s*\(\s*(search|get_messages|get_recent)\s*\(", re.IGNORECASE)
-NUMERIC_OUTPUT_REGEX = re.compile(
-    r"^\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)(%)?\s*$"
+LLM_CALL_REGEX = re.compile(
+    r"\b(llm_query_batched|llm_query|batch_llm_query|llm_batch)\s*\(", re.IGNORECASE
 )
+LEN_SEARCH_REGEX = re.compile(r"\blen\s*\(\s*(search|get_messages|get_recent)\s*\(", re.IGNORECASE)
+NUMERIC_OUTPUT_REGEX = re.compile(r"^\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)(%)?\s*$")
 
 
 @dataclass(frozen=True)
 class PolicyHints:
     """Optional enforcement hints supplied by the caller."""
+
     semantic: bool = False
     count: bool = False
     numeric_output: bool = False

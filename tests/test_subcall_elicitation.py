@@ -41,10 +41,16 @@ class RecordingLLMClient(MockLLMClient):
         super().__init__(responses)
         self.calls: list[list[dict[str, Any]]] = []
 
-    def responses_create(self, messages, model, max_tokens=4096, temperature=0.0, return_usage=False):
+    def responses_create(
+        self, messages, model, max_tokens=4096, temperature=0.0, return_usage=False
+    ):
         self.calls.append(list(messages))
         return super().responses_create(
-            messages, model, max_tokens=max_tokens, temperature=temperature, return_usage=return_usage
+            messages,
+            model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            return_usage=return_usage,
         )
 
 
@@ -276,12 +282,11 @@ def test_runner_omitted_budgets_use_core_defaults_and_allow_subcalls() -> None:
 def test_runner_explicit_zero_subcalls_is_honored() -> None:
     """max_subcalls=0 passed explicitly means NO subcalls — it must not be
     coerced to the omitted-value default (codex catch on PR #22)."""
-    from droste.execution.context import create_execution_context
-    from droste_runner.runner import HTTPSubcallClient, run
-
     import json as jsonlib
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from droste_runner.runner import run
 
     root_reply = (
         "```python\n"
@@ -382,9 +387,7 @@ def test_extract_fallback_skipped_when_answer_ready() -> None:
 def test_extract_fallback_failure_falls_back_to_best_answer() -> None:
     # Only one response: the extract call itself raises (mock exhausted) and
     # the run still returns the best scraped answer instead of crashing.
-    llm = RecordingLLMClient(
-        _responses("""```python\nanswer['content'] = 'partial'\n```""")
-    )
+    llm = RecordingLLMClient(_responses("""```python\nanswer['content'] = 'partial'\n```"""))
     result = run_rlm(
         question="q",
         environment=MockEnvironment(),

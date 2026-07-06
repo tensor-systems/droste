@@ -6,11 +6,13 @@ from typing import Any
 
 class SandboxError(Exception):
     """Raised when environment execution fails."""
+
     pass
 
 
 class PolicyError(SandboxError):
     """Raised when generated code violates the RLM execution contract."""
+
     pass
 
 
@@ -25,6 +27,7 @@ class BatchLLMError(SandboxError):
 @dataclass
 class RLMError:
     """Structured error for RLM execution."""
+
     type: str
     message: str
     code: str | None = None

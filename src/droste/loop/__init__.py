@@ -1,5 +1,5 @@
-from .rlm import run_rlm, RLMConfig, RLMResult
 from .code_extractor import extract_code_block
+from .rlm import RLMConfig, RLMResult, run_rlm
 from .trajectory import IterationRecord
 
 __all__ = [

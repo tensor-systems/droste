@@ -111,7 +111,9 @@ class LocalSqlPolicy:
         # The local source is read-only, full stop. A policy asking for writes
         # is a configuration error, not something to quietly ignore.
         if policy.get("read_only") is False:
-            raise ValueError("local sql source is read-only; policy read_only=false is not supported")
+            raise ValueError(
+                "local sql source is read-only; policy read_only=false is not supported"
+            )
 
         limits = policy.get("limits")
         limits = limits if isinstance(limits, dict) else {}
@@ -186,9 +188,7 @@ def _mask_quoted(sql: str) -> tuple[str, list[tuple[int, str]]]:
         elif ch == "[":
             end = sql.find("]", i + 1)
             if end == -1:
-                raise SqlPolicyError(
-                    "sql rejected by policy: unterminated bracketed identifier"
-                )
+                raise SqlPolicyError("sql rejected by policy: unterminated bracketed identifier")
             out.append("[")
             out.append(" " * (end - i - 1))
             out.append("]")
@@ -200,9 +200,7 @@ def _mask_quoted(sql: str) -> tuple[str, list[tuple[int, str]]]:
     return "".join(out), identifiers
 
 
-def _called_function_names(
-    masked: str, identifiers: list[tuple[int, str]]
-) -> "list[str]":
+def _called_function_names(masked: str, identifiers: list[tuple[int, str]]) -> "list[str]":
     """All function names invoked in the statement, lowercased: bare-identifier
     calls found by regex over the masked text, plus quoted-identifier calls
     (a quoted identifier whose next non-space character is an open paren)."""

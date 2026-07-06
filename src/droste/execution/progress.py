@@ -4,7 +4,6 @@ import json
 import sys
 from typing import Callable
 
-
 ProgressCallback = Callable[[str], None]
 
 

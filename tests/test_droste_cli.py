@@ -6,10 +6,9 @@ import json
 import sqlite3
 
 import pytest
-
-from droste_cli.main import main, build_parser
-
 from test_openai_compat_client import StubOpenAIServer
+
+from droste_cli.main import build_parser, main
 
 
 @pytest.fixture()
@@ -32,11 +31,28 @@ def make_sqlite(path):
 def test_parse_flags_and_positionals():
     args = build_parser().parse_args(
         [
-            "a.txt", "b.txt", "what changed?",
-            "--model", "m", "--base-url", "http://x/v1", "--api-key", "k",
-            "--subcall-model", "sm", "--subcall-max-output-tokens", "512",
-            "--reasoning-effort", "low", "--max-iterations", "3",
-            "--max-subcalls", "7", "--json", "--verbose", "--quiet",
+            "a.txt",
+            "b.txt",
+            "what changed?",
+            "--model",
+            "m",
+            "--base-url",
+            "http://x/v1",
+            "--api-key",
+            "k",
+            "--subcall-model",
+            "sm",
+            "--subcall-max-output-tokens",
+            "512",
+            "--reasoning-effort",
+            "low",
+            "--max-iterations",
+            "3",
+            "--max-subcalls",
+            "7",
+            "--json",
+            "--verbose",
+            "--quiet",
         ]
     )
     assert args.inputs == ["a.txt", "b.txt", "what changed?"]
@@ -140,19 +156,20 @@ def test_db_non_sqlite_file_is_usage_error(tmp_path, capsys):
 def _e2e_argv(server, *positionals, extra=()):
     return [
         *[str(p) for p in positionals],
-        "--model", "root-model",
-        "--base-url", server.base_url,
-        "--api-key", "k",
-        "--max-iterations", "2",
+        "--model",
+        "root-model",
+        "--base-url",
+        server.base_url,
+        "--api-key",
+        "k",
+        "--max-iterations",
+        "2",
         *extra,
     ]
 
 
 ANSWER_FROM_FILE = (
-    "```python\n"
-    "answer['content'] = context['files'][0]['text']\n"
-    "answer['ready'] = True\n"
-    "```"
+    "```python\nanswer['content'] = context['files'][0]['text']\nanswer['ready'] = True\n```"
 )
 
 
@@ -217,7 +234,7 @@ def test_ask_positional_sqlite_end_to_end(stub_server, tmp_path, capsys):
     make_sqlite(db)
     stub_server.root_responses = [
         "```python\n"
-        "rows = db.query(\"SELECT name FROM t\")\n"
+        'rows = db.query("SELECT name FROM t")\n'
         "answer['content'] = rows[0]['name']\n"
         "answer['ready'] = True\n"
         "```",
@@ -243,10 +260,7 @@ def test_ask_json_shape(stub_server, tmp_path, capsys):
     doc = tmp_path / "doc.txt"
     doc.write_text("payload text")
     stub_server.root_responses = [
-        "```python\n"
-        "answer['content'] = 'json answer'\n"
-        "answer['ready'] = True\n"
-        "```",
+        "```python\nanswer['content'] = 'json answer'\nanswer['ready'] = True\n```",
     ]
     exit_code = main(_e2e_argv(stub_server, doc, "q", extra=["--json"]))
     captured = capsys.readouterr()
@@ -275,11 +289,16 @@ def test_ask_extracted_answer_exits_zero_with_note(stub_server, tmp_path, capsys
     ]
     exit_code = main(
         [
-            str(doc), "q",
-            "--model", "root-model",
-            "--base-url", stub_server.base_url,
-            "--api-key", "k",
-            "--max-iterations", "1",
+            str(doc),
+            "q",
+            "--model",
+            "root-model",
+            "--base-url",
+            stub_server.base_url,
+            "--api-key",
+            "k",
+            "--max-iterations",
+            "1",
         ]
     )
     captured = capsys.readouterr()
@@ -383,10 +402,16 @@ def test_keyless_default_endpoint_fails_upfront(tmp_path, monkeypatch, capsys):
     # mid-flight with a raw 401 — fail upfront with one clean line.
     f = tmp_path / "a.txt"
     f.write_text("x")
-    code = main([
-        str(f), "q", "--model", "gpt-5.2-mini",
-        "--base-url", "https://api.openai.com/v1",
-    ])
+    code = main(
+        [
+            str(f),
+            "q",
+            "--model",
+            "gpt-5.2-mini",
+            "--base-url",
+            "https://api.openai.com/v1",
+        ]
+    )
     assert code == 2
     err = capsys.readouterr().err
     assert "no API key" in err
@@ -399,10 +424,18 @@ def test_keyless_custom_base_url_is_allowed(stub_server, tmp_path, monkeypatch, 
     doc = tmp_path / "doc.txt"
     doc.write_text("local content")
     stub_server.root_responses = [ANSWER_FROM_FILE]
-    code = main([
-        str(doc), "q", "--model", "root-model",
-        "--base-url", stub_server.base_url, "--max-iterations", "2",
-    ])
+    code = main(
+        [
+            str(doc),
+            "q",
+            "--model",
+            "root-model",
+            "--base-url",
+            stub_server.base_url,
+            "--max-iterations",
+            "2",
+        ]
+    )
     assert code == 0
     assert capsys.readouterr().out.strip() == "local content"
 
@@ -435,10 +468,18 @@ def test_key_check_matches_hostname_not_substring(tmp_path, monkeypatch, capsys)
     f.write_text("x")
     # Path contains the string but the host is a keyless proxy: allowed
     # through the guard (fails later at connect, which is correct).
-    code = main([
-        str(f), "q", "--model", "m",
-        "--base-url", "http://127.0.0.1:9/api.openai.com", "--max-iterations", "1",
-    ])
+    code = main(
+        [
+            str(f),
+            "q",
+            "--model",
+            "m",
+            "--base-url",
+            "http://127.0.0.1:9/api.openai.com",
+            "--max-iterations",
+            "1",
+        ]
+    )
     assert code == 1  # connection failure, NOT the exit-2 key usage error
     assert "no API key" not in capsys.readouterr().err
     # Uppercase host is still the real endpoint: guard fires.
@@ -491,7 +532,9 @@ def test_stored_credentials_run_end_to_end(stub_native_server, tmp_path, capsys)
     assert headers.get("x-modelrelay-api-key") == "mr_sk_stored"
 
 
-def test_stored_login_wins_over_ambient_env_keys(stub_server, stub_native_server, tmp_path, monkeypatch, capsys):
+def test_stored_login_wins_over_ambient_env_keys(
+    stub_server, stub_native_server, tmp_path, monkeypatch, capsys
+):
     # Running `droste login` IS the explicit choice, so ModelRelay stays
     # the default even with OPENAI_* exported in the shell (most developers
     # have ambient keys; the free credits must not be silently bypassed).
@@ -517,11 +560,20 @@ def test_flags_override_stored_login_for_one_run(stub_server, stub_native_server
     doc.write_text("byok content")
     stub_server.root_responses = [ANSWER_FROM_FILE]
 
-    exit_code = main([
-        str(doc), "q", "--model", "root-model",
-        "--base-url", stub_server.base_url, "--api-key", "k",
-        "--max-iterations", "2",
-    ])
+    exit_code = main(
+        [
+            str(doc),
+            "q",
+            "--model",
+            "root-model",
+            "--base-url",
+            stub_server.base_url,
+            "--api-key",
+            "k",
+            "--max-iterations",
+            "2",
+        ]
+    )
     assert exit_code == 0
     assert capsys.readouterr().out.strip() == "byok content"
     assert stub_server.requests, "flags must route to BYOK"

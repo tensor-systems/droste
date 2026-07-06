@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 @dataclass
 class ExecutionStats:
     """Mutable execution statistics."""
+
     depth: int = 0
     calls_made: int = 0
     total_tokens: int = 0

@@ -225,8 +225,7 @@ def test_login_end_to_end_grants_credits(fake_platform, capsys):
     # Balance was fetched with the API key header, not a bearer token
     # (urllib normalizes header casing, so compare case-insensitively).
     normalized = [
-        {k.lower(): v for k, v in headers.items()}
-        for headers in fake_platform.balance_auth_headers
+        {k.lower(): v for k, v in headers.items()} for headers in fake_platform.balance_auth_headers
     ]
     assert any(h.get("x-modelrelay-api-key") == "mr_sk_minted_secret" for h in normalized)
     assert all("authorization" not in h for h in normalized)

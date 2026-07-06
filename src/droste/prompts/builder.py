@@ -9,6 +9,7 @@ from .tips import TIPS_PROFILES
 @dataclass
 class SystemPromptBuilder:
     """Build a system prompt from base instructions, schema, and tips."""
+
     base: str = BASE_SYSTEM_PROMPT
     schema: str | None = None
     tips_profile: str | None = None

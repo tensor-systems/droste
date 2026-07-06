@@ -132,9 +132,7 @@ def test_gate_ignores_string_literal_contents() -> None:
 
 
 def test_escaped_quotes_inside_literal() -> None:
-    normalized = validate_local_sql(
-        "SELECT 'it''s; fine' AS v", DEFAULT_POLICY
-    )
+    normalized = validate_local_sql("SELECT 'it''s; fine' AS v", DEFAULT_POLICY)
     assert normalized.startswith("SELECT 'it''s; fine'")
 
 
@@ -423,9 +421,7 @@ def test_register_end_to_end(tmp_path) -> None:
     register()
     path = _make_db(tmp_path)
     spec = {"type": "sql", "name": "db", "sqlite_path": path}
-    sources, default = build_data_sources(
-        {"data_sources": [spec], "default_source": "db"}, None
-    )
+    sources, default = build_data_sources({"data_sources": [spec], "default_source": "db"}, None)
     assert len(sources) == 1 and default == "db"
     env = DataSourceRegistry(sources, default_source_name=default).globals()
 
@@ -460,9 +456,7 @@ def test_factory_passes_ctx_connection(tmp_path) -> None:
     path = _make_db(tmp_path)
     register()
     ctx = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
-    sources, _ = build_data_sources(
-        {"data_sources": [{"type": "sql", "name": "db"}]}, ctx
-    )
+    sources, _ = build_data_sources({"data_sources": [{"type": "sql", "name": "db"}]}, ctx)
     assert sources[0].query("SELECT count(*) AS n FROM users") == [{"n": 2}]
 
 

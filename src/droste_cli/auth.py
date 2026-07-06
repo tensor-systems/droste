@@ -163,7 +163,10 @@ def _start_loopback_server(nonce: str) -> tuple[ThreadingHTTPServer, int, _Hando
             # must NOT abort the wait — the real callback may still arrive.
             # A well-formed callback with the WRONG nonce is terminal: that
             # is the CSRF signal this nonce exists to catch.
-            if urllib.parse.urlparse(self.path).path != "/callback" or "handoff_nonce" not in fields:
+            if (
+                urllib.parse.urlparse(self.path).path != "/callback"
+                or "handoff_nonce" not in fields
+            ):
                 self._respond(404, _FAIL_HTML.format(msg="unexpected request"))
                 return
             if fields.get("handoff_nonce") != nonce:
@@ -369,7 +372,10 @@ def _setup_byok() -> None:
     env_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or ""
     api_key = ""
     if env_key:
-        if _ask(f"use {_mask_key(env_key)} from your environment? [Y/n]: ").lower() not in ("n", "no"):
+        if _ask(f"use {_mask_key(env_key)} from your environment? [Y/n]: ").lower() not in (
+            "n",
+            "no",
+        ):
             api_key = env_key
     if not api_key:
         try:

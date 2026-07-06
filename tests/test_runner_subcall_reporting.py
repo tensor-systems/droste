@@ -231,14 +231,17 @@ def test_wrapper_rejects_redirect_to_disallowed_host():
         pass
 
     with _pytest.raises(ValueError, match="not in allowed_hosts"):
-        handler.redirect_request(_Req(), None, 302, "Found", {}, "http://169.254.169.254/latest/meta-data")
+        handler.redirect_request(
+            _Req(), None, 302, "Found", {}, "http://169.254.169.254/latest/meta-data"
+        )
 
 
 def test_wrapper_malformed_allowed_hosts_fails_closed():
     # A present-but-malformed allowed_hosts (string / empty list) is a config
     # error, not an allow-all — fail closed (codex review, #54).
-    from droste_runner.runner import DataSourceWrapper
     import pytest as _pytest
+
+    from droste_runner.runner import DataSourceWrapper
 
     for bad in ("partner.example.com", [], ["", "  "]):
         w = DataSourceWrapper({"base_url": "http://h/x", "token": "t", "allowed_hosts": bad})

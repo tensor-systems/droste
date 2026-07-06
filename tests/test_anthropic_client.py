@@ -67,9 +67,7 @@ class StubAnthropicServer:
                         content = f"echo: {prompt}"
                     else:
                         with stub._lock:
-                            content = (
-                                stub.root_responses.pop(0) if stub.root_responses else "hi"
-                            )
+                            content = stub.root_responses.pop(0) if stub.root_responses else "hi"
                     if payload.get("stream"):
                         self.send_response(200)
                         self.send_header("Content-Type", "text/event-stream")
@@ -94,7 +92,12 @@ class StubAnthropicServer:
                             if not piece:
                                 continue
                             if stub.stream_error_midway and i == 1:
-                                sse({"type": "error", "error": {"type": "overloaded_error", "message": "boom"}})
+                                sse(
+                                    {
+                                        "type": "error",
+                                        "error": {"type": "overloaded_error", "message": "boom"},
+                                    }
+                                )
                                 return
                             sse(
                                 {
@@ -269,16 +272,22 @@ def test_subcall_requires_positive_output_bound(stub):
     ctx = create_execution_context(max_calls=5, max_iterations=5)
     with pytest.raises(ValueError, match="max_tokens"):
         AnthropicSubcallClient(
-            model="sub-model", context=ctx, base_url=stub.base_url,
-            api_key="sk-ant-k", max_output_tokens=0,
+            model="sub-model",
+            context=ctx,
+            base_url=stub.base_url,
+            api_key="sk-ant-k",
+            max_output_tokens=0,
         )
 
 
 def test_batch_bounded_concurrency(stub):
     ctx = create_execution_context(max_calls=20, max_iterations=5)
     sub = AnthropicSubcallClient(
-        model="sub-model", context=ctx, base_url=stub.base_url,
-        api_key="sk-ant-k", max_parallel=3,
+        model="sub-model",
+        context=ctx,
+        base_url=stub.base_url,
+        api_key="sk-ant-k",
+        max_parallel=3,
     )
     results = sub.llm_batch([f"p{i}" for i in range(9)])
     assert results == [f"echo: p{i}" for i in range(9)]
@@ -331,10 +340,7 @@ def test_cli_e2e_anthropic_via_env(stub, tmp_path, monkeypatch, capsys):
     doc = tmp_path / "doc.txt"
     doc.write_text("anthropic content")
     stub.root_responses = [
-        "```python\n"
-        "answer['content'] = context['files'][0]['text']\n"
-        "answer['ready'] = True\n"
-        "```",
+        "```python\nanswer['content'] = context['files'][0]['text']\nanswer['ready'] = True\n```",
     ]
     code = main([str(doc), "what does it say?", "--model", "claude-test", "--max-iterations", "2"])
     captured = capsys.readouterr()
@@ -364,5 +370,16 @@ def test_cli_keyless_error_mentions_anthropic(tmp_path, monkeypatch, capsys):
 
 def test_clients_subpackage_reexports():
     # codex review (#58): the droste.clients import surface must stay
-    # consistent for all built-in clients.
-    from droste.clients import AnthropicClient as A, AnthropicSubcallClient as B  # noqa: F401
+    # consistent for all built-in clients. Assert names explicitly so a
+    # linter can never strip the "unused" imports this test exists for.
+    import droste.clients as clients
+
+    for name in (
+        "AnthropicClient",
+        "AnthropicSubcallClient",
+        "OpenAICompatClient",
+        "OpenAICompatSubcallClient",
+        "ModelRelayClient",
+        "ModelRelaySubcallClient",
+    ):
+        assert hasattr(clients, name), name

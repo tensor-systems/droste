@@ -5,9 +5,9 @@ from .config import (
     DEFAULT_MAX_OUTPUT_CHARS,
     ExecutionConfig,
 )
-from .stats import ExecutionStats
 from .context import ExecutionContext, create_execution_context
 from .progress import ProgressCallback, emit_progress
+from .stats import ExecutionStats
 
 __all__ = [
     "DEFAULT_MAX_CALLS",

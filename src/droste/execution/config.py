@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 from .progress import ProgressCallback
 
-
 DEFAULT_MAX_OUTPUT_CHARS = 25000
 DEFAULT_MAX_DEPTH = 1
 # Raised 10 -> 50 and 5 -> 20 (issue #21): an explore-first orchestration
@@ -17,6 +16,7 @@ DEFAULT_MAX_ITERATIONS = 20
 @dataclass(frozen=True)
 class ExecutionConfig:
     """Immutable configuration for RLM execution."""
+
     max_depth: int = DEFAULT_MAX_DEPTH
     max_calls: int = DEFAULT_MAX_CALLS
     max_iterations: int = DEFAULT_MAX_ITERATIONS

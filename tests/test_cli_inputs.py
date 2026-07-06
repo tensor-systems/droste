@@ -15,11 +15,11 @@ import pytest
 from droste_cli.inputs import (
     Classified,
     InputError,
+    _WalkStats,
     classify,
     is_sqlite_file,
     load_inputs,
     walk_directory,
-    _WalkStats,
 )
 
 
@@ -149,9 +149,7 @@ def test_load_requires_a_question(tmp_path):
 def test_load_explicit_file_bypasses_per_file_cap(tmp_path):
     big = tmp_path / "big.txt"
     big.write_text("x" * 500)
-    loaded = load_inputs(
-        Classified(question="q", files=[str(big)]), max_file_bytes=50
-    )
+    loaded = load_inputs(Classified(question="q", files=[str(big)]), max_file_bytes=50)
     assert loaded.context is not None
     assert loaded.context["files"][0]["size"] == 500
 
@@ -160,9 +158,7 @@ def test_load_total_budget_is_a_loud_error(tmp_path):
     f = tmp_path / "a.txt"
     f.write_text("x" * 100)
     with pytest.raises(InputError, match="total budget"):
-        load_inputs(
-            Classified(question="q", files=[str(f)]), max_total_bytes=10
-        )
+        load_inputs(Classified(question="q", files=[str(f)]), max_total_bytes=10)
 
 
 def test_load_multiple_dbs_is_an_error(tmp_path):
@@ -217,9 +213,7 @@ def test_load_explicit_dash_with_empty_stdin_errors(tmp_path, monkeypatch):
         )
     # …while an empty *implicit* pipe (cron's /dev/null) still gets the cwd
     # default.
-    loaded = load_inputs(
-        Classified(question="q", reads_stdin=True), stdin_text=None
-    )
+    loaded = load_inputs(Classified(question="q", reads_stdin=True), stdin_text=None)
     assert loaded.context is not None
     assert [f["name"] for f in loaded.context["files"]] == ["unrelated.md"]
 
@@ -230,15 +224,11 @@ def test_load_budget_counts_utf8_bytes_not_characters(tmp_path):
     f = tmp_path / "accents.txt"
     f.write_text("é" * 100, encoding="utf-8")
     with pytest.raises(InputError, match="total budget"):
-        load_inputs(
-            Classified(question="q", files=[str(f)]), max_total_bytes=150
-        )
+        load_inputs(Classified(question="q", files=[str(f)]), max_total_bytes=150)
 
 
 def test_load_stdin_becomes_a_context_file():
-    loaded = load_inputs(
-        Classified(question="q", reads_stdin=True), stdin_text="piped log line"
-    )
+    loaded = load_inputs(Classified(question="q", reads_stdin=True), stdin_text="piped log line")
     assert loaded.context is not None
     assert loaded.context["files"][0]["path"] == "<stdin>"
     assert loaded.context["files"][0]["text"] == "piped log line"
@@ -251,9 +241,7 @@ def test_report_line_counts_everything(tmp_path):
     (docs / "blob.bin").write_bytes(b"\x00")
     db = tmp_path / "app.db"
     make_sqlite(db)
-    loaded = load_inputs(
-        Classified(question="q", dirs=[str(docs)], dbs=[str(db)])
-    )
+    loaded = load_inputs(Classified(question="q", dirs=[str(docs)], dbs=[str(db)]))
     assert "loaded 1 file" in loaded.report
     assert f"db: {db}" in loaded.report
     assert "1 binary" in loaded.report
@@ -320,9 +308,7 @@ def test_load_over_budget_explicit_file_errors_without_reading(tmp_path, monkeyp
 
     monkeypatch.setattr("droste_cli.inputs._read_text", boom)
     with pytest.raises(InputError, match="total budget"):
-        load_inputs(
-            Classified(question="q", files=[str(big)]), max_total_bytes=100
-        )
+        load_inputs(Classified(question="q", files=[str(big)]), max_total_bytes=100)
 
 
 def test_walk_skips_fifos_and_special_files(tmp_path):
@@ -372,9 +358,7 @@ def test_load_explicit_empty_dir_errors_even_with_other_inputs(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
     with pytest.raises(InputError, match="no readable text files in"):
-        load_inputs(
-            Classified(question="q", files=[str(f)], dirs=[str(empty)])
-        )
+        load_inputs(Classified(question="q", files=[str(f)], dirs=[str(empty)]))
 
 
 def test_slow_pipe_producer_is_waited_for(monkeypatch):

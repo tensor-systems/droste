@@ -14,7 +14,9 @@ import urllib.error
 
 _SECRET_PATTERNS = (
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+"),
-    re.compile(r'''(?i)\b(api[_-]?key|apikey|token|authorization|secret|password|key)\b(["\'\s]*[:=]["\'\s]*)[^\s"\'&,;}]+'''),
+    re.compile(
+        r"""(?i)\b(api[_-]?key|apikey|token|authorization|secret|password|key)\b(["\'\s]*[:=]["\'\s]*)[^\s"\'&,;}]+"""
+    ),
     re.compile(r"\bsk-[A-Za-z0-9_-]{8,}"),
 )
 
@@ -22,7 +24,9 @@ _SECRET_PATTERNS = (
 def redact_secrets(text: str) -> str:
     for pattern in _SECRET_PATTERNS:
         text = pattern.sub(
-            lambda m: (m.group(1) + m.group(2) if m.lastindex and m.lastindex >= 2 else "") + "[redacted]",
+            lambda m: (
+                (m.group(1) + m.group(2) if m.lastindex and m.lastindex >= 2 else "") + "[redacted]"
+            ),
             text,
         )
     return text

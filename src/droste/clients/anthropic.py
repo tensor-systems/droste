@@ -133,7 +133,9 @@ class _MessagesTransport:
     def url(self) -> str:
         return self._url
 
-    def _request(self, payload: dict[str, Any], *, accept: str | None = None) -> urllib.request.Request:
+    def _request(
+        self, payload: dict[str, Any], *, accept: str | None = None
+    ) -> urllib.request.Request:
         body = json.dumps(payload).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
@@ -191,7 +193,7 @@ class _MessagesTransport:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line.startswith("data:"):
                         continue
-                    data_str = line[len("data:"):].strip()
+                    data_str = line[len("data:") :].strip()
                     try:
                         event = json.loads(data_str)
                     except Exception:
@@ -336,15 +338,15 @@ class AnthropicClient:
             raw_max = request.get("max_tokens")
             # Preserve an explicit 0 only as "use the default" — the API
             # requires a positive max_tokens.
-            max_tokens = (
-                DEFAULT_ANTHROPIC_MAX_TOKENS if raw_max in (None, "", 0) else int(raw_max)
-            )
+            max_tokens = DEFAULT_ANTHROPIC_MAX_TOKENS if raw_max in (None, "", 0) else int(raw_max)
             response = self.responses_create(
                 request.get("messages") or [],
                 model=str(request.get("model") or ""),
                 max_tokens=max_tokens,
                 temperature=(
-                    float(request["temperature"]) if request.get("temperature") is not None else None
+                    float(request["temperature"])
+                    if request.get("temperature") is not None
+                    else None
                 ),
             )
             results.append(str(response))
@@ -387,9 +389,7 @@ class AnthropicSubcallClient(SubcallClient):
         if not model:
             raise ValueError("model is required")
         if max_output_tokens <= 0:
-            raise ValueError(
-                "max_output_tokens must be > 0 (the Messages API requires max_tokens)"
-            )
+            raise ValueError("max_output_tokens must be > 0 (the Messages API requires max_tokens)")
         if max_parallel < 1:
             raise ValueError("max_parallel must be >= 1")
         self._transport = _MessagesTransport(
@@ -460,9 +460,7 @@ class AnthropicSubcallClient(SubcallClient):
     ) -> tuple[list[str], list[dict[str, object]]]:
         results, errors = self._run_batch(prompts, contexts)
         structured = [
-            {"index": idx, "error": str(err)}
-            for idx, err in enumerate(errors)
-            if err is not None
+            {"index": idx, "error": str(err)} for idx, err in enumerate(errors) if err is not None
         ]
         return results, structured
 

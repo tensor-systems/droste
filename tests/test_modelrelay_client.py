@@ -63,11 +63,17 @@ class StubResponsesServer:
                     third = max(1, len(content) // 3)
                     pieces = [content[:third], content[third : 2 * third], content[2 * third :]]
                     self.wfile.write(
-                        (json.dumps({"type": "start", "model": payload.get("model")}) + "\n").encode()
+                        (
+                            json.dumps({"type": "start", "model": payload.get("model")}) + "\n"
+                        ).encode()
                     )
                     for i, piece in enumerate(p for p in pieces if p):
                         if stub.stream_error_midway and i == 1:
-                            event = {"type": "error", "code": "PROVIDER_ERROR", "message": "exploded"}
+                            event = {
+                                "type": "error",
+                                "code": "PROVIDER_ERROR",
+                                "message": "exploded",
+                            }
                             self.wfile.write((json.dumps(event) + "\n").encode())
                             return
                         event = {"type": "update", "delta": piece, "stream_version": "v2"}

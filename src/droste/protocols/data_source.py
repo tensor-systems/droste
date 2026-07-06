@@ -5,6 +5,7 @@ from typing import Any, Protocol, TypedDict
 
 class SearchResult(TypedDict, total=False):
     """Single search result."""
+
     id: str
     snippet: str
     metadata: dict[str, Any]
@@ -13,6 +14,7 @@ class SearchResult(TypedDict, total=False):
 
 class DataSourceCapabilities(TypedDict):
     """Capabilities for a data source."""
+
     sql: bool
     search: bool
     get: bool
