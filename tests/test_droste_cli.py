@@ -364,3 +364,71 @@ def test_default_run_does_not_stream(stub_server, tmp_path, capsys):
     exit_code = main(_e2e_argv(stub_server, doc, "q"))
     assert exit_code == 0
     assert not any(r.get("stream") for r in stub_server.requests)
+
+
+def test_keyless_default_endpoint_fails_upfront(tmp_path, monkeypatch, capsys):
+    # Against api.openai.com a keyless run can only die mid-flight with a raw
+    # 401 — fail before loading anything, with one clean line.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    f = tmp_path / "a.txt"
+    f.write_text("x")
+    code = main([str(f), "q", "--model", "gpt-5.2-mini"])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "no API key" in err
+    assert "401" not in err  # one clean line, not a raw HTTP dump
+
+
+def test_keyless_custom_base_url_is_allowed(stub_server, tmp_path, monkeypatch, capsys):
+    # Ollama-style endpoints are legitimately keyless.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    doc = tmp_path / "doc.txt"
+    doc.write_text("local content")
+    stub_server.root_responses = [ANSWER_FROM_FILE]
+    code = main([
+        str(doc), "q", "--model", "root-model",
+        "--base-url", stub_server.base_url, "--max-iterations", "2",
+    ])
+    assert code == 0
+    assert capsys.readouterr().out.strip() == "local content"
+
+
+def test_file_args_ignore_inherited_stdin(stub_server, tmp_path, capsys, monkeypatch):
+    # `droste "q" file` with an unrelated inherited pipe: the pipe's content
+    # must not leak into the context (unix rule: file args win, no `-` given).
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(b"unrelated pipe noise")))
+    doc = tmp_path / "doc.txt"
+    doc.write_text("file content")
+    stub_server.root_responses = [
+        "```python\n"
+        "answer['content'] = ' | '.join(f['path'] for f in context['files'])\n"
+        "answer['ready'] = True\n"
+        "```",
+    ]
+    code = main(_e2e_argv(stub_server, doc, "q"))
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "<stdin>" not in out
+
+
+def test_key_check_matches_hostname_not_substring(tmp_path, monkeypatch, capsys):
+    # codex review (#53): a proxy URL merely containing the string must not
+    # trip the guard; host comparison is exact and case-insensitive.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    f = tmp_path / "a.txt"
+    f.write_text("x")
+    # Path contains the string but the host is a keyless proxy: allowed
+    # through the guard (fails later at connect, which is correct).
+    code = main([
+        str(f), "q", "--model", "m",
+        "--base-url", "http://127.0.0.1:9/api.openai.com", "--max-iterations", "1",
+    ])
+    assert code == 1  # connection failure, NOT the exit-2 key usage error
+    assert "no API key" not in capsys.readouterr().err
+    # Uppercase host is still the real endpoint: guard fires.
+    code = main([str(f), "q", "--model", "m", "--base-url", "https://API.OPENAI.COM/v1"])
+    assert code == 2
+    assert "no API key" in capsys.readouterr().err

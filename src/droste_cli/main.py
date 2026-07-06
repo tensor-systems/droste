@@ -215,7 +215,19 @@ def run_ask(args: argparse.Namespace) -> int:
 
     try:
         classified = classify(args.inputs, stdin_is_tty=sys.stdin is None or sys.stdin.isatty())
-        stdin_text = read_piped_stdin(limit=args.max_bytes) if classified.reads_stdin else None
+        # Implicit stdin is consumed only when nothing else provides data —
+        # `droste "q" file.txt` in a script must not hang on (or slurp) an
+        # unrelated inherited pipe; unix tools ignore stdin when file args
+        # are given. Explicit `-` always reads.
+        wants_stdin = classified.stdin_explicit or (
+            classified.reads_stdin
+            and not (classified.files or classified.dirs or classified.dbs or args.db)
+        )
+        stdin_text = (
+            read_piped_stdin(limit=args.max_bytes, explicit=classified.stdin_explicit)
+            if wants_stdin
+            else None
+        )
         loaded = load_inputs(
             classified,
             db_flag=args.db,
@@ -234,6 +246,22 @@ def run_ask(args: argparse.Namespace) -> int:
     if loaded.db_path:
         source = _load_sql_source(loaded.db_path)
         registry = DataSourceRegistry([source], default_source_name=source.name())
+
+    # The default endpoint (api.openai.com) always requires a key, so a
+    # keyless run there can only die mid-flight with a raw 401 — catch it
+    # before any client is built. A custom --base-url (Ollama, vLLM, ...)
+    # may legitimately be keyless. Input errors above stay most-specific.
+    from urllib.parse import urlparse
+
+    from droste.clients.openai_compat import resolve_api_key, resolve_base_url
+
+    resolved_host = (urlparse(resolve_base_url(args.base_url)).hostname or "").lower()
+    if not resolve_api_key(args.api_key) and resolved_host == "api.openai.com":
+        raise CLIError(
+            "no API key: set OPENAI_API_KEY or pass --api-key (custom "
+            "--base-url endpoints may run keyless)"
+        )
+
 
     # --verbose/--trace stream the root model's output (the generated code)
     # to stderr as it is written — the "watch it think" view. The echo also

@@ -366,12 +366,19 @@ def load_inputs(
     )
 
 
-def read_piped_stdin(limit: int = DEFAULT_MAX_TOTAL_BYTES) -> str | None:
+def read_piped_stdin(limit: int = DEFAULT_MAX_TOTAL_BYTES, *, explicit: bool = False) -> str | None:
     """Read stdin when it's a pipe/redirect; None on a terminal.
 
     Reads at most ``limit`` bytes plus one — a stream over the budget errors
     immediately instead of buffering (or hanging on) an unbounded pipe. An
     empty read (e.g. cron's /dev/null) counts as no input.
+
+    The caller only invokes this when stdin is the intended input: an
+    explicit ``-``, or a pipe with no other data args (grep-style — a bare
+    invocation under a pipeline waits for its producer, slow ones included).
+    When other data args are present the caller never calls this at all,
+    which is what keeps ``droste "q" file`` from hanging on an inherited
+    silent pipe in scripts/CI.
     """
     if sys.stdin is None or sys.stdin.isatty():
         return None

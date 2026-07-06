@@ -269,11 +269,11 @@ def test_stdin_read_is_bounded_by_budget(monkeypatch):
     from droste_cli.inputs import read_piped_stdin
 
     with pytest.raises(InputError, match="stdin exceeds the total budget"):
-        read_piped_stdin(limit=50)
+        read_piped_stdin(limit=50, explicit=True)
 
     fake_small = io.TextIOWrapper(io.BytesIO(b"y" * 10))
     monkeypatch.setattr("sys.stdin", fake_small)
-    assert read_piped_stdin(limit=50) == "y" * 10
+    assert read_piped_stdin(limit=50, explicit=True) == "y" * 10
 
 
 def test_walk_counts_unreadable_subtrees(tmp_path):
@@ -302,11 +302,11 @@ def test_stdin_whitespace_only_is_still_data(monkeypatch):
 
     fake = io.TextIOWrapper(io.BytesIO(b"\n\n  \n"))
     monkeypatch.setattr("sys.stdin", fake)
-    assert read_piped_stdin(limit=50) == "\n\n  \n"
+    assert read_piped_stdin(limit=50, explicit=True) == "\n\n  \n"
 
     empty = io.TextIOWrapper(io.BytesIO(b""))
     monkeypatch.setattr("sys.stdin", empty)
-    assert read_piped_stdin(limit=50) is None
+    assert read_piped_stdin(limit=50, explicit=True) is None
 
 
 def test_load_over_budget_explicit_file_errors_without_reading(tmp_path, monkeypatch):
@@ -375,3 +375,27 @@ def test_load_explicit_empty_dir_errors_even_with_other_inputs(tmp_path):
         load_inputs(
             Classified(question="q", files=[str(f)], dirs=[str(empty)])
         )
+
+
+def test_slow_pipe_producer_is_waited_for(monkeypatch):
+    # grep-style: a bare invocation under a pipeline waits for its producer —
+    # slow first bytes are data, not absence (codex review, #53).
+    import io
+    import os as _os
+    import threading
+
+    r_fd, w_fd = _os.pipe()
+
+    def slow_writer():
+        import time
+
+        time.sleep(0.4)
+        _os.write(w_fd, b"late data")
+        _os.close(w_fd)
+
+    threading.Thread(target=slow_writer, daemon=True).start()
+    reader = io.TextIOWrapper(_os.fdopen(r_fd, "rb"))
+    monkeypatch.setattr("sys.stdin", reader)
+    from droste_cli.inputs import read_piped_stdin
+
+    assert read_piped_stdin(limit=100) == "late data"
