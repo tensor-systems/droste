@@ -253,6 +253,38 @@ class _ChatCompletionsTransport:
         return assembled
 
 
+def _token_param_for(param_state: dict[str, str], model: str) -> str:
+    return param_state.get(model, "max_tokens")
+
+
+def _complete_with_token_param_migration(
+    transport: "_ChatCompletionsTransport",
+    payload: dict[str, Any],
+    param_state: dict[str, str],
+    model: str,
+) -> dict[str, Any]:
+    """POST via ``transport`` applying the modern-OpenAI token-param rule.
+
+    Modern OpenAI models 400 on ``max_tokens`` ("use max_completion_tokens");
+    the wider compat ecosystem (Google, Ollama, vLLM) speaks ``max_tokens``.
+    On that specific 400 the param migrates and ``param_state`` remembers it
+    **per model** (one client can serve mixed models via batch_responses;
+    a modern model must not poison max_tokens-only models on the same
+    endpoint). ``extra_body`` wins: a caller-set max_completion_tokens
+    survives. The retry decision keys off the PAYLOAD, not the state —
+    concurrent batch workers race the state flip.
+    """
+    try:
+        return transport.complete(payload)
+    except RuntimeError as exc:
+        if "max_completion_tokens" in str(exc) and "max_tokens" in payload:
+            param_state[model] = "max_completion_tokens"
+            moved = payload.pop("max_tokens")
+            payload.setdefault("max_completion_tokens", moved)
+            return transport.complete(payload)
+        raise
+
+
 class OpenAICompatClient:
     """Root ``LLMClient`` over an OpenAI-compatible chat-completions endpoint.
 
@@ -293,6 +325,7 @@ class OpenAICompatClient:
         self._max_output_tokens = int(max_output_tokens or 0)
         self._extra_body = dict(extra_body) if extra_body else {}
         self._on_delta = on_delta
+        self._token_param: dict[str, str] = {}  # per-model migration memory
         # Parity with RootLLMClient's response metadata surface.
         self.last_provider = ""
         self.last_response_id = ""
@@ -321,7 +354,7 @@ class OpenAICompatClient:
             payload["temperature"] = temp
         max_output_tokens = self._max_output_tokens or int(max_tokens or 0)
         if max_output_tokens > 0:
-            payload["max_tokens"] = max_output_tokens
+            payload[_token_param_for(self._token_param, resolved_model)] = max_output_tokens
         if self._stop:
             payload["stop"] = self._stop
         payload.update(self._extra_body)
@@ -330,9 +363,22 @@ class OpenAICompatClient:
         # they generate; the assembled response is shape-identical, so the
         # loop never knows the difference.
         if self._on_delta is not None:
-            data = self._transport.stream(payload, self._on_delta)
+            try:
+                data = self._transport.stream(payload, self._on_delta)
+            except RuntimeError as exc:
+                # Same token-param migration as the non-streaming path (see
+                # _complete_with_token_param_migration).
+                if "max_completion_tokens" in str(exc) and "max_tokens" in payload:
+                    self._token_param[resolved_model] = "max_completion_tokens"
+                    moved = payload.pop("max_tokens")
+                    payload.setdefault("max_completion_tokens", moved)
+                    data = self._transport.stream(payload, self._on_delta)
+                else:
+                    raise
         else:
-            data = self._transport.complete(payload)
+            data = _complete_with_token_param_migration(
+                self._transport, payload, self._token_param, resolved_model
+            )
         result = _message_content(data, label="root llm")
         choice = data["choices"][0]
         self.last_provider = str(data.get("provider") or "")
@@ -412,6 +458,7 @@ class OpenAICompatSubcallClient(SubcallClient):
         self._temperature = temperature
         self._reasoning_effort = str(reasoning_effort or "")
         self._extra_body = dict(extra_body) if extra_body else {}
+        self._token_param: dict[str, str] = {}  # per-model migration memory
         self._max_parallel = int(max_parallel)
         self._lock = threading.Lock()
         self._depth = threading.local()
@@ -446,13 +493,15 @@ class OpenAICompatSubcallClient(SubcallClient):
                 "messages": [{"role": "user", "content": prompt}],
             }
             if self._max_output_tokens > 0:
-                payload["max_tokens"] = self._max_output_tokens
+                payload[_token_param_for(self._token_param, self._model)] = self._max_output_tokens
             if self._temperature is not None:
                 payload["temperature"] = self._temperature
             if self._reasoning_effort:
                 payload["reasoning_effort"] = self._reasoning_effort
             payload.update(self._extra_body)
-            data = self._transport.complete(payload)
+            data = _complete_with_token_param_migration(
+                self._transport, payload, self._token_param, self._model
+            )
             result = _message_content(data, label="llm_query")
             self._account_usage(_usage_from(data))
             return result

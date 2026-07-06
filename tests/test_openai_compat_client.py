@@ -40,6 +40,8 @@ class StubOpenAIServer:
         self.fail_body: bytes = b""
         # Simulate endpoints that 400 on unknown stream_options.
         self.reject_stream_options = False
+        # Simulate modern OpenAI: 400 on max_tokens, demand max_completion_tokens.
+        self.reject_max_tokens = False
         # Emit an SSE error chunk mid-stream (after one content chunk).
         self.stream_error_midway = False
         self.usage = {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
@@ -60,6 +62,15 @@ class StubOpenAIServer:
                 try:
                     if stub.reject_stream_options and "stream_options" in payload:
                         msg = b'{"error": "unknown parameter: stream_options"}'
+                        self.send_response(400)
+                        self.send_header("Content-Length", str(len(msg)))
+                        self.end_headers()
+                        self.wfile.write(msg)
+                        return
+                    if stub.reject_max_tokens and "max_tokens" in payload:
+                        msg = (b'{"error": {"message": "Unsupported parameter: '
+                               b"'max_tokens' is not supported with this model. "
+                               b"Use 'max_completion_tokens' instead.\"}}")
                         self.send_response(400)
                         self.send_header("Content-Length", str(len(msg)))
                         self.end_headers()
@@ -453,3 +464,86 @@ def test_temperature_omitted_unless_set(stub_server):
     )
     warm.responses_create([{"role": "user", "content": "q"}], model="root-model")
     assert stub_server.requests[1]["temperature"] == 0.7
+
+
+def test_max_tokens_param_self_heals_for_modern_openai(stub_server):
+    # gpt-5.x rejects max_tokens; the client switches to
+    # max_completion_tokens, retries, and remembers for later calls.
+    from droste import OpenAICompatClient
+
+    stub_server.reject_max_tokens = True
+    stub_server.root_responses = ["first", "second"]
+    client = OpenAICompatClient(model="root-model", base_url=stub_server.base_url, api_key="k")
+    assert client.responses_create([{"role": "user", "content": "q"}], model="root-model") == "first"
+    assert client.responses_create([{"role": "user", "content": "q"}], model="root-model") == "second"
+    # Call 1: max_tokens (rejected) → retry with max_completion_tokens.
+    # Call 2: goes straight to max_completion_tokens — no wasted round trip.
+    sent = [("max_tokens" in r, "max_completion_tokens" in r) for r in stub_server.requests]
+    assert sent == [(True, False), (False, True), (False, True)]
+
+
+def test_retry_preserves_explicit_max_completion_tokens(stub_server):
+    # extra_body wins, even across the max_tokens retry (codex review, #56).
+    from droste import OpenAICompatClient
+
+    stub_server.reject_max_tokens = True
+    stub_server.root_responses = ["ok"]
+    client = OpenAICompatClient(
+        model="root-model",
+        base_url=stub_server.base_url,
+        api_key="k",
+        extra_body={"max_completion_tokens": 77},
+    )
+    client.responses_create([{"role": "user", "content": "q"}], model="root-model", max_tokens=4096)
+    retry = stub_server.requests[-1]
+    assert retry["max_completion_tokens"] == 77  # caller's value, not 4096
+    assert "max_tokens" not in retry
+
+
+def test_subcalls_share_token_param_migration(stub_server):
+    # Subcalls hit the same modern-OpenAI rule (codex review, #56): first
+    # llm_query migrates, later ones (and batches) go straight to the new param.
+    from droste import OpenAICompatSubcallClient, create_execution_context
+
+    stub_server.reject_max_tokens = True
+    ctx = create_execution_context(max_calls=10, max_iterations=5)
+    sub = OpenAICompatSubcallClient(
+        model="sub-model", context=ctx, base_url=stub_server.base_url,
+        api_key="k", max_output_tokens=2048,
+    )
+    assert sub.llm_query("alpha") == "echo: alpha"
+    assert sub.llm_query("beta") == "echo: beta"
+    sent = [("max_tokens" in r, "max_completion_tokens" in r) for r in stub_server.requests]
+    assert sent == [(True, False), (False, True), (False, True)]
+
+
+def test_concurrent_batch_all_migrate_despite_state_race(stub_server):
+    # codex review (#56, P1): concurrent llm_batch workers all have
+    # max_tokens in flight when the first 400 flips the shared state — every
+    # one must still retry, not re-raise.
+    from droste import OpenAICompatSubcallClient, create_execution_context
+
+    stub_server.reject_max_tokens = True
+    ctx = create_execution_context(max_calls=20, max_iterations=5)
+    sub = OpenAICompatSubcallClient(
+        model="sub-model", context=ctx, base_url=stub_server.base_url,
+        api_key="k", max_output_tokens=2048,
+    )
+    results = sub.llm_batch([f"p{i}" for i in range(8)])
+    assert results == [f"echo: p{i}" for i in range(8)]
+
+
+def test_migration_is_per_model(stub_server):
+    # codex review (#56): a modern model's migration must not poison
+    # max_tokens-only models served by the same client.
+    from droste import OpenAICompatClient
+
+    stub_server.reject_max_tokens = True
+    stub_server.root_responses = ["a"]
+    client = OpenAICompatClient(model="root-model", base_url=stub_server.base_url, api_key="k")
+    client.responses_create([{"role": "user", "content": "q"}], model="root-model")
+    stub_server.reject_max_tokens = False  # the "old" model accepts max_tokens
+    stub_server.root_responses = ["b"]
+    client.responses_create([{"role": "user", "content": "q"}], model="old-model")
+    last = stub_server.requests[-1]
+    assert "max_tokens" in last and "max_completion_tokens" not in last
