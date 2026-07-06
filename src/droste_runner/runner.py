@@ -698,23 +698,27 @@ class RootLLMClient:
         messages: list[dict[str, Any]],
         model: str,
         max_tokens: int = 4096,
-        temperature: float = 0.0,
+        temperature: float | None = None,
         return_usage: bool = False,
     ) -> str | tuple[str, TokenUsage]:
         resolved_model = model or self._default_model
         if not resolved_model:
             raise ValueError("model is required")
         max_output_tokens = self._max_output_tokens or int(max_tokens or 0)
+        # Only send temperature when someone actually set it — modern models
+        # (gpt-5.x, opus-4.x) reject the parameter outright, so a synthetic
+        # 0.0 default breaks the root call for no benefit.
         temp = self._temperature if self._temperature is not None else temperature
         payload: dict[str, Any] = {
             "messages": messages,
             "model": resolved_model,
             "max_output_tokens": max_output_tokens,
-            "temperature": temp,
             "stop": self._stop,
             "session": self._session,
             "session_index": self._session_index,
         }
+        if temp is not None:
+            payload["temperature"] = temp
         if self._provider:
             payload["provider"] = self._provider
         body = json.dumps(payload).encode("utf-8")

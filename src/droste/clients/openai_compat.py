@@ -304,7 +304,7 @@ class OpenAICompatClient:
         messages: list[dict[str, Any]],
         model: str,
         max_tokens: int = 4096,
-        temperature: float = 0.0,
+        temperature: float | None = None,
         return_usage: bool = False,
     ) -> str | tuple[str, TokenUsage]:
         resolved_model = model or self._model
@@ -313,8 +313,12 @@ class OpenAICompatClient:
         payload: dict[str, Any] = {
             "model": resolved_model,
             "messages": messages,
-            "temperature": self._temperature if self._temperature is not None else temperature,
         }
+        # Only send temperature when explicitly set — modern models
+        # (gpt-5.x, opus-4.x) reject the parameter outright.
+        temp = self._temperature if self._temperature is not None else temperature
+        if temp is not None:
+            payload["temperature"] = temp
         max_output_tokens = self._max_output_tokens or int(max_tokens or 0)
         if max_output_tokens > 0:
             payload["max_tokens"] = max_output_tokens
@@ -349,7 +353,7 @@ class OpenAICompatClient:
                 request.get("messages") or [],
                 model=str(request.get("model") or ""),
                 max_tokens=max_tokens,
-                temperature=float(request.get("temperature") or 0.0),
+                temperature=(float(request["temperature"]) if request.get("temperature") is not None else None),
             )
             results.append(str(response))
         return results

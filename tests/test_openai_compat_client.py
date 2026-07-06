@@ -436,3 +436,20 @@ def test_streamed_error_chunk_raises(stub_server):
     )
     with _pytest.raises(RuntimeError, match="streamed an error"):
         client.responses_create([{"role": "user", "content": "q"}], model="root-model")
+
+
+def test_temperature_omitted_unless_set(stub_server):
+    # gpt-5.x / opus-4.x reject the temperature param outright — a synthetic
+    # 0.0 default must never be sent.
+    from droste import OpenAICompatClient
+
+    stub_server.root_responses = ["no temp", "with temp"]
+    client = OpenAICompatClient(model="root-model", base_url=stub_server.base_url, api_key="k")
+    client.responses_create([{"role": "user", "content": "q"}], model="root-model")
+    assert "temperature" not in stub_server.requests[0]
+
+    warm = OpenAICompatClient(
+        model="root-model", base_url=stub_server.base_url, api_key="k", temperature=0.7
+    )
+    warm.responses_create([{"role": "user", "content": "q"}], model="root-model")
+    assert stub_server.requests[1]["temperature"] == 0.7
