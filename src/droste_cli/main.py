@@ -196,6 +196,34 @@ class _StreamEcho:
         print(f"droste: {status}", file=sys.stderr, flush=True)
 
 
+def select_provider(args: argparse.Namespace) -> str:
+    """Fact-based provider detection — no guessing, documented order:
+
+    1. An explicit endpoint (``--base-url`` or ``OPENAI_BASE_URL``) always
+       means the OpenAI-compatible client: the user chose where to go.
+    2. ``--api-key sk-ant-…`` is an Anthropic key (their published prefix).
+    3. Any other explicit ``--api-key`` is OpenAI-compatible.
+    4. A ``claude-*`` model with ``ANTHROPIC_API_KEY`` set goes to Anthropic
+       even when ``OPENAI_API_KEY`` is also set (the model names the vendor).
+    5. Otherwise ``OPENAI_API_KEY`` wins, then ``ANTHROPIC_API_KEY``.
+    """
+    from droste.clients.anthropic import ANTHROPIC_KEY_PREFIX
+
+    if args.base_url or os.environ.get("OPENAI_BASE_URL"):
+        return "openai"
+    if args.api_key is not None:
+        return "anthropic" if args.api_key.startswith(ANTHROPIC_KEY_PREFIX) else "openai"
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    has_anthropic = anthropic_key.startswith(ANTHROPIC_KEY_PREFIX)
+    if str(args.model).startswith("claude") and has_anthropic:
+        return "anthropic"
+    if os.environ.get("OPENAI_API_KEY"):
+        return "openai"
+    if has_anthropic:
+        return "anthropic"
+    return "openai"
+
+
 def _print_progress(status: str) -> None:
     print(f"droste: {status}", file=sys.stderr, flush=True)
 
@@ -250,19 +278,27 @@ def run_ask(args: argparse.Namespace) -> int:
         source = _load_sql_source(loaded.db_path)
         registry = DataSourceRegistry([source], default_source_name=source.name())
 
+    provider = select_provider(args)
+
     # The default endpoint (api.openai.com) always requires a key, so a
     # keyless run there can only die mid-flight with a raw 401 — catch it
     # before any client is built. A custom --base-url (Ollama, vLLM, ...)
     # may legitimately be keyless. Input errors above stay most-specific.
-    from urllib.parse import urlparse
+    if provider == "openai":
+        from urllib.parse import urlparse
 
-    from droste.clients.openai_compat import resolve_api_key, resolve_base_url
+        from droste.clients.openai_compat import resolve_api_key, resolve_base_url
 
-    resolved_host = (urlparse(resolve_base_url(args.base_url)).hostname or "").lower()
-    if not resolve_api_key(args.api_key) and resolved_host == "api.openai.com":
+        resolved_host = (urlparse(resolve_base_url(args.base_url)).hostname or "").lower()
+        if not resolve_api_key(args.api_key) and resolved_host == "api.openai.com":
+            raise CLIError(
+                "no API key: set OPENAI_API_KEY or ANTHROPIC_API_KEY, or pass "
+                "--api-key (custom --base-url endpoints may run keyless)"
+            )
+    elif args.reasoning_effort:
         raise CLIError(
-            "no API key: set OPENAI_API_KEY or pass --api-key (custom "
-            "--base-url endpoints may run keyless)"
+            "--reasoning-effort is not an Anthropic API parameter; Claude "
+            "thinking is controlled via the API's thinking params"
         )
 
 
@@ -280,20 +316,37 @@ def run_ask(args: argparse.Namespace) -> int:
         on_progress=echo.progress if echo else (lambda status: None),
     )
 
-    root = OpenAICompatClient(
-        model=args.model,
-        base_url=args.base_url,
-        api_key=args.api_key,
-        on_delta=echo,
-    )
-    subcalls = OpenAICompatSubcallClient(
-        model=args.subcall_model or args.model,
-        context=exec_context,
-        base_url=args.base_url,
-        api_key=args.api_key,
-        max_output_tokens=args.subcall_max_output_tokens,
-        reasoning_effort=args.reasoning_effort,
-    )
+    if provider == "anthropic":
+        from droste import AnthropicClient, AnthropicSubcallClient
+
+        root = AnthropicClient(
+            model=args.model,
+            api_key=args.api_key,
+            on_delta=echo,
+        )
+        # The Messages API requires a positive max_tokens; 0 (the compat
+        # client's "unbounded" opt-out) falls back to the default bound.
+        subcalls = AnthropicSubcallClient(
+            model=args.subcall_model or args.model,
+            context=exec_context,
+            api_key=args.api_key,
+            max_output_tokens=args.subcall_max_output_tokens or 2048,
+        )
+    else:
+        root = OpenAICompatClient(
+            model=args.model,
+            base_url=args.base_url,
+            api_key=args.api_key,
+            on_delta=echo,
+        )
+        subcalls = OpenAICompatSubcallClient(
+            model=args.subcall_model or args.model,
+            context=exec_context,
+            base_url=args.base_url,
+            api_key=args.api_key,
+            max_output_tokens=args.subcall_max_output_tokens,
+            reasoning_effort=args.reasoning_effort,
+        )
 
     # RunnerEnvironment provides the in-process REPL plus the context
     # name + size prompt description for free.

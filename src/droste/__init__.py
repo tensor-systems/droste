@@ -20,6 +20,7 @@ from .protocols.llm_client import LLMClient, TokenUsage
 from .protocols.subcall_client import SubcallClient
 from .prompts.builder import SystemPromptBuilder
 from .registry import DataSourceRegistry
+from .clients.anthropic import AnthropicClient, AnthropicSubcallClient
 from .clients.openai_compat import OpenAICompatClient, OpenAICompatSubcallClient
 
 __all__ = [
@@ -51,6 +52,8 @@ __all__ = [
     "SubcallClient",
     "SystemPromptBuilder",
     "DataSourceRegistry",
+    "AnthropicClient",
+    "AnthropicSubcallClient",
     "OpenAICompatClient",
     "OpenAICompatSubcallClient",
 ]

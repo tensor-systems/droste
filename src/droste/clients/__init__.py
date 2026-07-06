@@ -1,5 +1,6 @@
 """Built-in LLM clients shipped with the engine."""
 
+from .anthropic import AnthropicClient, AnthropicSubcallClient
 from .errors import http_error_excerpt, redact_secrets
 from .openai_compat import (
     DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS,
@@ -10,6 +11,8 @@ from .openai_compat import (
 __all__ = [
     "http_error_excerpt",
     "redact_secrets",
+    "AnthropicClient",
+    "AnthropicSubcallClient",
     "DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS",
     "OpenAICompatClient",
     "OpenAICompatSubcallClient",

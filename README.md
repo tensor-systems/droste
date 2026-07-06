@@ -145,11 +145,20 @@ uv add droste        # or: pip install droste
 Using is asking over *your* data; embedding is building RLM answers into a
 product for *your users*.
 
-### BYOK: any OpenAI-compatible endpoint
+### BYOK: OpenAI-compatible endpoints, and Anthropic natively
 
 The engine ships built-in clients for any endpoint that speaks the OpenAI
 chat-completions shape (OpenAI, OpenRouter, Google's OpenAI-compat endpoint,
-vLLM, Ollama, ...). Bring your own key — no ModelRelay account required.
+vLLM, Ollama, ...) — plus a native client for Anthropic's Messages API
+(their compat layer is a testing shim, so Claude gets first-class support).
+Bring your own key — no ModelRelay account required. The CLI detects the
+provider from facts: an `sk-ant-…` key (or `ANTHROPIC_API_KEY`) routes to
+Anthropic; an explicit `--base-url`/`OPENAI_BASE_URL` always wins.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+droste "why did it crash?" ./logs --model claude-opus-4-8
+```
 
 ```python
 from droste import (
