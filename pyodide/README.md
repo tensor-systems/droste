@@ -33,9 +33,9 @@ signal (Pyodide ≥ native on 6/8 semantic queries; single-shot metric is noisy)
 Remaining Phase 3 is mechanical productionization: assemble the bundle into the `.app`
 (`package_app.sh`), point Swift `RLMHelperRunner` at the Deno relay (replace `recall-rlm-helper`,
 tight read-only DB-only mount), sign Deno + add the JIT entitlement, build, smoke-test.
-`run.sh` stages `droste/src` + the **verbatim** rcl_rlm data layer (`message_database.py`,
-`sql_validator.py`, `exceptions.py`) into a zip Pyodide loads. Requires Deno; the
-corpus DB is expected at `~/Library/Application Support/RecallRLM/` (override as arg 2).
+`relay.ts` mounts the bundled sources dir (droste + the cozy `rcl_rlm` data layer,
+staged by cozy's own build) into Pyodide's `/app` and the DB directory into `/data`.
+Requires Deno; the corpus DB path comes from the host request (`db_path`).
 
 ## Phase 0 — viability (PASS)
 - All of droste imports cleanly under Pyodide, incl. `droste_runner.runner`.
@@ -93,8 +93,24 @@ exclude:    config.json, sessions.json, everything else
 (WAL mode → include the `-wal`/`-shm` siblings, or open with `immutable=1`.) This removes the
 only real leak vector while keeping `MessageDatabase` verbatim.
 
-**Later hardening (Design B) — tracked in tensor-systems/droste#3:** move the data layer
-onto the trusted host as a separate Pyodide "DB service" context (verbatim `MessageDatabase`
-+ read-only mount + ENFORCED `SqlValidator`), with the untrusted REPL context getting no
-FS/no net and only the bridged tools. Matches DSPy's tools-only posture. Defense-in-depth,
-post-v1.
+**Later hardening (Design B / A'-2) — tracked in tensor-systems/droste#3:** move the data
+layer onto the trusted host as a separate Pyodide "DB service" context (verbatim
+`MessageDatabase` + read-only mount + ENFORCED `SqlValidator`), with the untrusted REPL
+context getting no FS/no net and only the bridged tools. Matches DSPy's tools-only posture.
+Defense-in-depth, post-v1.
+
+**Progress (droste#9 step 2 / droste#3 A'-2, this session):** the wire contract for the
+cross-interpreter split is built and tested — `droste/sources/bridge.py`
+(`DataSourceService` server half + `BridgeDataSource` client half; unit tests in
+`tests/test_bridge_source.py`, a real-two-Pyodide-interpreters proof in
+`bridge_source_integration_test.ts`) and a `bridge_call` seam on
+`pyodide_runtime.run_for_host_pyodide` (used instead of `db_path` once wired). **Not yet
+done, and deliberately deferred to a cozy-side follow-up** (this repo has no visibility
+into `rcl_rlm`'s real DB construction, and the two changes are coupled): `rcl_rlm.rlm.
+run_rlm` needs a `data_source=` keyword that skips its internal `MessageDatabase(db_path)`
+construction when supplied, cozy's Pyodide bundle needs a "DB service" bootstrap that
+builds the real `MessageDataSource` behind a `DataSourceService`, and `relay.ts` needs the
+actual second-interpreter wiring (mount `/data` into the service interpreter only, forward
+`bridge_call` into the REPL interpreter) gated behind a kill switch, mirroring the
+`RLM_BRIDGE=legacy` precedent from A'-1. Until that lands, `bridge_call` stays unset and
+today's single-interpreter behavior is unchanged.

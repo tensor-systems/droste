@@ -12,15 +12,19 @@ droste loop + RecallEnvironment:
 
 Both have zero third-party deps so they import under Pyodide.
 """
+
 from __future__ import annotations
 
 import builtins
 import contextlib
 import dataclasses
 import io
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from droste.protocols.llm_client import TokenUsage
+
+if TYPE_CHECKING:
+    from droste.sources.bridge import BridgeCall
 
 # Bind the interpreter primitive once, away from call sites, so static scanners
 # don't confuse it with shell exec.
@@ -61,7 +65,9 @@ def _build_input(messages: list[dict]) -> list[dict]:
     items = []
     for msg in messages:
         content = msg["content"]
-        content_items = content if isinstance(content, list) else [{"type": "text", "text": content}]
+        content_items = (
+            content if isinstance(content, list) else [{"type": "text", "text": content}]
+        )
         items.append({"type": "message", "role": msg["role"], "content": content_items})
     return items
 
@@ -143,7 +149,9 @@ class BridgedLLMClient:
             usage = data.get("usage", {})
             inp = int(usage.get("input_tokens", 0))
             out = int(usage.get("output_tokens", 0))
-            return text, TokenUsage(prompt_tokens=inp, completion_tokens=out, total_tokens=inp + out)
+            return text, TokenUsage(
+                prompt_tokens=inp, completion_tokens=out, total_tokens=inp + out
+            )
         return text
 
     def batch_responses(self, requests: list[dict[str, Any]]) -> list[str]:
@@ -188,18 +196,39 @@ def _serialize_error(err: Any) -> dict[str, Any] | None:
     return {"type": type(err).__name__, "message": str(err)}
 
 
-def run_for_host_pyodide(request: dict[str, Any], host_fetch: HostFetch) -> dict[str, Any]:
+def run_for_host_pyodide(
+    request: dict[str, Any],
+    host_fetch: HostFetch,
+    bridge_call: BridgeCall | None = None,
+) -> dict[str, Any]:
     """Pyodide equivalent of rcl_rlm.host.run_for_host / runner_adapter.run.
 
     Runs a Recall RLM request with the bridged client + raw executor and returns a
     host-compatible response dict (same shape the Deno relay writes to stdout).
+
+    `bridge_call` is the droste#3/A'-2 seam: when the host wires a second,
+    trusted Pyodide interpreter running a `DataSourceService` (see
+    `droste.sources.bridge`), it passes the resulting `bridge_call(method,
+    params_json)` here instead of a raw `db_path`. The DB then never opens
+    inside this (untrusted) interpreter. `bridge_call` is `None` until the host
+    opts in (relay.ts: `RLM_DB_SERVICE=1`) — today's single-interpreter,
+    `db_path`-in-sandbox behavior is unchanged when it is.
+
+    NOTE: the `data_source=` keyword below does not exist on the currently
+    pinned `rcl_rlm.rlm.run_rlm` yet — that's a tracked cross-repo follow-up in
+    cozy (droste#3). This branch is unreachable (`bridge_call` stays `None`)
+    until that lands and the host flips the flag, mirroring the `RLM_BRIDGE=
+    legacy` kill-switch precedent from A'-1: no feature-detection shim, the
+    seam is simply dead code until both sides are wired.
     """
     from rcl_rlm.conversation import resolve_conversation_context
     from rcl_rlm.rlm import run_rlm
 
     auth_type = request.get("auth_type", "api_key")
     customer_token = request.get("customer_token") if auth_type == "customer_token" else None
-    client = BridgedLLMClient(host_fetch, api_key=request.get("api_key"), customer_token=customer_token)
+    client = BridgedLLMClient(
+        host_fetch, api_key=request.get("api_key"), customer_token=customer_token
+    )
 
     # Thread multi-turn history exactly like the native runner_adapter (shared
     # helper, so the two substrates can't drift): prefer a pre-built context, else
@@ -211,16 +240,24 @@ def run_for_host_pyodide(request: dict[str, Any], host_fetch: HostFetch) -> dict
     )
 
     kwargs: dict[str, Any] = {}
-    for key in ("contacts_db_path", "root_model", "subcall_model"):
+    for key in ("root_model", "subcall_model"):
         if request.get(key) is not None:
             kwargs[key] = request[key]
     for key in ("max_depth", "max_calls", "max_output_chars"):
         if request.get(key) is not None:
             kwargs[key] = int(request[key])
 
+    if bridge_call is not None:
+        from droste.sources.bridge import BridgeDataSource
+
+        kwargs["data_source"] = BridgeDataSource(bridge_call, name="messages")
+    else:
+        kwargs["db_path"] = request["db_path"]
+        if request.get("contacts_db_path") is not None:
+            kwargs["contacts_db_path"] = request["contacts_db_path"]
+
     res = run_rlm(
         question=request["question"],
-        db_path=request["db_path"],
         llm_client=client,
         executor_factory=RawExecutor,
         conversation_context=resolved_context,
