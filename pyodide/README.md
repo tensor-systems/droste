@@ -158,3 +158,34 @@ Pyodide interpreter with an *async* fake `host_fetch` (the existing
 branch — the actual code path the real Deno relay always takes). The stale
 `LLMClient` protocol drift itself (droste#16's real root cause) is tracked
 separately — see the protocol-drift issue linked from #16.
+
+**Fixed: the post-exhaustion extract-fallback silently swallowed failures.**
+Found via a real user report through Cozy: a query that ran out of
+`max_iterations` without the sandbox ever setting `answer["ready"]` showed raw
+Python debug `print()` output as the "answer," instead of the synthesized
+best-effort answer the engine's extract-fallback pass (`_extract_final_answer`,
+issue #21) exists to produce. Root cause: that function wrapped its one LLM
+call in a bare `try/except Exception: return ""`, so ANY failure (provider
+error, empty response, anything) was silently swallowed, and the caller only
+overwrote the raw-stdout fallback (`_best_answer`) when extraction *succeeded*
+— when it silently failed, raw debug output stayed as the shown answer with
+zero trace anywhere of why. Fixed by having `_extract_final_answer` return
+`(text, RLMError | None)` instead of swallowing the exception, threading a new
+`RLMResult.extract_error` field through `droste_runner`'s response mapping and
+`droste_cli`'s JSON/stderr output, and emitting a new `extract_error` structured
+event (added to the Pyodide/Deno relay's event vocabulary in `events.ts`) so
+hosts watching the event stream see the failure live, not just in the final
+result. Deliberately does NOT retry or change what `_best_answer` returns for
+the many *other*, non-max-iterations call sites that intentionally rely on
+"if you just print(), the printed output becomes the final answer" (see
+`prompts.py`'s documented backward-compatibility contract) — this fix is scoped
+to the max-iterations-exhausted + extraction-attempted path only, where raw
+debug output was never an intentional answer.
+
+Separately, `pyodide_runtime.py`'s `run_for_host_pyodide` response never
+surfaced `extracted`/`extract_error` to the host AT ALL (a second, adjacent
+gap, pre-existing and independent of the above): the native (`droste_runner`)
+substrate's `runner_adapter.py` already mapped `extracted` into its response,
+but the Pyodide/Deno relay substrate — the one Cozy actually runs by default —
+silently dropped it. Both fields are now included in the Pyodide substrate's
+response, matching the native substrate.

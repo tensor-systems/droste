@@ -4,29 +4,41 @@ import { isRlmEvent, RLM_EVENT_TYPES } from "./events.ts";
 
 Deno.test("forwards every emitted event type (with json.dumps spacing)", () => {
   for (const type of RLM_EVENT_TYPES) {
-    assert(isRlmEvent(`{"type": "${type}", "iteration": 1}`), `should forward ${type}`);
-    assert(isRlmEvent(`{"type":"${type}"}`), `whitespace-insensitive for ${type}`);
+    assert(
+      isRlmEvent(`{"type": "${type}", "iteration": 1}`),
+      `should forward ${type}`,
+    );
+    assert(
+      isRlmEvent(`{"type":"${type}"}`),
+      `whitespace-insensitive for ${type}`,
+    );
   }
 });
 
 Deno.test("carries the real payload for a code event (live code streaming)", () => {
-  assert(isRlmEvent(`{"type": "code", "iteration": 2, "code": "print(get_stats())"}`));
+  assert(
+    isRlmEvent(
+      `{"type": "code", "iteration": 2, "code": "print(get_stats())"}`,
+    ),
+  );
 });
 
 Deno.test("drops non-events: loader chatter, stray prints, empty lines", () => {
-  for (const noise of [
-    "Loading sqlite3",
-    "Loading sqlite3, package 1/1",
-    "",
-    "   ",
-    "print output that isn't json",
-    '{"type": "debug", "msg": "not ours"}', // unknown type
-    '{"no_type": true}',
-    "{malformed json",
-    '"a bare json string"',
-    "[1,2,3]", // array, not an object
-    "42",
-  ]) {
+  for (
+    const noise of [
+      "Loading sqlite3",
+      "Loading sqlite3, package 1/1",
+      "",
+      "   ",
+      "print output that isn't json",
+      '{"type": "debug", "msg": "not ours"}', // unknown type
+      '{"no_type": true}',
+      "{malformed json",
+      '"a bare json string"',
+      "[1,2,3]", // array, not an object
+      "42",
+    ]
+  ) {
     assert(!isRlmEvent(noise), `should DROP: ${JSON.stringify(noise)}`);
   }
 });
@@ -41,6 +53,15 @@ Deno.test("vocabulary matches the engine's emitters", () => {
   // plus relay-side reasoning_delta and the future subcall/done.
   assertEquals(
     [...RLM_EVENT_TYPES].sort(),
-    ["code", "done", "iteration_start", "output", "progress", "reasoning_delta", "subcall"].sort(),
+    [
+      "code",
+      "done",
+      "extract_error",
+      "iteration_start",
+      "output",
+      "progress",
+      "reasoning_delta",
+      "subcall",
+    ].sort(),
   );
 });

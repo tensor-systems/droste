@@ -983,6 +983,7 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
         "tokens_used": result.tokens_used,
         "subcalls": result.sub_calls_made,
         "extracted": bool(getattr(result, "extracted", False)),
+        "extract_error": None,
         "trajectory": [
             {
                 "iteration": entry.iteration,
@@ -1009,6 +1010,14 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
             "message": result.error.message,
             "code": result.error.code,
             "details": result.error.details,
+        }
+    extract_error = getattr(result, "extract_error", None)
+    if extract_error:
+        response["extract_error"] = {
+            "type": extract_error.type,
+            "message": extract_error.message,
+            "code": extract_error.code,
+            "details": extract_error.details,
         }
     return response
 

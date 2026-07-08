@@ -307,6 +307,58 @@ def test_ask_extracted_answer_exits_zero_with_note(stub_server, tmp_path, capsys
     assert "extracted from partial work" in captured.err
 
 
+def test_ask_extract_failure_surfaces_note_and_json_field(monkeypatch, tmp_path, capsys):
+    """When the post-exhaustion extract call itself fails, the CLI must say so
+    (not silently present raw loop output as if nothing went wrong) — the fix
+    for a real bug where this failure was swallowed with zero trace anywhere."""
+    import sys
+
+    from droste.exceptions import RLMError
+    from droste.loop.rlm import RLMResult
+
+    # droste_cli/__init__.py does `from .main import main`, which shadows the
+    # `droste_cli.main` package attribute with the function — grab the real
+    # submodule from sys.modules to patch the name `main()` actually resolves.
+    main_module = sys.modules["droste_cli.main"]
+
+    def fake_run_rlm(*args, **kwargs):
+        return RLMResult(
+            answer="raw debug print() output",
+            ready=False,
+            iterations=2,
+            tokens_used=10,
+            sub_calls_made=0,
+            trajectory=[],
+            extracted=False,
+            extract_error=RLMError(type="RuntimeError", message="provider timeout"),
+        )
+
+    monkeypatch.setattr(main_module, "run_rlm", fake_run_rlm)
+    doc = tmp_path / "doc.txt"
+    doc.write_text("x")
+    exit_code = main(
+        [
+            str(doc),
+            "q",
+            "--model",
+            "m",
+            "--base-url",
+            "http://127.0.0.1:1",
+            "--api-key",
+            "k",
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    payload = json.loads(captured.out)
+    assert payload["extracted"] is False
+    assert payload["extract_error"] == {"type": "RuntimeError", "message": "provider timeout"}
+    assert "extraction failed" in captured.err
+    assert "RuntimeError: provider timeout" in captured.err
+    assert "raw loop output, not a synthesized answer" in captured.err
+
+
 def test_ask_root_failure_is_nonzero(stub_server, tmp_path, capsys):
     doc = tmp_path / "doc.txt"
     doc.write_text("x")

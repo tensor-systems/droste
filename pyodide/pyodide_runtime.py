@@ -315,5 +315,13 @@ def run_for_host_pyodide(
         "retrieved_guids": res.retrieved_guids,
         "iterations": res.iterations,
         "error": _serialize_error(res.error),
+        # Best-effort answer recovered by the engine's post-exhaustion extract
+        # pass — hosts must not present it as a confirmed answer. This substrate
+        # never surfaced either field until now: the Pyodide/Deno relay's
+        # HostResponse silently dropped them, so a Swift host reading
+        # `extracted`/`extract_error` here always saw them absent, regardless of
+        # what the engine actually did.
+        "extracted": bool(getattr(res, "extracted", False)),
+        "extract_error": _serialize_error(getattr(res, "extract_error", None)),
         "conversation_summary": updated_summary,
     }

@@ -503,6 +503,11 @@ def run_ask(args: argparse.Namespace) -> int:
                 "type": result.error.type,
                 "message": result.error.message,
             }
+        if result.extract_error:
+            payload["extract_error"] = {
+                "type": result.extract_error.type,
+                "message": result.extract_error.message,
+            }
         print(json.dumps(payload, ensure_ascii=True))
     else:
         print(result.answer)
@@ -516,9 +521,18 @@ def run_ask(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 0
+    if result.extract_error:
+        # Extraction was attempted and failed — the printed answer above is
+        # raw loop output (e.g. a debug print()), not a synthesized answer.
+        print(
+            f"droste: note: max iterations reached and answer extraction failed "
+            f"({result.extract_error.type}: {result.extract_error.message}); "
+            "showing raw loop output, not a synthesized answer",
+            file=sys.stderr,
+        )
     if result.error:
         print(f"droste: error: {result.error.type}: {result.error.message}", file=sys.stderr)
-    else:
+    elif not result.extract_error:
         print("droste: no confirmed answer produced", file=sys.stderr)
     return 1
 

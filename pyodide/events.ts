@@ -13,6 +13,7 @@ export const RLM_EVENT_TYPES = new Set<string>([
   "output", // {iteration, stdout}
   "subcall", // {depth, seq, ...} (future)
   "reasoning_delta", // {text} — emitted relay-side from streamed /responses
+  "extract_error", // {error_type, message} — post-exhaustion extract pass failed; answer is raw loop output
   "done", // final HostResponse mirror (future)
 ]);
 
@@ -26,7 +27,8 @@ export function isRlmEvent(line: string): boolean {
   if (!t.startsWith("{")) return false;
   try {
     const o = JSON.parse(t);
-    return o !== null && typeof o === "object" && typeof o.type === "string" && RLM_EVENT_TYPES.has(o.type);
+    return o !== null && typeof o === "object" && typeof o.type === "string" &&
+      RLM_EVENT_TYPES.has(o.type);
   } catch {
     return false;
   }

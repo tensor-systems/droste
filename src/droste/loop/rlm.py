@@ -90,6 +90,11 @@ class RLMResult:
     # than the model marking answer['ready'] — hosts may surface it as a
     # best-effort answer but must not present it as confirmed.
     extracted: bool = False
+    # Set when max_iterations was exhausted, extraction was attempted, and it
+    # failed (or returned empty) — `answer` is then raw loop output (the last
+    # printed stdout), NOT prose a host should present verbatim as an answer.
+    # None whenever extraction wasn't attempted or succeeded (extracted=True).
+    extract_error: RLMError | None = None
 
 
 ProgressCallback = Any
@@ -147,12 +152,18 @@ def _extract_final_answer(
     root_llm: LLMClient,
     cfg: "RLMConfig",
     context: ExecutionContext,
-) -> str:
+) -> tuple[str, RLMError | None]:
     """One extract pass (issue #21):
     when the loop exhausts max_iterations without answer['ready'], make a
     single root-LLM call over a compact trajectory summary so the run returns
-    the best answer learnable from the work done, instead of scraps. Failures
-    fall back to the normal best-effort answer."""
+    the best answer learnable from the work done, instead of scraps.
+
+    Returns (text, None) on success. On failure returns ("", RLMError(...)) —
+    the caller falls back to the raw-loop-output answer already computed via
+    _best_answer, but the error is no longer swallowed: it's surfaced via
+    RLMResult.extract_error so a host can tell "extraction ran and produced
+    this" apart from "extraction failed, this is raw debug output," instead
+    of both cases looking identical."""
     try:
         messages = [
             {"role": "system", "content": EXTRACT_FALLBACK_SYSTEM_PROMPT},
@@ -164,9 +175,12 @@ def _extract_final_answer(
             return_usage=True,
         )
         context.stats.total_tokens += total_tokens_from_usage(usage)
-        return str(response).strip()
-    except Exception:
-        return ""
+        text = str(response).strip()
+        if not text:
+            return "", RLMError(type="EmptyExtraction", message="extract call returned empty text")
+        return text, None
+    except Exception as exc:
+        return "", RLMError(type=exc.__class__.__name__, message=str(exc))
 
 
 def _error_feedback(exec_error: Exception) -> str:
@@ -653,13 +667,34 @@ def run_rlm(
         # extract call is affordable; a trajectory must exist or there is
         # nothing to extract from.
         was_extracted = False
+        extract_error: RLMError | None = None
         if not answer.get("ready") and iterations >= cfg.max_iterations and trajectory:
             context.emit_progress("Max iterations reached: extracting best final answer...")
             draft = "" if policy_outstanding else str(answer.get("content") or "")
-            extracted = _extract_final_answer(question, draft, trajectory, root_llm, cfg, context)
+            extracted, extract_error = _extract_final_answer(
+                question, draft, trajectory, root_llm, cfg, context
+            )
             if extracted:
                 final_answer = extracted
                 was_extracted = True
+            elif extract_error is not None:
+                # Don't swallow this silently (the bug being fixed here):
+                # final_answer stays the raw-loop-output fallback from
+                # _best_answer above, but the failure is now visible to hosts
+                # via RLMResult.extract_error, not indistinguishable from a
+                # clean extraction.
+                context.emit_event(
+                    {
+                        "type": "extract_error",
+                        "error_type": extract_error.type,
+                        "message": extract_error.message,
+                    }
+                )
+                if cfg.verbose:
+                    print(
+                        f"\nExtract fallback failed: {extract_error.type}: {extract_error.message}",
+                        file=sys.stderr,
+                    )
 
         if not final_answer:
             if error:
@@ -680,6 +715,7 @@ def run_rlm(
             trajectory=trajectory,
             error=error,
             extracted=was_extracted,
+            extract_error=extract_error,
         )
     finally:
         environment.close()
