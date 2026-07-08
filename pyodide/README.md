@@ -99,18 +99,24 @@ layer onto the trusted host as a separate Pyodide "DB service" context (verbatim
 context getting no FS/no net and only the bridged tools. Matches DSPy's tools-only posture.
 Defense-in-depth, post-v1.
 
-**Progress (droste#9 step 2 / droste#3 A'-2, this session):** the wire contract for the
-cross-interpreter split is built and tested — `droste/sources/bridge.py`
-(`DataSourceService` server half + `BridgeDataSource` client half; unit tests in
-`tests/test_bridge_source.py`, a real-two-Pyodide-interpreters proof in
-`bridge_source_integration_test.ts`) and a `bridge_call` seam on
-`pyodide_runtime.run_for_host_pyodide` (used instead of `db_path` once wired). **Not yet
-done, and deliberately deferred to a cozy-side follow-up** (this repo has no visibility
-into `rcl_rlm`'s real DB construction, and the two changes are coupled): `rcl_rlm.rlm.
-run_rlm` needs a `data_source=` keyword that skips its internal `MessageDatabase(db_path)`
-construction when supplied, cozy's Pyodide bundle needs a "DB service" bootstrap that
-builds the real `MessageDataSource` behind a `DataSourceService`, and `relay.ts` needs the
-actual second-interpreter wiring (mount `/data` into the service interpreter only, forward
-`bridge_call` into the REPL interpreter) gated behind a kill switch, mirroring the
-`RLM_BRIDGE=legacy` precedent from A'-1. Until that lands, `bridge_call` stays unset and
-today's single-interpreter behavior is unchanged.
+**Progress (droste#9 / droste#3 A'-2, cozy#807 — done, opt-in):** the full cross-interpreter
+split is wired and tested end-to-end. `droste/sources/bridge.py` (`DataSourceService` server
+half + `BridgeDataSource` client half; unit tests in `tests/test_bridge_source.py`, a
+real-two-Pyodide-interpreters proof in `bridge_source_integration_test.ts`); cozy's
+`rcl_rlm.rlm.run_rlm` gained the `data_source=`/`has_contacts=` keywords and
+`rcl_rlm.pyodide_service.build_service_source` (cozy#808); `pyodide_runtime.py` gained
+`build_db_service(db_path, contacts_db_path)` — builds the real `MessageDataSource` +
+`DataSourceService` for the trusted interpreter, including corpus-scaled
+`default_max_calls` and a `has_contacts` probe (both computed where the DB is actually
+visible, then threaded across — the REPL interpreter has no `/data` mount to probe either
+from) — and `run_for_host_pyodide` accepts `bridge_call`/`has_contacts`/`default_max_calls`.
+`relay.ts` boots the trusted "DB service" interpreter FIRST (a bootstrap failure then costs
+one interpreter, not two), mounts `/data` there only, and forwards a `bridge_call` into the
+REPL interpreter — gated behind `RLM_DB_SERVICE=1` (opt-in, default off), orthogonal to the
+`RLM_BRIDGE=legacy` kill-switch from A'-1. `db_service_integration_test.ts` proves the whole
+path against real `rcl_rlm` (not a stub): a real `MessageDatabase`, generated code's
+`query()` calls reaching it over the bridge, `retrieved_guids` surviving via
+`extra_methods`, and the REPL interpreter never seeing the DB. **Still open:** a live-corpus
+parity check (needs `MODELRELAY_API_KEY` + a real shadow.db — deliberately not faked) before
+flipping the default, and the cozy-side engine-pin bump this depends on
+(`rlm-core`→`droste`) is a separate, already-landed migration (cozy#812).

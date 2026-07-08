@@ -196,10 +196,46 @@ def _serialize_error(err: Any) -> dict[str, Any] | None:
     return {"type": type(err).__name__, "message": str(err)}
 
 
+def build_db_service(
+    db_path: str, contacts_db_path: str | None = None
+) -> tuple[Any, dict[str, Any]]:
+    """Build the trusted-side `DataSourceService` for the droste#3/A'-2 split.
+
+    Runs in the SERVICE interpreter (the one with `/data` mounted), never the
+    untrusted REPL interpreter. Returns `(service, meta)` — `meta` carries the
+    two facts that can only be computed where the DB file is actually visible
+    (`has_contacts`, a filesystem probe; `default_max_calls`, a `SELECT COUNT(*)`)
+    and that the REPL-side `run_rlm(data_source=...)` call needs but cannot
+    derive itself once it has no `db_path`/`contacts_db_path` at all. `meta`
+    crosses the interpreter boundary as plain JSON (see relay.ts).
+
+    `extra_methods=("get_retrieved_guids",)` is load-bearing, not decorative:
+    `run_rlm` reads `retrieved_guids` off the data source via `getattr` (see
+    rcl_rlm/rlm.py), and `BridgeDataSource` only binds whatever
+    `DataSourceService.describe()` reports — omit this and citations silently
+    return empty over the bridge instead of erroring.
+    """
+    from rcl_rlm.budget import subcall_budget
+    from rcl_rlm.message_database import has_readable_contacts_db
+    from rcl_rlm.pyodide_service import build_service_source
+
+    from droste.sources.bridge import DataSourceService
+
+    source = build_service_source(db_path, contacts_db_path)
+    service = DataSourceService(source, extra_methods=("get_retrieved_guids",))
+    meta = {
+        "has_contacts": has_readable_contacts_db(contacts_db_path),
+        "default_max_calls": subcall_budget(int(source.get_stats()["total_messages"])),
+    }
+    return service, meta
+
+
 def run_for_host_pyodide(
     request: dict[str, Any],
     host_fetch: HostFetch,
     bridge_call: BridgeCall | None = None,
+    has_contacts: bool = False,
+    default_max_calls: int | None = None,
 ) -> dict[str, Any]:
     """Pyodide equivalent of rcl_rlm.host.run_for_host / runner_adapter.run.
 
@@ -207,19 +243,21 @@ def run_for_host_pyodide(
     host-compatible response dict (same shape the Deno relay writes to stdout).
 
     `bridge_call` is the droste#3/A'-2 seam: when the host wires a second,
-    trusted Pyodide interpreter running a `DataSourceService` (see
-    `droste.sources.bridge`), it passes the resulting `bridge_call(method,
-    params_json)` here instead of a raw `db_path`. The DB then never opens
-    inside this (untrusted) interpreter. `bridge_call` is `None` until the host
-    opts in (relay.ts: `RLM_DB_SERVICE=1`) — today's single-interpreter,
-    `db_path`-in-sandbox behavior is unchanged when it is.
+    trusted Pyodide interpreter running a `DataSourceService` built by
+    `build_db_service` (see `droste.sources.bridge`), it passes the resulting
+    `bridge_call(method, params_json)` here instead of a raw `db_path`. The DB
+    then never opens inside this (untrusted) interpreter. `bridge_call` is
+    `None` until the host opts in (relay.ts: `RLM_DB_SERVICE=1`) — today's
+    single-interpreter, `db_path`-in-sandbox behavior is unchanged when it is.
 
-    NOTE: the `data_source=` keyword below does not exist on the currently
-    pinned `rcl_rlm.rlm.run_rlm` yet — that's a tracked cross-repo follow-up in
-    cozy (droste#3). This branch is unreachable (`bridge_call` stays `None`)
-    until that lands and the host flips the flag, mirroring the `RLM_BRIDGE=
-    legacy` kill-switch precedent from A'-1: no feature-detection shim, the
-    seam is simply dead code until both sides are wired.
+    `has_contacts` / `default_max_calls` are `build_db_service`'s `meta`,
+    threaded across from the service interpreter — the REPL interpreter has no
+    `/data` mount in bridge mode, so it cannot compute either itself (a
+    filesystem probe and a `SELECT COUNT(*)` respectively). Both are ignored
+    when `bridge_call` is `None`. `default_max_calls` only fills in when the
+    request didn't already set one explicitly — an explicit request value
+    always wins, matching the `db_path` path's own "auto unless the caller
+    overrides" contract (`subcall_budget` in rcl_rlm's own `run_rlm`).
     """
     from rcl_rlm.conversation import resolve_conversation_context
     from rcl_rlm.rlm import run_rlm
@@ -251,6 +289,9 @@ def run_for_host_pyodide(
         from droste.sources.bridge import BridgeDataSource
 
         kwargs["data_source"] = BridgeDataSource(bridge_call, name="messages")
+        kwargs["has_contacts"] = has_contacts
+        if "max_calls" not in kwargs and default_max_calls is not None:
+            kwargs["max_calls"] = int(default_max_calls)
     else:
         kwargs["db_path"] = request["db_path"]
         if request.get("contacts_db_path") is not None:
