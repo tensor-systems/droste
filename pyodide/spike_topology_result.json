@@ -1,0 +1,32 @@
+{
+  "optionA": {
+    "feasible": true,
+    "validator_enforced": true,
+    "globals_isolated": true,
+    "fs_isolated": true,
+    "second_interp_rss_mb": 41.3,
+    "second_interp_load_ms": 704,
+    "bridge_median_ms": 0.237,
+    "bridge_p95_ms": 0.359
+  },
+  "optionB": {
+    "feasible": true,
+    "validator_enforced": true,
+    "second_interp_rss_mb": 0,
+    "bridge_median_ms": 0.194,
+    "bridge_p95_ms": 0.237
+  },
+  "memory": {
+    "baseline_mb": 50.8,
+    "one_interp_mb": 279.2,
+    "two_interp_mb": 320.5,
+    "repl_load_ms": 877,
+    "second_interp_load_ms": 704
+  },
+  "env": {
+    "deno": "2.9.1",
+    "v8": "14.9.207.2-rusty",
+    "calls": 300,
+    "note": "pure-Python data layer; sqlite3 pkg unloadable in this env (cache drift), orthogonal to topology cost"
+  }
+}
