@@ -1,6 +1,6 @@
 [project]
 name = "droste"
-version = "0.7.0"
+version = "0.7.1"
 description = "The recursive harness for your data — ask questions over files, folders, and SQLite with a recursive language model (RLM)"
 readme = "README.md"
 requires-python = ">=3.11"
