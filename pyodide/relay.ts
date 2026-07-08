@@ -1,12 +1,19 @@
 // Deno+Pyodide relay — a drop-in for the native `recall-rlm-helper`:
-// reads a HostRequest JSON from stdin, runs the Recall RLM in Pyodide, writes a
-// HostResponse JSON to stdout. Deno holds the only ambient capabilities (narrow
-// net to ModelRelay + read of the DB dir); the Pyodide sandbox has none.
+// reads a HostRequest JSON from stdin, runs the RLM in Pyodide via a
+// host-supplied Python adapter module, writes a HostResponse JSON to stdout.
+// Deno holds the only ambient capabilities (narrow net to ModelRelay + read of
+// the DB dir); the Pyodide sandbox has none.
 //
 //   echo '<request json>' | deno run --allow-net=api.modelrelay.ai \
-//       --allow-read --allow-env relay.ts <sources.zip>
+//       --allow-read --allow-env relay.ts <sources.zip> <adapter_module>
 //
 // (.zip path is a dev convenience; production bundles sources as a directory.)
+// <adapter_module> is a Python module path, staged into <sources> alongside
+// droste, that implements this relay's host-adapter contract — see
+// pyodide/README.md ("Writing a host adapter") and examples/pyodide-host/ for
+// droste's own minimal, no-third-party-deps example. This relay is itself
+// droste-general: it knows nothing about any specific host's data layer or
+// product wiring, only the adapter contract.
 // Pin pyodide: an unpinned `npm:pyodide` lets `deno cache` drift to a new major
 // (e.g. 314.0.0) whose sqlite3 package/API differs, breaking the offline bundle
 // ("No known package with name 'sqlite3'"). 0.29.4 is the version this relay is
@@ -18,6 +25,19 @@ import { isModelRelayResponsesCall, splitCredentials, stripAndInjectAuth } from 
 import { isRlmEvent } from "./events.ts";
 
 const sources = Deno.args[0]; // bundled Python sources DIR (prod) or a .zip (dev)
+const adapterModule = Deno.args[1]; // Python module implementing the host-adapter contract
+// Trusted-channel value (Deno.args, set by the code that spawns this process —
+// the same trust class as `sources`), but validated before ever reaching
+// importlib: code-selection must never flow from the request body (the data
+// plane), matching droste_runner's own adapter_module rule
+// (droste_runner.run() rejects adapter_module from request files entirely).
+if (!adapterModule || !/^[A-Za-z_][A-Za-z0-9_.]*$/.test(adapterModule)) {
+  console.error(
+    `usage: relay.ts <sources> <adapter_module>\n` +
+      `<adapter_module> must be a dotted Python module path (got: ${JSON.stringify(adapterModule ?? null)})`,
+  );
+  Deno.exit(1);
+}
 const request = JSON.parse(await new Response(Deno.stdin.readable).text());
 
 const _enc = new TextEncoder();
@@ -84,7 +104,14 @@ const realContactsPath = hasContactsField ? realPathOr(request.contacts_db_path)
 // failure) then costs one interpreter boot, not two, and can never surface as
 // a confusing bridge-timeout-shaped error from the REPL side.
 let bridgeCall: ((method: string, paramsJson: string) => Promise<string>) | null = null;
-let bridgeMeta: { has_contacts: boolean; default_max_calls: number } | null = null;
+// Opaque to this relay — whatever the adapter's build_db_service() returns,
+// ferried across to run_for_host_pyodide()'s meta= kwarg unexamined. Only the
+// adapter (on both sides of the bridge) knows or cares what's in it. Kept as
+// the raw JSON *string* the service interpreter produced, never
+// JSON.parse()'d in Deno: round-tripping through a JS value would silently
+// round any integer beyond Number.MAX_SAFE_INTEGER (e.g. a 64-bit record id
+// or timestamp an adapter puts in meta) before the adapter ever sees it.
+let bridgeMetaJson: string | null = null;
 if (DB_SERVICE) {
   try {
     const quiet = { stdout: () => {}, stderr: () => {} };
@@ -106,16 +133,23 @@ if (DB_SERVICE) {
     }
     // Globals, not string interpolation into the Python template — these are
     // real filesystem paths, not attacker-controlled prompt text, but there's
-    // no reason to string-build Python source out of them either.
+    // no reason to string-build Python source out of them either. Same for
+    // adapter_module_name: validated above, but a global assignment keeps the
+    // Python template free of any interpolated string regardless.
     dbsvc.globals.set("svc_db_path", svcDbPath);
     dbsvc.globals.set("svc_contacts_db_path", svcContactsPath);
+    dbsvc.globals.set("adapter_module_name", adapterModule);
     const metaJson = await dbsvc.runPythonAsync(`
-import json
-from pyodide_runtime import build_db_service
-_service, _meta = build_db_service(svc_db_path, svc_contacts_db_path)
+import importlib, json
+_adapter = importlib.import_module(adapter_module_name)
+# Pyodide gotcha: a JS \`null\` set via globals.set() crosses over as a JsProxy
+# ("JsNull"), NOT Python's None — normalize here so every adapter gets a
+# clean "str or None" contract regardless of whether it knows this quirk.
+_contacts_db_path = svc_contacts_db_path if isinstance(svc_contacts_db_path, str) else None
+_service, _meta = _adapter.build_db_service(svc_db_path, _contacts_db_path)
 json.dumps(_meta)
 `);
-    bridgeMeta = JSON.parse(metaJson);
+    bridgeMetaJson = metaJson;
     const handle = dbsvc.globals.get("_service").handle;
     // Async wrapper: the REPL interpreter's Python side calls this via
     // run_sync, which requires an awaitable (proven in
@@ -243,43 +277,50 @@ py.globals.set("host_fetch", async (m: string, u: string, h: string, b: string) 
 // A′: the sandbox receives the credential-stripped request; legacy keeps the
 // full request (credential included) for the pre-A′ in-sandbox auth path.
 py.globals.set("request_json", JSON.stringify(BRIDGE_LEGACY ? request : sandboxRequest));
-if (DB_SERVICE) {
-  py.globals.set("bridge_call", bridgeCall);
-}
+py.globals.set("adapter_module_name", adapterModule);
+// Always set, never conditionally interpolated — bridge_call/bridge_meta_json
+// are None/"null" outside DB-service mode, and the adapter's
+// run_for_host_pyodide(..., bridge_call=None, meta=None) contract handles
+// that uniformly. relay.ts never inspects what's inside meta (see
+// bridgeMetaJson above); it's opaque cargo between the two adapter calls,
+// passed through as the raw JSON string — never parsed into a JS value here.
+py.globals.set("bridge_call", DB_SERVICE ? bridgeCall : null);
+py.globals.set("bridge_meta_json", bridgeMetaJson ?? "null");
+// A callable, not a value snapshot: lastHttpErrorStatus is still 0 at this
+// point (host_fetch, which sets it, hasn't run yet — it runs synchronously
+// *inside* the runPythonAsync call below via run_sync). The Python template
+// calls this after computing resp, to read the CURRENT value.
+py.globals.set("get_last_http_error_status", () => lastHttpErrorStatus);
 
-// bridge_call/has_contacts/default_max_calls are only threaded through in
-// DB-service mode; run_for_host_pyodide ignores them when bridge_call is None.
-const bridgeArgs = DB_SERVICE
-  ? `, bridge_call=bridge_call, has_contacts=${bridgeMeta!.has_contacts ? "True" : "False"}, default_max_calls=${bridgeMeta!.default_max_calls}`
-  : "";
-
+// The status enrichment (attaching the captured HTTP status, e.g. 402 = out
+// of balance, to resp["error"]) happens INSIDE this same Python template,
+// not via a JS-side JSON.parse(out)/JSON.stringify(parsed) pass afterward —
+// that would reintroduce exactly the float64 precision loss the raw
+// bridge_meta_json passthrough above exists to avoid, for ANY large integer
+// anywhere in the adapter's response (not just meta). `out` is the final
+// stdout payload as-is; nothing here re-parses it in JS.
 const out = await py.runPythonAsync(`
-import json, io, contextlib
-from pyodide_runtime import run_for_host_pyodide
+import importlib, json, io, contextlib
+_adapter = importlib.import_module(adapter_module_name)
+_meta = json.loads(bridge_meta_json)
+# Pyodide gotcha: a JS \`null\` set via globals.set() crosses over as a JsProxy
+# ("JsNull"), NOT Python's None — \`bridge_call is not None\` would not catch
+# it, and the adapter would try to call it. Normalize explicitly here rather
+# than trust every adapter to know this quirk.
+_bridge_call = bridge_call if callable(bridge_call) else None
 # Capture the RLM's progress prints so stdout carries only the response JSON.
 _buf = io.StringIO()
 try:
     with contextlib.redirect_stdout(_buf):
-        resp = run_for_host_pyodide(json.loads(request_json), host_fetch${bridgeArgs})
+        resp = _adapter.run_for_host_pyodide(
+            json.loads(request_json), host_fetch, bridge_call=_bridge_call, meta=_meta,
+        )
 except Exception as e:
     resp = {"answer": None, "error": {"type": type(e).__name__, "message": str(e)}}
+_status = get_last_http_error_status()
+if _status and isinstance(resp.get("error"), dict):
+    resp["error"]["status"] = _status
 json.dumps(resp)
 `);
 
-// When the run failed due to an HTTP error, attach the captured status to the
-// structured error so the host can distinguish out-of-balance (402) from other
-// failures. Best-effort: if our own output isn't parseable JSON, fall back to
-// it unchanged (the error's message still carries the detail).
-let outText = out;
-if (lastHttpErrorStatus !== 0) {
-  try {
-    const parsed = JSON.parse(out);
-    if (parsed && typeof parsed.error === "object" && parsed.error !== null) {
-      parsed.error.status = lastHttpErrorStatus;
-      outText = JSON.stringify(parsed);
-    }
-  } catch {
-    // Output left unchanged; status enrichment is best-effort, not load-bearing.
-  }
-}
-await Deno.stdout.write(new TextEncoder().encode(outText + "\n"));
+await Deno.stdout.write(new TextEncoder().encode(out + "\n"));

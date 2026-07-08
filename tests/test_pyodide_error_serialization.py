@@ -7,22 +7,14 @@ host injects (402 = out of balance). These guard that regression.
 """
 
 import json
-import sys
-from pathlib import Path
 
-# The Pyodide substrate adapters live outside src/ (loaded by the Deno relay),
-# so add that dir to the path to import the host-response serializer under test.
-_PYODIDE_DIR = Path(__file__).resolve().parents[1] / "pyodide"
-sys.path.insert(0, str(_PYODIDE_DIR))
-
-from pyodide_runtime import _serialize_error  # noqa: E402
-
-from droste.loop.rlm import RLMError  # noqa: E402
+from droste.loop.rlm import RLMError
+from droste.substrates.pyodide import serialize_error
 
 
 def test_serialize_error_dataclass_is_json_serializable() -> None:
     err = RLMError(type="JsException", message="ModelRelay HTTP 402: insufficient balance")
-    serialized = _serialize_error(err)
+    serialized = serialize_error(err)
     assert serialized == {
         "type": "JsException",
         "message": "ModelRelay HTTP 402: insufficient balance",
@@ -34,8 +26,8 @@ def test_serialize_error_dataclass_is_json_serializable() -> None:
 
 
 def test_serialize_error_none_passthrough() -> None:
-    assert _serialize_error(None) is None
+    assert serialize_error(None) is None
 
 
 def test_serialize_error_dict_passthrough() -> None:
-    assert _serialize_error({"type": "X", "message": "y"}) == {"type": "X", "message": "y"}
+    assert serialize_error({"type": "X", "message": "y"}) == {"type": "X", "message": "y"}

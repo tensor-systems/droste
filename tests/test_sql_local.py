@@ -83,6 +83,15 @@ def test_non_sqlite_dialect_rejected() -> None:
         LocalSqlPolicy.from_spec({"dialect": "postgres"})
 
 
+def test_explicit_zero_timeout_ms_is_preserved_not_defaulted() -> None:
+    # `0 or 5000` would silently coerce an explicit 0 back to the 5000ms
+    # default (0 is falsy) — timeout_ms=0 is a real, validated value (see
+    # test_bad_limits_rejected: only < 0 is rejected) meaning "no timer"
+    # (query()'s own `if timeout_ms > 0` gate). Regression for droste#82.
+    policy = LocalSqlPolicy.from_spec({"limits": {"timeout_ms": 0}})
+    assert policy.timeout_ms == 0
+
+
 def test_bad_limits_rejected() -> None:
     with pytest.raises(ValueError, match="positive"):
         LocalSqlPolicy.from_spec({"limits": {"default_limit": -1}})
@@ -329,6 +338,22 @@ def test_timeout_interrupts_long_query(tmp_path) -> None:
     with pytest.raises(RuntimeError, match="time limit"):
         # ~1.25e8 nested-loop rows: comfortably outlives a 50ms budget.
         src.query("SELECT count(*) FROM t a, t b, t c WHERE a.x != b.x")
+
+
+def test_zero_timeout_never_arms_a_timer(tmp_path) -> None:
+    # threading.Timer.start() spawns a real OS thread — unavailable under
+    # Pyodide/WASM ("RuntimeError: can't start new thread" on the very first
+    # query with the DEFAULT policy, since 5000 > 0 always arms one). A host
+    # embedding droste under Pyodide relies on timeout_ms=0 to opt out of the
+    # timer entirely (the host's own wall-clock kill covers it instead).
+    # Regression for droste#82.
+    from unittest import mock
+
+    src = _source(tmp_path, policy={"read_only": True, "limits": {"timeout_ms": 0}})
+    with mock.patch.object(threading.Timer, "start") as mock_start:
+        rows = src.query("SELECT 1 AS x")
+    assert rows == [{"x": 1}]
+    mock_start.assert_not_called()
 
 
 def test_timer_arms_inside_lock(tmp_path) -> None:

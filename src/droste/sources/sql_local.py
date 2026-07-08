@@ -119,7 +119,12 @@ class LocalSqlPolicy:
         limits = limits if isinstance(limits, dict) else {}
         default_limit = int(limits.get("default_limit") or 1000)
         max_limit = int(limits.get("max_limit") or 10000)
-        timeout_ms = int(limits.get("timeout_ms") or 5000)
+        # NOT `or 5000`: 0 is a valid, explicitly-supported value (query()'s
+        # own `if timeout_ms > 0` gate treats it as "no timer", and the
+        # validation two lines below allows it) — `or` would silently coerce
+        # an explicit 0 back to 5000 since 0 is falsy in Python.
+        raw_timeout_ms = limits.get("timeout_ms")
+        timeout_ms = 5000 if raw_timeout_ms is None else int(raw_timeout_ms)
         if default_limit < 1 or max_limit < 1:
             raise ValueError("sql policy limits must be positive")
         if timeout_ms < 0:

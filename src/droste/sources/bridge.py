@@ -165,7 +165,7 @@ class BridgeDataSource:
     def _request(self, method: str, *args: Any, **kwargs: Any) -> Any:
         raw = self._call(method, json.dumps({"args": list(args), "kwargs": kwargs}))
         # Awaitable tolerance: under Pyodide the bridge call may be async
-        # (mirrors BridgedLLMClient._post in pyodide_runtime.py); block the
+        # (mirrors BridgedLLMClient._post in droste.substrates.pyodide); block the
         # sync RLM loop on it via run_sync. A plain string (native tests, or a
         # synchronous in-process loopback) is used as-is.
         if hasattr(raw, "__await__"):
