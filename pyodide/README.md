@@ -129,3 +129,31 @@ between the two modes. This is the strongest available evidence that the DB-serv
 doesn't change behavior — same corpus, same questions, same model, only the DB's interpreter
 locality differs. `RLM_DB_SERVICE` still defaults off; flipping it is a product decision for
 whoever owns the rollout, not an engineering blocker anymore.
+
+**Fixed (droste#16): `batch_llm_query` under the Deno+Pyodide relay was a hard crash.**
+`BridgedLLMClient` (this substrate's LLM client) only had a stale, unused
+`batch_responses(requests) -> list[str]` method; cozy's `rcl_rlm.llm_orchestrator`
+actually calls `batch_responses_typed(requests, options=None) -> BatchResponse` (a
+single POST to ModelRelay's server-side `/responses/batch` — the fan-out happens on
+ModelRelay's end, there's no client-side threading to port to Pyodide, which
+debunks the original fan-out-under-Pyodide framing of #16). Any `batch_llm_query`/
+`llm_batch_with_errors` call made while running under `--deno` hit an
+`AttributeError`. Root cause was protocol drift: droste's own `LLMClient` protocol
+(`src/droste/protocols/llm_client.py`) still declares the old `batch_responses`
+signature; `BridgedLLMClient` faithfully implemented that stale protocol while the
+actual runtime consumer (cozy's separate, evolved `rcl_rlm.llm_client.LLMClient`)
+had moved on. Fixed by adding `batch_responses_typed` (lazily importing and reusing
+`rcl_rlm.modelrelay.BatchResponse.from_dict`, matching this module's existing
+lazy-rcl_rlm-import pattern) and deleting the dead method. `broker.ts`'s credential
+scoping was widened from a single exact path to a two-entry exact-match set
+(`/api/v1/responses`, `/api/v1/responses/batch`) so the held ModelRelay credential
+is actually injected on batch calls too — without this, batch calls made by
+sandbox-side code (which never holds a real credential; see A′ above) would get a
+blank auth header and fail with 401, regardless of the method existing.
+`broker_batch_integration_test.ts` proves both fixes together against a real
+Pyodide interpreter with an *async* fake `host_fetch` (the existing
+`broker_integration_test.ts` case predates this fix and uses a sync-string
+`host_fetch`, which never exercises `BridgedLLMClient._post`'s `run_sync(awaitable)`
+branch — the actual code path the real Deno relay always takes). The stale
+`LLMClient` protocol drift itself (droste#16's real root cause) is tracked
+separately — see the protocol-drift issue linked from #16.

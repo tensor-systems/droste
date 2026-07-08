@@ -27,18 +27,26 @@ const AUTH_HEADER_NAMES = ["authorization", "x-modelrelay-api-key"];
 // ?x=api.modelrelay.ai` or plaintext `http://api.modelrelay.ai` must NOT qualify.
 const MODELRELAY_HOSTNAME = "api.modelrelay.ai";
 
-// The one route the credential is scoped to — the LLM transport, nothing else.
-const MODELRELAY_RESPONSES_PATH = "/api/v1/responses";
+// The routes the credential is scoped to — the LLM transport, nothing else.
+// Exact-match set, not a prefix: adding a path here is a deliberate widening
+// of what the held credential can reach, so each one is enumerated by hand.
+const MODELRELAY_RESPONSES_PATHS = new Set([
+  "/api/v1/responses",
+  "/api/v1/responses/batch",
+]);
 
 /**
- * True only for the exact `POST https://api.modelrelay.ai/api/v1/responses` call —
- * the sole request the held credential may be attached to. The sandbox controls
- * the method and URL, so gating on origin alone is not enough: it would leave the
- * token usable against other ModelRelay endpoints (e.g. customer/billing routes).
- * Requires POST + HTTPS + exact host + exact path so the credential is a
+ * True only for the exact `POST https://api.modelrelay.ai/api/v1/responses(/batch)`
+ * calls — the sole requests the held credential may be attached to. The sandbox
+ * controls the method and URL, so gating on origin alone is not enough: it would
+ * leave the token usable against other ModelRelay endpoints (e.g. customer/billing
+ * routes). Requires POST + HTTPS + exact host + exact path so the credential is a
  * single-purpose LLM-transport key, never a general ModelRelay credential.
  */
-export function isModelRelayResponsesCall(method: string, url: string): boolean {
+export function isModelRelayResponsesCall(
+  method: string,
+  url: string,
+): boolean {
   if (method.toUpperCase() !== "POST") return false;
   let parsed: URL;
   try {
@@ -49,7 +57,7 @@ export function isModelRelayResponsesCall(method: string, url: string): boolean 
   return (
     parsed.protocol === "https:" &&
     parsed.hostname === MODELRELAY_HOSTNAME &&
-    parsed.pathname === MODELRELAY_RESPONSES_PATH
+    MODELRELAY_RESPONSES_PATHS.has(parsed.pathname)
   );
 }
 
@@ -65,7 +73,9 @@ export function splitCredentials(
     creds: {
       authType: typeof auth_type === "string" ? auth_type : "api_key",
       apiKey: typeof api_key === "string" ? api_key : undefined,
-      customerToken: typeof customer_token === "string" ? customer_token : undefined,
+      customerToken: typeof customer_token === "string"
+        ? customer_token
+        : undefined,
     },
     sandboxRequest: rest,
   };

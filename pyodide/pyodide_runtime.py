@@ -154,19 +154,23 @@ class BridgedLLMClient:
             )
         return text
 
-    def batch_responses(self, requests: list[dict[str, Any]]) -> list[str]:
-        # Sequential for the spike; host-side parallelism is a Phase-2 follow-up.
-        results = []
-        for req in requests:
-            results.append(
-                self.responses_create(
-                    messages=req["messages"],
-                    model=req["model"],
-                    max_tokens=req.get("max_tokens", 4096),
-                    temperature=req.get("temperature", 0.0),
-                )
-            )
-        return results
+    def batch_responses_typed(
+        self,
+        requests: list[dict[str, Any]],
+        options: dict[str, Any] | None = None,
+    ) -> Any:
+        # Server-side fan-out (ModelRelay's /responses/batch does the batching;
+        # there's no client-side threading to port here, and Pyodide can't
+        # thread anyway). Reuses rcl_rlm's own wire-format parser rather than
+        # duck-typing a second BatchResponse shape — matches this module's
+        # existing lazy-import-rcl_rlm pattern (see build_db_service).
+        body: dict[str, Any] = {"requests": requests}
+        if options:
+            body["options"] = options
+        data = self._post("/responses/batch", body)
+        from rcl_rlm.modelrelay import BatchResponse
+
+        return BatchResponse.from_dict(data)
 
     def get_model_context_window(self, model: str) -> int | None:
         return None
