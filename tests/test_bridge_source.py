@@ -85,6 +85,38 @@ def test_optional_verb_forwards_through_the_bridge() -> None:
     assert bridged.sample(n=5) == []
 
 
+def test_extra_methods_forward_like_any_other_optional_verb() -> None:
+    """A host's own optional verb (e.g. cozy's get_retrieved_guids(), not part
+    of the DataSource Protocol or droste's own _OPTIONAL_METHODS) round-trips
+    through extra_methods= with zero BridgeDataSource changes — it just binds
+    dynamically from whatever describe() reports, same as any other optional
+    verb."""
+
+    class HostSource(MockDataSource):
+        def get_retrieved_guids(self) -> list[str]:
+            return ["guid-1", "guid-2"]
+
+    service = DataSourceService(HostSource(), extra_methods=("get_retrieved_guids",))
+    bridged = BridgeDataSource(service.handle, name="mock")
+
+    assert hasattr(bridged, "get_retrieved_guids")
+    assert bridged.get_retrieved_guids() == ["guid-1", "guid-2"]
+
+    # A source that doesn't implement the extra method doesn't get it bound,
+    # same as any other optional verb.
+    plain_service = DataSourceService(MockDataSource(), extra_methods=("get_retrieved_guids",))
+    plain_bridged = BridgeDataSource(plain_service.handle, name="mock")
+    assert not hasattr(plain_bridged, "get_retrieved_guids")
+
+    # And it's rejected server-side if a caller tries to reach it anyway on a
+    # source that doesn't implement it — same allowlist discipline as any
+    # other verb, droste-defined or host-defined.
+    raw = plain_service.handle("get_retrieved_guids", json.dumps({"args": [], "kwargs": {}}))
+    envelope = json.loads(raw)
+    assert envelope["ok"] is False
+    assert envelope["error"]["type"] == "PermissionError"
+
+
 def test_registry_composes_a_bridged_source_like_any_other() -> None:
     source = MockDataSource(query_results={"SELECT": [{"row": 1}]})
     service = DataSourceService(source)

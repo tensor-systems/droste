@@ -45,7 +45,11 @@ _CORE_METHODS: dict[str, str] = {
 }
 
 # Optional verbs, gated by hasattr(source, name) — mirrors registry.py's own
-# hasattr checks for these (no capabilities() flag governs them).
+# hasattr checks for these (no capabilities() flag governs them). Host-specific
+# extras that registry.py doesn't know about (e.g. a host's own retrieved-IDs
+# tracking) go through DataSourceService's extra_methods= instead of this
+# tuple — this one is droste's own sandbox-verb list, not a place for a
+# specific host's own conventions.
 _OPTIONAL_METHODS: tuple[str, ...] = (
     "find",
     "content",
@@ -59,10 +63,19 @@ _OPTIONAL_METHODS: tuple[str, ...] = (
 class DataSourceService:
     """Server half: dispatches bridge calls to a real `DataSource`."""
 
-    def __init__(self, source: DataSource) -> None:
+    def __init__(self, source: DataSource, *, extra_methods: tuple[str, ...] = ()) -> None:
         self._source = source
         self._caps: dict[str, bool] = dict(source.capabilities())
-        self._optional: set[str] = {name for name in _OPTIONAL_METHODS if hasattr(source, name)}
+        # extra_methods: host-specific optional verbs beyond droste's own
+        # _OPTIONAL_METHODS — e.g. a host's DataSource may track retrieved-
+        # record IDs for a citations feature via a get_retrieved_guids()-shaped
+        # method that isn't part of the DataSource Protocol at all and means
+        # nothing to droste. Gated identically (hasattr on the wrapped source)
+        # and folded into the same describe()/dispatch machinery, so
+        # BridgeDataSource needs no changes to pick them up — it already binds
+        # whatever describe() reports in optional_methods.
+        self._optional_names: tuple[str, ...] = _OPTIONAL_METHODS + tuple(extra_methods)
+        self._optional: set[str] = {name for name in self._optional_names if hasattr(source, name)}
 
     def describe(self) -> dict[str, Any]:
         schema = self._source.get_schema() if self._caps.get("schema") else None
@@ -101,7 +114,7 @@ class DataSourceService:
                 raise PermissionError(f"method {method!r} is not enabled by this data source")
             return getattr(self._source, method)(*args, **kwargs)
 
-        if method in _OPTIONAL_METHODS:
+        if method in self._optional_names:
             if method not in self._optional:
                 raise PermissionError(f"method {method!r} is not implemented by this data source")
             return getattr(self._source, method)(*args, **kwargs)
