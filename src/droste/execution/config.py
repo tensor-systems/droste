@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .progress import ProgressCallback
+from .progress import EventCallback, ProgressCallback
 
 DEFAULT_MAX_OUTPUT_CHARS = 25000
 DEFAULT_MAX_DEPTH = 1
@@ -23,3 +23,6 @@ class ExecutionConfig:
     max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS
     verbose: bool = False
     on_progress: ProgressCallback | None = None
+    # Structured loop events (#2). When None, events go to stderr as NDJSON;
+    # embedders can supply a sink instead. Independent of on_progress.
+    on_event: EventCallback | None = None

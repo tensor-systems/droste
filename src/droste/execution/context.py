@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from .config import (
     DEFAULT_MAX_CALLS,
@@ -9,7 +10,7 @@ from .config import (
     DEFAULT_MAX_OUTPUT_CHARS,
     ExecutionConfig,
 )
-from .progress import ProgressCallback, emit_progress
+from .progress import EventCallback, ProgressCallback, emit_event, emit_progress
 from .stats import ExecutionStats
 
 
@@ -26,6 +27,13 @@ class ExecutionContext:
             self.config.on_progress(status)
         else:
             emit_progress(status)
+
+    def emit_event(self, event: dict[str, Any]) -> None:
+        """Emit a structured loop event (#2) via callback if provided, else stderr."""
+        if self.config.on_event is not None:
+            self.config.on_event(event)
+        else:
+            emit_event(event)
 
     @property
     def depth(self) -> int:
@@ -84,6 +92,7 @@ def create_execution_context(
     max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
     verbose: bool = False,
     on_progress: ProgressCallback | None = None,
+    on_event: EventCallback | None = None,
 ) -> ExecutionContext:
     config = ExecutionConfig(
         max_depth=max_depth,
@@ -92,5 +101,6 @@ def create_execution_context(
         max_output_chars=max_output_chars,
         verbose=verbose,
         on_progress=on_progress,
+        on_event=on_event,
     )
     return ExecutionContext(config=config, stats=ExecutionStats())

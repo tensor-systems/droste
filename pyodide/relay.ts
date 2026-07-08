@@ -14,6 +14,8 @@
 import { loadPyodide } from "npm:pyodide@0.29.4";
 import { basename, dirname } from "node:path";
 import { streamResponses } from "./stream.ts";
+import { isModelRelayResponsesCall, splitCredentials, stripAndInjectAuth } from "./broker.ts";
+import { isRlmEvent } from "./events.ts";
 
 const sources = Deno.args[0]; // bundled Python sources DIR (prod) or a .zip (dev)
 const request = JSON.parse(await new Response(Deno.stdin.readable).text());
@@ -30,19 +32,19 @@ function realPathOr(path: string): string {
 
 // Route Python stdout off the relay's stdout (which carries only the response
 // JSON); silence the package loader's "Loading sqlite3" chatter too. Forward the
-// RLM's structured progress events (JSON lines on Python's stderr) to the relay's
-// own stderr so the host can render real-time progress; drop other stderr noise.
+// RLM's structured events (NDJSON lines on Python's stderr — progress plus the
+// loop events from #2: iteration_start/code/output/subcall) to the relay's own
+// stderr so the host can render real-time progress; drop other stderr noise.
 const _enc = new TextEncoder();
 const py = await loadPyodide({
   stdout: () => {},
   stderr: (msg: string) => {
     for (const line of msg.split("\n")) {
-      // Whitespace-insensitive: json.dumps emits `"type": "progress"` with spaces.
-      if (line.replace(/\s/g, "").includes('"type":"progress"')) {
+      if (isRlmEvent(line)) {
         try {
-          Deno.stderr.writeSync(_enc.encode(line + "\n"));
+          Deno.stderr.writeSync(_enc.encode(line.trim() + "\n"));
         } catch {
-          // best-effort progress; never let it break the run
+          // best-effort event forwarding; never let it break the run
         }
       }
     }
@@ -90,6 +92,14 @@ function emitEvent(obj: unknown): void {
 // no-rebuild kill switch). --allow-env is already granted (see usage header).
 const STREAM_ENABLED = Deno.env.get("RLM_STREAM") !== "0";
 
+// A′ sandbox split (#3): the untrusted interpreter must never hold the ModelRelay
+// credential. The broker strips it from the request the sandbox sees, holds it
+// host-side, and injects the auth header on every ModelRelay call below.
+// RLM_BRIDGE=legacy restores the pre-A′ behavior (credential visible to the
+// sandbox) as a no-rebuild kill switch, mirroring RLM_STREAM=0.
+const BRIDGE_LEGACY = Deno.env.get("RLM_BRIDGE") === "legacy";
+const { creds, sandboxRequest } = splitCredentials(request);
+
 // Host-brokered ModelRelay transport (Pyodide has no network of its own).
 // The last HTTP error status (0 = none) is captured structurally here, where
 // `r.status` is available, and injected into the HostResponse error below — so
@@ -98,6 +108,15 @@ const STREAM_ENABLED = Deno.env.get("RLM_STREAM") !== "0";
 let lastHttpErrorStatus = 0;
 py.globals.set("host_fetch", async (m: string, u: string, h: string, b: string) => {
   const headers = JSON.parse(h);
+  // A′: host auth is authoritative — drop whatever auth header the sandbox sent
+  // and inject the held credential. Scoped to the exact `POST /api/v1/responses`
+  // ModelRelay call (isModelRelayResponsesCall parses method + URL), so the
+  // credential is a single-purpose LLM-transport key — sandbox code can't reuse
+  // it against other ModelRelay endpoints, another host, or over plaintext.
+  // Legacy mode leaves the sandbox-assembled header untouched.
+  if (!BRIDGE_LEGACY && isModelRelayResponsesCall(m, u)) {
+    stripAndInjectAuth(headers, creds);
+  }
   // Ask ModelRelay to stream /responses so reasoning tokens reach the host live.
   // Pyodide still receives one complete response (see streamResponses), so the
   // sync RLM loop is unaffected.
@@ -122,7 +141,9 @@ py.globals.set("host_fetch", async (m: string, u: string, h: string, b: string) 
   }
   return await r.text();
 });
-py.globals.set("request_json", JSON.stringify(request));
+// A′: the sandbox receives the credential-stripped request; legacy keeps the
+// full request (credential included) for the pre-A′ in-sandbox auth path.
+py.globals.set("request_json", JSON.stringify(BRIDGE_LEGACY ? request : sandboxRequest));
 
 const out = await py.runPythonAsync(`
 import json, io, contextlib

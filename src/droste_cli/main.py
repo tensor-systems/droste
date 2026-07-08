@@ -394,6 +394,11 @@ def run_ask(args: argparse.Namespace) -> int:
         # Progress lines only stream with --verbose/--trace; the default
         # emitter would print JSON progress events to stderr unconditionally.
         on_progress=echo.progress if echo else (lambda status: None),
+        # The CLI renders "watch it think" via the --verbose/--trace echo above,
+        # not the structured NDJSON events (those feed programmatic hosts through
+        # the relay's stderr forwarder). Swallow them here so a plain `droste ask`
+        # never dumps raw code/iteration/output JSON to stderr.
+        on_event=lambda event: None,
     )
 
     if provider == "modelrelay":

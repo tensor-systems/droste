@@ -316,6 +316,13 @@ def run_rlm(
     try:
         while not answer.get("ready") and iterations < cfg.max_iterations:
             iterations += 1
+            context.emit_event(
+                {
+                    "type": "iteration_start",
+                    "iteration": iterations,
+                    "max_iterations": cfg.max_iterations,
+                }
+            )
 
             if iterations == 1:
                 messages = [
@@ -437,6 +444,7 @@ def run_rlm(
                     )
 
             context.emit_progress(f"Iteration {iterations}/{cfg.max_iterations}: Executing...")
+            context.emit_event({"type": "code", "iteration": iterations, "code": code})
             if cfg.verbose:
                 print(f"\nExecuting code:\n{code}", file=sys.stderr)
 
@@ -448,7 +456,13 @@ def run_rlm(
 
                 output = environment.execute(code)
                 last_output = _execution_output(output)
+                # Enforce the output budget BEFORE emitting: an over-budget print
+                # must raise here (error path), never stream its full contents to
+                # the event channel — the guard gates the event, not just the loop.
                 _enforce_output_budget(last_output, cfg.max_output_chars)
+                context.emit_event(
+                    {"type": "output", "iteration": iterations, "stdout": last_output}
+                )
                 answer = _refresh_answer(env_globals, answer)
                 if (
                     cfg.enforce_contract
@@ -549,6 +563,12 @@ def run_rlm(
                     context.emit_progress(
                         f"Iteration {iterations}/{cfg.max_iterations}: Executing repaired code..."
                     )
+                    # The repaired code is what actually runs this iteration — emit
+                    # it too, or event consumers see only the failed first attempt
+                    # and miss the code/output that produced the answer.
+                    context.emit_event(
+                        {"type": "code", "iteration": iterations, "code": repaired_code}
+                    )
                     try:
                         if cfg.enforce_contract:
                             violations = contract_violations(repaired_code, cfg.policy_hints)
@@ -558,6 +578,9 @@ def run_rlm(
                         output = environment.execute(repaired_code)
                         last_output = _execution_output(output)
                         _enforce_output_budget(last_output, cfg.max_output_chars)
+                        context.emit_event(
+                            {"type": "output", "iteration": iterations, "stdout": last_output}
+                        )
                         answer = _refresh_answer(env_globals, answer)
                         if (
                             cfg.enforce_contract
