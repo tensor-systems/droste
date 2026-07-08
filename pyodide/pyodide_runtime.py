@@ -251,8 +251,8 @@ def run_for_host_pyodide(
     `build_db_service` (see `droste.sources.bridge`), it passes the resulting
     `bridge_call(method, params_json)` here instead of a raw `db_path`. The DB
     then never opens inside this (untrusted) interpreter. `bridge_call` is
-    `None` until the host opts in (relay.ts: `RLM_DB_SERVICE=1`) — today's
-    single-interpreter, `db_path`-in-sandbox behavior is unchanged when it is.
+    `None` when the host opts out (relay.ts: `RLM_DB_SERVICE=0`) —
+    the single-interpreter, `db_path`-in-sandbox behavior is unchanged in that case.
 
     `has_contacts` / `default_max_calls` are `build_db_service`'s `meta`,
     threaded across from the service interpreter — the REPL interpreter has no

@@ -99,7 +99,7 @@ layer onto the trusted host as a separate Pyodide "DB service" context (verbatim
 context getting no FS/no net and only the bridged tools. Matches DSPy's tools-only posture.
 Defense-in-depth, post-v1.
 
-**Progress (droste#9 / droste#3 A'-2, cozy#807 — done, opt-in):** the full cross-interpreter
+**Progress (droste#9 / droste#3 A'-2, cozy#807 — done, on by default):** the full cross-interpreter
 split is wired and tested end-to-end. `droste/sources/bridge.py` (`DataSourceService` server
 half + `BridgeDataSource` client half; unit tests in `tests/test_bridge_source.py`, a
 real-two-Pyodide-interpreters proof in `bridge_source_integration_test.ts`); cozy's
@@ -112,8 +112,9 @@ visible, then threaded across — the REPL interpreter has no `/data` mount to p
 from) — and `run_for_host_pyodide` accepts `bridge_call`/`has_contacts`/`default_max_calls`.
 `relay.ts` boots the trusted "DB service" interpreter FIRST (a bootstrap failure then costs
 one interpreter, not two), mounts `/data` there only, and forwards a `bridge_call` into the
-REPL interpreter — gated behind `RLM_DB_SERVICE=1` (opt-in, default off), orthogonal to the
-`RLM_BRIDGE=legacy` kill-switch from A'-1. `db_service_integration_test.ts` proves the whole
+REPL interpreter — on by default as of 2026-07-08 (`RLM_DB_SERVICE=0` reverts to the
+single-interpreter behavior), orthogonal to the `RLM_BRIDGE=legacy` kill-switch from A'-1.
+`db_service_integration_test.ts` proves the whole
 path against real `rcl_rlm` (not a stub): a real `MessageDatabase`, generated code's
 `query()` calls reaching it over the bridge, `retrieved_guids` surviving via
 `extra_methods`, and the REPL interpreter never seeing the DB. The cozy-side engine-pin bump
@@ -127,8 +128,8 @@ All three: **byte-for-byte identical** answer text, `retrieved_guids` (including
 list + order on the semantic query), `iterations`, `sub_calls_made`, and `total_tokens`
 between the two modes. This is the strongest available evidence that the DB-service split
 doesn't change behavior — same corpus, same questions, same model, only the DB's interpreter
-locality differs. `RLM_DB_SERVICE` still defaults off; flipping it is a product decision for
-whoever owns the rollout, not an engineering blocker anymore.
+locality differs. On the strength of this parity result, `RLM_DB_SERVICE` now defaults to on
+(`RLM_DB_SERVICE=0` is the escape hatch back to the single-interpreter mode).
 
 **Fixed (droste#16): `batch_llm_query` under the Deno+Pyodide relay was a hard crash.**
 `BridgedLLMClient` (this substrate's LLM client) only had a stale, unused

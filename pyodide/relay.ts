@@ -52,12 +52,18 @@ async function writeHostResponse(resp: unknown): Promise<void> {
 // A'-2 sandbox split (droste#3): move the DB out of the untrusted REPL
 // interpreter entirely, into a second, trusted "DB service" interpreter that
 // the REPL only ever reaches through a bridged RPC call (droste.sources.bridge).
-// Opt-in, default off — mirrors the RLM_BRIDGE=legacy kill-switch shape from
-// A'-1. Orthogonal to RLM_BRIDGE: that flag governs credential visibility
-// (which payload the sandbox sees, whether host_fetch strips/injects auth);
-// this one governs DB locality. All four combinations of the two flags are
-// coherent and each is a useful debugging bisect.
-const DB_SERVICE = Deno.env.get("RLM_DB_SERVICE") === "1";
+// On by default as of 2026-07-08: the live-corpus parity check (byte-identical
+// answers, retrieved_guids, iterations, sub_calls_made, and total_tokens across
+// 3 representative queries against the 300k+-message benchmark corpus, both
+// modes) found no behavior difference, so the stronger security posture (the
+// untrusted interpreter never holds the DB) ships as the default.
+// RLM_DB_SERVICE=0 reverts to the single-interpreter, db_path-in-sandbox
+// behavior — mirrors the RLM_BRIDGE=legacy / RLM_STREAM=0 kill-switch shape.
+// Orthogonal to RLM_BRIDGE: that flag governs credential visibility (which
+// payload the sandbox sees, whether host_fetch strips/injects auth); this one
+// governs DB locality. All four combinations of the two flags are coherent and
+// each is a useful debugging bisect.
+const DB_SERVICE = Deno.env.get("RLM_DB_SERVICE") !== "0";
 
 // Resolve symlinks before mounting. Pyodide's NODEFS mounts a host directory
 // into its own VFS; if the DB file is a symlink to an absolute host path
