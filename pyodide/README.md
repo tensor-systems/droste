@@ -116,7 +116,16 @@ REPL interpreter — gated behind `RLM_DB_SERVICE=1` (opt-in, default off), orth
 `RLM_BRIDGE=legacy` kill-switch from A'-1. `db_service_integration_test.ts` proves the whole
 path against real `rcl_rlm` (not a stub): a real `MessageDatabase`, generated code's
 `query()` calls reaching it over the bridge, `retrieved_guids` surviving via
-`extra_methods`, and the REPL interpreter never seeing the DB. **Still open:** a live-corpus
-parity check (needs `MODELRELAY_API_KEY` + a real shadow.db — deliberately not faked) before
-flipping the default, and the cozy-side engine-pin bump this depends on
-(`rlm-core`→`droste`) is a separate, already-landed migration (cozy#812).
+`extra_methods`, and the REPL interpreter never seeing the DB. The cozy-side engine-pin bump
+this depends on (`rlm-core`→`droste`) landed separately (cozy#812).
+
+**Live-corpus parity check (done):** ran 3 representative CLI queries (`rcl-rlm --deno`) —
+one factual count, one discovery yes/no, one semantic query that fans out an `llm_query`
+sub-call — against the real 300k+-message benchmark corpus, once with `RLM_DB_SERVICE`
+unset and once with `RLM_DB_SERVICE=1`, real `MODELRELAY_API_KEY`, real ModelRelay calls.
+All three: **byte-for-byte identical** answer text, `retrieved_guids` (including full GUID
+list + order on the semantic query), `iterations`, `sub_calls_made`, and `total_tokens`
+between the two modes. This is the strongest available evidence that the DB-service split
+doesn't change behavior — same corpus, same questions, same model, only the DB's interpreter
+locality differs. `RLM_DB_SERVICE` still defaults off; flipping it is a product decision for
+whoever owns the rollout, not an engineering blocker anymore.
