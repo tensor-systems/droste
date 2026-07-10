@@ -31,32 +31,21 @@ import json
 from typing import Any, Callable
 
 from ..protocols.data_source import DataSource
-from ..registry import validate_extra_method_name
-
-# Core protocol verbs, gated by the corresponding capabilities() flag (mirrors
-# registry.py's own gating, so a method the registry would never bind into the
-# sandbox can't be reached by calling the bridge directly either).
-_CORE_METHODS: dict[str, str] = {
-    "search": "search",
-    "query": "sql",
-    "get": "get",
-    "get_recent": "recent",
-    "get_schema": "schema",
-    "get_stats": "stats",
-}
-
-# Optional verbs, gated by hasattr(source, name) — mirrors registry.py's own
-# hasattr checks for these (no capabilities() flag governs them). Host- or
-# domain-specific verbs (a chat archive's bulk accessors, a citations
-# feature's ID tracking) are NOT listed here (#10): the engine is
-# domain-blind, so a source declares those itself via an `extra_methods`
-# attribute (or the host passes extra_methods= to DataSourceService) — this
-# tuple is droste's own generic sandbox-verb list only.
-_OPTIONAL_METHODS: tuple[str, ...] = (
-    "find",
-    "content",
-    "sample",
+from ..protocols.verbs import (
+    CAPABILITY_GATED_VERBS,
+    HASATTR_GATED_VERBS,
+    UNSAFE_BRIDGE_OPTIONAL_NAMES,
+    validate_extra_method_name,
 )
+
+# Both halves gate against the protocols-level verb table — the same rows the
+# registry folds over — so a method the registry would never bind into the
+# sandbox can't be reached by calling the bridge directly either, by
+# construction rather than by mirrored comments. Host- or domain-specific
+# verbs (a chat archive's bulk accessors, a citations feature's ID tracking)
+# are NOT in the table (#10): the engine is domain-blind, so a source declares
+# those itself via an `extra_methods` attribute (or the host passes
+# extra_methods= to DataSourceService).
 
 # Distinguishes "attribute absent" from "attribute present with value None"
 # in extras validation — the two must behave differently (skip vs reject).
@@ -70,7 +59,7 @@ class DataSourceService:
         self._source = source
         self._caps: dict[str, bool] = dict(source.capabilities())
         # extra_methods: host-specific verbs beyond droste's own generic
-        # _OPTIONAL_METHODS — e.g. a chat archive's bulk accessors, or a
+        # hasattr-gated verbs — e.g. a chat archive's bulk accessors, or a
         # citations feature's get_retrieved_guids() — methods that are not
         # part of the DataSource Protocol at all and mean nothing to droste.
         # Two declaration channels, merged: the source's own `extra_methods`
@@ -114,7 +103,7 @@ class DataSourceService:
                     f"extra method {str(extra)!r} on source {source.name()!r} is not a callable"
                 )
         self._extra_names: tuple[str, ...] = tuple(dict.fromkeys((*declared, *extra_methods)))
-        self._optional_names: tuple[str, ...] = _OPTIONAL_METHODS + self._extra_names
+        self._optional_names: tuple[str, ...] = HASATTR_GATED_VERBS + self._extra_names
         self._optional: set[str] = {name for name in self._optional_names if hasattr(source, name)}
 
     def describe(self) -> dict[str, Any]:
@@ -149,7 +138,7 @@ class DataSourceService:
         if method == "describe":
             return self.describe()
 
-        gate = _CORE_METHODS.get(method)
+        gate = CAPABILITY_GATED_VERBS.get(method)
         if gate is not None:
             if not self._caps.get(gate):
                 raise PermissionError(f"method {method!r} is not enabled by this data source")
@@ -164,19 +153,6 @@ class DataSourceService:
 
 
 BridgeCall = Callable[[str, str], Any]
-
-# Core verbs whose real-world signatures vary by source beyond what the
-# DataSource Protocol declares — e.g. WrapperV1DataSource.search(query,
-# filters=None, page=None) has a `page` the Protocol doesn't, and other
-# search()-capable sources accept their own extra kwargs. A
-# fixed BridgeDataSource signature can't proxy that faithfully in either
-# direction: a concrete default would get forwarded on every call even when
-# the caller omitted it (silently overriding the wrapped source's own
-# default), and a missing param can't be forwarded at all. These are instead
-# bound dynamically (see __init__), the same as the optional verbs below,
-# forwarding *args/**kwargs verbatim — byte-identical, argument-wise, to
-# calling the wrapped source directly, for any signature.
-_DYNAMIC_CORE_METHODS: tuple[str, ...] = ("search", "query", "get", "get_recent")
 
 
 class BridgeDataSource:
@@ -200,19 +176,29 @@ class BridgeDataSource:
         # wrapped source actually supports (registry.py gates optional verbs
         # by hasattr), so a model calling it would get a runtime bridge error
         # instead of the method never being offered in the first place.
-        for method in _DYNAMIC_CORE_METHODS:
-            if self._caps.get(_CORE_METHODS[method]):
-                setattr(self, method, functools.partial(self._request, method))
+        # Every enabled capability-gated verb is covered: verbs the class
+        # implements concretely (get_schema serves the describe() cache;
+        # get_stats below) keep those implementations, and every OTHER
+        # enabled row — including any future verb added to the table — gets
+        # a *args/**kwargs proxy. The dynamic default matters because
+        # real-world signatures vary by source beyond what the DataSource
+        # Protocol declares (e.g. a wrapper's search(query, filters=None,
+        # page=None) has a `page` the Protocol doesn't); forwarding verbatim
+        # is byte-identical, argument-wise, to calling the wrapped source
+        # directly, for any signature.
+        for method, capability in CAPABILITY_GATED_VERBS.items():
+            if not self._caps.get(capability):
+                continue
+            if callable(getattr(type(self), method, None)):
+                continue  # concrete client implementation wins
+            setattr(self, method, functools.partial(self._request, method))
         for method in self._optional:
             # Defense in depth: describe() comes from the trusted side, but a
             # buggy or spoofed service must not be able to make this client
-            # setattr over its own machinery (_request/_call) or protocol
-            # surface — that would silently corrupt every subsequent call.
-            if (
-                method.startswith("_")
-                or method in _CORE_METHODS
-                or method in ("describe", "name", "capabilities", "extra_methods")
-            ):
+            # setattr over its own machinery (_request/_call), protocol
+            # surface, or a runner-reserved global — that would silently
+            # corrupt every subsequent call.
+            if method.startswith("_") or method in UNSAFE_BRIDGE_OPTIONAL_NAMES:
                 raise ValueError(
                     f"bridge service advertised unsafe optional method name {method!r}"
                 )
@@ -259,9 +245,7 @@ class BridgeDataSource:
     def get_stats(self) -> dict[str, Any]:
         return self._request("get_stats")
 
-    # search/query/get/get_recent are bound dynamically in __init__ (see
-    # _DYNAMIC_CORE_METHODS) when the wrapped source enables them — not
-    # defined here, so calling one that isn't enabled fails the same way
-    # (AttributeError) as it would on any other DataSource that simply
-    # doesn't implement it (e.g. LocalSqlDataSource has no search/get/
-    # get_recent at all).
+    # The remaining capability-gated verbs are bound in __init__ when the
+    # wrapped source enables them — not defined here, so calling one that
+    # isn't enabled fails the same way (AttributeError) as it would on any
+    # other DataSource that simply doesn't implement it.

@@ -89,47 +89,63 @@ def test_static_fallback_when_no_accessors_supplied() -> None:
     assert contract_violations(code, COUNT)
 
 
-def test_accessor_collection_uses_namespace_provenance() -> None:
-    # A custom environment's unrelated helper callables must not be
-    # classified as data accessors (codex review): only namespaces the
-    # registry MARKED as data sources are scanned, and only names whose
-    # SAME callable also lives inside a marked namespace count as
-    # flattened accessors.
-    from types import SimpleNamespace
+def test_registry_accessor_manifest_is_explicit_data() -> None:
+    # Accessor discovery reads the registry's own manifest (#31) — no
+    # namespace marker, no callable-identity sniffing. Flat names come only
+    # from the default source; namespaced pairs cover every bound verb,
+    # including declared extras.
+    from droste.registry import DataSourceRegistry
+    from droste.testing import MockDataSource
 
-    from droste.loop.rlm import _collect_data_accessors
+    class Other(MockDataSource):
+        extra_methods = ("get_threads",)
 
-    def search(q):
-        return []
+        def name(self):
+            return "other"
 
-    def parse(x):  # an env helper, not a data accessor
-        return x
+        def get_threads(self):
+            return []
 
-    db = SimpleNamespace(search=search, query=lambda s: [])
-    db._droste_data_source = True  # what registry.globals() stamps
-    utils = SimpleNamespace(parse=parse)  # custom env helper bag — unmarked
-
-    env = {
-        "db": db,
-        "utils": utils,
-        "search": search,  # flattened default verb — same object as db.search
-        "parse": parse,  # helper with no marked-namespace provenance
-        "llm_query": lambda p: "",
-        "answer": {"content": "", "ready": False},
-    }
-    flat, namespaced = _collect_data_accessors(env)
-    assert flat == {"search"}
-    assert ("db", "search") in namespaced and ("db", "query") in namespaced
-    assert "parse" not in flat
-    assert not any(ns == "utils" for ns, _ in namespaced)
+    manifest = DataSourceRegistry(
+        [MockDataSource(), Other()], default_source_name="mock"
+    ).accessor_manifest()
+    assert "search" in manifest.flat and "query" in manifest.flat
+    assert ("mock", "search") in manifest.namespaced
+    assert ("other", "get_threads") in manifest.namespaced
+    # Non-default source's verbs are never flat.
+    assert "get_threads" not in manifest.flat
 
 
-def test_registry_namespaces_carry_the_provenance_marker() -> None:
-    # The marker is what makes provenance detection reliable — if
-    # registry.globals() ever stops stamping it, accessor discovery
-    # silently collapses to the static fallback.
+def test_registry_namespaces_carry_no_marker_attributes() -> None:
+    # The provenance marker died with #31: sandbox namespaces expose only
+    # the source's verbs, nothing droste-internal to sniff.
     from droste.registry import DataSourceRegistry
     from droste.testing import MockDataSource
 
     env = DataSourceRegistry([MockDataSource()], default_source_name="mock").globals()
-    assert getattr(env["mock"], "_droste_data_source", False) is True
+    assert not any(attr.startswith("_droste") for attr in vars(env["mock"]))
+
+
+def test_runner_environment_reports_registry_manifest() -> None:
+    # The environment is the seam run_rlm reads the manifest through; without
+    # a registry it reports the empty manifest (static policy fallback).
+    from droste.registry import DataSourceRegistry
+    from droste.testing import MockDataSource, MockSubcallClient
+    from droste_runner.runner import RunnerEnvironment
+
+    def _env(registry):
+        return RunnerEnvironment(
+            context=None,
+            registry=registry,
+            subcalls=MockSubcallClient(),
+            max_output_chars=10000,
+            exec_timeout_ms=0,
+        )
+
+    manifest = _env(
+        DataSourceRegistry([MockDataSource()], default_source_name="mock")
+    ).accessor_manifest()
+    assert "search" in manifest.flat and ("mock", "query") in manifest.namespaced
+
+    empty = _env(None).accessor_manifest()
+    assert not empty.flat and not empty.namespaced

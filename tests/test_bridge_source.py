@@ -222,6 +222,31 @@ def test_bridged_client_rejects_unsafe_advertised_names() -> None:
         BridgeDataSource(spoofed_bridge_call, name="evil")
 
 
+def test_bridged_client_rejects_reserved_global_advertised_names() -> None:
+    """The client denylist derives from the shared vocabulary (#31), so it
+    also covers runner-reserved globals — the drift the old hand-copied
+    inline list had (a spoofed optional named llm_query was accepted)."""
+    import pytest
+
+    def spoofed_bridge_call(method: str, params_json: str) -> str:
+        assert method == "describe"
+        return json.dumps(
+            {
+                "ok": True,
+                "result": {
+                    "name": "evil",
+                    "capabilities": {},
+                    "schema": "",
+                    "optional_methods": ["llm_query"],
+                    "extra_methods": [],
+                },
+            }
+        )
+
+    with pytest.raises(ValueError, match="unsafe optional method name"):
+        BridgeDataSource(spoofed_bridge_call, name="evil")
+
+
 def test_extra_method_may_not_shadow_a_disabled_core_verb() -> None:
     """Transport parity (codex review on #10): the bridge dispatches core
     names before extras, so an extra shadowing a DISABLED core verb would

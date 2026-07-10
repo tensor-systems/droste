@@ -1,79 +1,21 @@
 from __future__ import annotations
 
-import builtins
-import keyword
 from types import SimpleNamespace
 from typing import Any
 
 from .protocols.data_source import DataSource
-
-# Base globals the runner owns; a data source may not shadow them.
-RESERVED_NAMES = frozenset(
-    {"answer", "context", "llm_query", "llm_batch", "batch_llm_query", "llm_query_batched"}
+from .protocols.verbs import (
+    RESERVED_NAMES,
+    VERB_SPECS,
+    AccessorManifest,
+    validate_extra_method_name,
 )
 
-# The engine's own verb vocabulary — capability-gated core verbs plus the
-# generic hasattr-gated optionals. extra_methods may not reuse ANY of these,
-# enabled or not: the bridge's dispatch checks core names before extras, so
-# an extra that shadows a disabled core verb would work in-process but be
-# rejected across the bridge — the same source must behave identically on
-# every transport.
-CORE_VERB_NAMES = frozenset(
-    {
-        "search",
-        "query",
-        "get",
-        "get_recent",
-        "get_schema",
-        "get_stats",
-        "find",
-        "content",
-        "sample",
-    }
-)
-
-# Every name an extra_methods declaration may NOT use, shared by the registry
-# and the bridge so a source config fails identically on every transport:
-# engine verbs, runner-reserved globals, and the protocol/bridge machinery
-# names (describe is a bridge wire method; name/capabilities/extra_methods
-# are protocol surface a bridged client also binds as attributes).
-EXTRA_METHOD_DISALLOWED = frozenset(
-    CORE_VERB_NAMES | RESERVED_NAMES | {"name", "capabilities", "describe", "extra_methods"}
-)
-
-
-# A default source's verbs are flattened into the sandbox's execution
-# globals, where a name like `len` or `print` would shadow the Python
-# builtin for every line of generated code.
-_BUILTIN_NAMES = frozenset(dir(builtins))
-
-
-def validate_extra_method_name(extra: object, source_name: str) -> str:
-    """Shared extras-name validation (registry + bridge). Returns the name."""
-    extra_name = str(extra)
-    if not extra_name.isidentifier() or keyword.iskeyword(extra_name):
-        raise ValueError(
-            f"extra method {extra_name!r} on source {source_name!r} is not a valid "
-            "Python identifier — generated code could never call it"
-        )
-    if extra_name.startswith("_"):
-        raise ValueError(
-            f"extra method {extra_name!r} on source {source_name!r} may not begin "
-            "with an underscore (private/machinery attributes are not sandbox verbs)"
-        )
-    if extra_name in EXTRA_METHOD_DISALLOWED:
-        raise ValueError(
-            f"extra method {extra_name!r} on source {source_name!r} collides with an "
-            "engine verb, reserved global, or protocol attribute (core verbs may not "
-            "be re-declared as extras, even when their capability is disabled)"
-        )
-    if extra_name in _BUILTIN_NAMES:
-        raise ValueError(
-            f"extra method {extra_name!r} on source {source_name!r} shadows a Python "
-            "builtin — a flattened default-source verb by that name would hijack "
-            "ordinary generated code"
-        )
-    return extra_name
+__all__ = [
+    "DataSourceRegistry",
+    "RESERVED_NAMES",
+    "validate_extra_method_name",
+]
 
 
 class DataSourceRegistry:
@@ -87,6 +29,37 @@ class DataSourceRegistry:
     ) -> None:
         self._sources = sources
         self._default_source_name = default_source_name
+
+    def _bound_verbs(self, source: DataSource) -> dict[str, Any]:
+        """The verbs this source binds into the sandbox: one fold over the
+        protocols-level verb table (capability- or hasattr-gated), plus the
+        source's own validated extras (#10)."""
+        name = source.name()
+        ns: dict[str, Any] = {}
+        caps = source.capabilities()
+
+        for spec in VERB_SPECS:
+            if spec.capability is not None:
+                if caps.get(spec.capability):
+                    ns[spec.name] = getattr(source, spec.name)
+            elif hasattr(source, spec.name):
+                ns[spec.name] = getattr(source, spec.name)
+
+        # Host extras (#10): the engine is domain-blind, so any verbs
+        # beyond the core set are declared by the source itself via an
+        # `extra_methods` attribute (a tuple of method names) — the same
+        # convention DataSourceService uses across the bridge, and what
+        # BridgeDataSource re-exposes from the service's describe().
+        for extra in tuple(getattr(source, "extra_methods", ()) or ()):
+            extra_name = validate_extra_method_name(extra, name)
+            fn = getattr(source, extra_name, None)
+            if not callable(fn):
+                raise ValueError(
+                    f"extra method {extra_name!r} on source {name!r} is not a callable"
+                )
+            ns[extra_name] = fn
+
+        return ns
 
     def globals(self) -> dict[str, Any]:
         env: dict[str, Any] = {}
@@ -105,53 +78,12 @@ class DataSourceRegistry:
                 raise ValueError(f"duplicate data source name: {name!r}")
             seen.add(name)
 
-            ns: dict[str, Any] = {}
-            caps = source.capabilities()
-
-            if caps.get("search"):
-                ns["search"] = source.search
-            if hasattr(source, "find"):
-                ns["find"] = source.find
-            if caps.get("sql"):
-                ns["query"] = source.query
-            if caps.get("get"):
-                ns["get"] = source.get
-            if caps.get("recent"):
-                ns["get_recent"] = source.get_recent
-            if caps.get("schema"):
-                ns["get_schema"] = source.get_schema
-            if caps.get("stats"):
-                ns["get_stats"] = source.get_stats
-
-            if hasattr(source, "content"):
-                ns["content"] = source.content
-            if hasattr(source, "sample"):
-                ns["sample"] = source.sample
-
-            # Host extras (#10): the engine is domain-blind, so any verbs
-            # beyond the core set are declared by the source itself via an
-            # `extra_methods` attribute (a tuple of method names) — the same
-            # convention DataSourceService uses across the bridge, and what
-            # BridgeDataSource re-exposes from the service's describe().
-            for extra in tuple(getattr(source, "extra_methods", ()) or ()):
-                extra_name = validate_extra_method_name(extra, name)
-                fn = getattr(source, extra_name, None)
-                if not callable(fn):
-                    raise ValueError(
-                        f"extra method {extra_name!r} on source {name!r} is not a callable"
-                    )
-                ns[extra_name] = fn
+            ns = self._bound_verbs(source)
 
             # Expose an attribute-accessible namespace so the model can write
             # `db.query(...)` (a dict would force `db["query"](...)`). The verbs
             # return Python values into the sandbox — they are not tool calls.
-            namespace = SimpleNamespace(**ns)
-            # Provenance marker: the count contract's accessor discovery
-            # (loop/rlm._collect_data_accessors) must classify only REAL
-            # source namespaces, not any SimpleNamespace a custom
-            # environment happens to expose (e.g. a `utils` helper bag).
-            namespace._droste_data_source = True  # noqa: SLF001 - own marker
-            env[name] = namespace
+            env[name] = SimpleNamespace(**ns)
 
             if self._default_source_name == name:
                 for key, value in ns.items():
@@ -168,6 +100,20 @@ class DataSourceRegistry:
             )
 
         return env
+
+    def accessor_manifest(self) -> AccessorManifest:
+        """Explicit inventory of the data accessors globals() binds, for the
+        count contract's len() check — replaces the old namespace provenance
+        marker that policy discovery had to sniff back out of env globals."""
+        flat: set[str] = set()
+        namespaced: set[tuple[str, str]] = set()
+        for source in self._sources:
+            name = source.name()
+            verbs = self._bound_verbs(source)
+            namespaced.update((name, verb) for verb in verbs)
+            if self._default_source_name == name:
+                flat.update(verbs)
+        return AccessorManifest(flat=frozenset(flat), namespaced=frozenset(namespaced))
 
     def prompt_fragment(self) -> str:
         parts: list[str] = ["## Data Sources"]
