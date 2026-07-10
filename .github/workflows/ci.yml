@@ -68,3 +68,34 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: uv build
         run: uv build
+
+  deno:
+    name: deno (pyodide substrate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Cache Deno modules
+        uses: actions/cache@v4
+        with:
+          # npm:pyodide@0.29.4 is ~50MB of wasm; cache the whole DENO_DIR
+          # keyed on the pinned version (bump the key when the pin moves).
+          path: ~/.cache/deno
+          key: deno-${{ runner.os }}-pyodide-0.29.4
+      - name: Substrate tests (unit + real-Pyodide integration)
+        # cdn.jsdelivr.net + write to the deno cache: the npm pyodide package
+        # unvendors stdlib sqlite3; loadPackage("sqlite3") fetches the wheel
+        # from the CDN on first run and writes it inside the pyodide npm dir
+        # (under DENO_DIR, so the cache step above persists it and the e2e
+        # step below reads it from disk with no net or write of its own).
+        run: >-
+          deno test --allow-read --allow-env --allow-ffi
+          --allow-net=cdn.jsdelivr.net --allow-write="$HOME/.cache/deno"
+          pyodide/
+      - name: Relay E2E (spawns the real relay.ts subprocess)
+        run: >-
+          deno test --allow-run --allow-read --allow-write
+          --allow-net=127.0.0.1 --allow-env
+          examples/pyodide-host/e2e_test.ts

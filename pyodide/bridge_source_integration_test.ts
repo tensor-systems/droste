@@ -27,7 +27,13 @@ async function loadWithDroste(): Promise<any> {
   // droste.sources.__init__ eagerly imports sql_local.py, which imports the
   // stdlib sqlite3 module — needed by BOTH interpreters here just to import
   // droste.sources.bridge, even though neither source below touches sqlite3.
-  await interp.loadPackage("sqlite3", { messageCallback: () => {}, errorCallback: () => {} });
+  // errorCallback must surface: a swallowed load failure (e.g. no network to
+  // fetch the unvendored wheel) otherwise resurfaces later as a baffling
+  // ModuleNotFoundError inside the interpreter.
+  await interp.loadPackage("sqlite3", {
+    messageCallback: () => {},
+    errorCallback: (msg: string) => console.error(`loadPackage(sqlite3): ${msg}`),
+  });
   interp.mountNodeFS("/app", SRC_DIR);
   await interp.runPythonAsync(`import sys; sys.path.insert(0, "/app")`);
   return interp;
