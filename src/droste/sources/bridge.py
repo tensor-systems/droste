@@ -31,7 +31,7 @@ import json
 from typing import Any, Callable
 
 from ..protocols.data_source import DataSource
-from ..registry import CORE_VERB_NAMES, RESERVED_NAMES
+from ..registry import validate_extra_method_name
 
 # Core protocol verbs, gated by the corresponding capabilities() flag (mirrors
 # registry.py's own gating, so a method the registry would never bind into the
@@ -87,15 +87,14 @@ class DataSourceService:
         # extra may be absent (speculative allowlisting is tested behavior)
         # but must be callable when present.
         for extra in (*declared, *extra_methods):
-            # Same vocabulary rule as the registry (transport parity): an
-            # extra may not reuse an engine verb — _dispatch checks core
-            # names first, so a shadowing extra would be advertised by
-            # describe() yet unreachable through the bridge.
-            if str(extra) in CORE_VERB_NAMES or str(extra) in RESERVED_NAMES:
-                raise ValueError(
-                    f"extra method {str(extra)!r} on source {source.name()!r} collides "
-                    "with an engine verb or reserved global"
-                )
+            # Shared vocabulary rule (transport parity): an extra may not
+            # reuse an engine verb (dispatch checks core names first, so it
+            # would be advertised yet unreachable), a reserved global, a
+            # protocol/bridge machinery name (describe, name, capabilities,
+            # extra_methods), or any underscored attribute — an extra named
+            # `_request`/`_call` would let setattr on the bridged client
+            # clobber its own proxy machinery.
+            validate_extra_method_name(extra, source.name())
         for extra in declared:
             if not callable(getattr(source, str(extra), None)):
                 raise ValueError(
@@ -205,6 +204,18 @@ class BridgeDataSource:
             if self._caps.get(_CORE_METHODS[method]):
                 setattr(self, method, functools.partial(self._request, method))
         for method in self._optional:
+            # Defense in depth: describe() comes from the trusted side, but a
+            # buggy or spoofed service must not be able to make this client
+            # setattr over its own machinery (_request/_call) or protocol
+            # surface — that would silently corrupt every subsequent call.
+            if (
+                method.startswith("_")
+                or method in _CORE_METHODS
+                or method in ("describe", "name", "capabilities", "extra_methods")
+            ):
+                raise ValueError(
+                    f"bridge service advertised unsafe optional method name {method!r}"
+                )
             setattr(self, method, functools.partial(self._request, method))
 
     def _request(self, method: str, *args: Any, **kwargs: Any) -> Any:

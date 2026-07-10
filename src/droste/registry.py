@@ -30,6 +30,32 @@ CORE_VERB_NAMES = frozenset(
     }
 )
 
+# Every name an extra_methods declaration may NOT use, shared by the registry
+# and the bridge so a source config fails identically on every transport:
+# engine verbs, runner-reserved globals, and the protocol/bridge machinery
+# names (describe is a bridge wire method; name/capabilities/extra_methods
+# are protocol surface a bridged client also binds as attributes).
+EXTRA_METHOD_DISALLOWED = frozenset(
+    CORE_VERB_NAMES | RESERVED_NAMES | {"name", "capabilities", "describe", "extra_methods"}
+)
+
+
+def validate_extra_method_name(extra: object, source_name: str) -> str:
+    """Shared extras-name validation (registry + bridge). Returns the name."""
+    extra_name = str(extra)
+    if extra_name.startswith("_"):
+        raise ValueError(
+            f"extra method {extra_name!r} on source {source_name!r} may not begin "
+            "with an underscore (private/machinery attributes are not sandbox verbs)"
+        )
+    if extra_name in EXTRA_METHOD_DISALLOWED:
+        raise ValueError(
+            f"extra method {extra_name!r} on source {source_name!r} collides with an "
+            "engine verb, reserved global, or protocol attribute (core verbs may not "
+            "be re-declared as extras, even when their capability is disabled)"
+        )
+    return extra_name
+
 
 class DataSourceRegistry:
     """Registry for composing data sources into environment globals."""
@@ -83,17 +109,7 @@ class DataSourceRegistry:
             # convention DataSourceService uses across the bridge, and what
             # BridgeDataSource re-exposes from the service's describe().
             for extra in tuple(getattr(source, "extra_methods", ()) or ()):
-                extra_name = str(extra)
-                if extra_name in RESERVED_NAMES:
-                    raise ValueError(
-                        f"extra method {extra_name!r} on source {name!r} shadows a reserved global"
-                    )
-                if extra_name in CORE_VERB_NAMES or extra_name in ns:
-                    raise ValueError(
-                        f"extra method {extra_name!r} on source {name!r} collides with an "
-                        "engine verb (core verbs may not be re-declared as extras, even "
-                        "when their capability is disabled)"
-                    )
+                extra_name = validate_extra_method_name(extra, name)
                 fn = getattr(source, extra_name, None)
                 if not callable(fn):
                     raise ValueError(
@@ -104,7 +120,13 @@ class DataSourceRegistry:
             # Expose an attribute-accessible namespace so the model can write
             # `db.query(...)` (a dict would force `db["query"](...)`). The verbs
             # return Python values into the sandbox — they are not tool calls.
-            env[name] = SimpleNamespace(**ns)
+            namespace = SimpleNamespace(**ns)
+            # Provenance marker: the count contract's accessor discovery
+            # (loop/rlm._collect_data_accessors) must classify only REAL
+            # source namespaces, not any SimpleNamespace a custom
+            # environment happens to expose (e.g. a `utils` helper bag).
+            namespace._droste_data_source = True  # noqa: SLF001 - own marker
+            env[name] = namespace
 
             if self._default_source_name == name:
                 for key, value in ns.items():

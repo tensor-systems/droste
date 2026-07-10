@@ -108,19 +108,22 @@ def _collect_data_accessors(
 ) -> tuple[set[str], set[tuple[str, str]]]:
     """Data-accessor names for the count contract's len() check (#10).
 
-    Provenance-based, not "every callable global": a flattened name counts
-    as a data accessor only when the SAME callable also lives inside a
-    source namespace (registry flattening binds identical objects in both
-    places), so a custom environment's unrelated helpers (`parse`, ...)
-    are never misclassified. Namespaced verbs are returned as
-    (namespace, verb) pairs and match only under their own namespace.
-    Environments with no source namespaces yield nothing, and the policy
-    layer falls back to its static generic verbs."""
+    Provenance-based, not "every callable global": only namespaces the
+    registry marked as data sources (`_droste_data_source`) are scanned —
+    a custom environment's `utils`-style helper namespace is never
+    classified — and a flattened name counts as a data accessor only when
+    the SAME callable also lives inside a marked namespace (registry
+    flattening binds identical objects in both places). Namespaced verbs
+    are returned as (namespace, verb) pairs and match only under their own
+    namespace. Environments with no marked namespaces yield nothing, and
+    the policy layer falls back to its static generic verbs."""
     namespaced: set[tuple[str, str]] = set()
     member_ids: set[int] = set()
     for key, value in env_globals.items():
-        if isinstance(value, SimpleNamespace):
+        if isinstance(value, SimpleNamespace) and getattr(value, "_droste_data_source", False):
             for verb, fn in vars(value).items():
+                if verb.startswith("_"):
+                    continue  # the marker itself / private attrs
                 if callable(fn):
                     namespaced.add((key, verb))
                     member_ids.add(id(fn))

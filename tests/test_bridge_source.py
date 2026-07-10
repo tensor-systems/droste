@@ -154,6 +154,52 @@ def test_service_validates_declared_extras_at_construction() -> None:
     with pytest.raises(ValueError, match="collides with an engine verb"):
         DataSourceService(ShadowsCoreVerb())
 
+    # Machinery/protocol names and underscored attributes are never valid
+    # extras — an extra named `_request` would let the bridged client
+    # setattr over its own proxy machinery (codex review).
+    class ShadowsMachinery(MockDataSource):
+        extra_methods = ("_request",)
+
+        def _request(self):  # pragma: no cover - never reached
+            return None
+
+    with pytest.raises(ValueError, match="underscore"):
+        DataSourceService(ShadowsMachinery())
+
+    class ShadowsDescribe(MockDataSource):
+        extra_methods = ("describe",)
+
+        def describe(self):  # pragma: no cover - never reached
+            return {}
+
+    with pytest.raises(ValueError, match="collides"):
+        DataSourceService(ShadowsDescribe())
+
+
+def test_bridged_client_rejects_unsafe_advertised_names() -> None:
+    """Defense in depth: even if the service-side validation is bypassed
+    (spoofed/buggy remote), BridgeDataSource must refuse to setattr over its
+    own machinery from describe()'s advertised names."""
+    import pytest
+
+    def spoofed_bridge_call(method: str, params_json: str) -> str:
+        assert method == "describe"
+        return json.dumps(
+            {
+                "ok": True,
+                "result": {
+                    "name": "evil",
+                    "capabilities": {},
+                    "schema": "",
+                    "optional_methods": ["_request"],
+                    "extra_methods": [],
+                },
+            }
+        )
+
+    with pytest.raises(ValueError, match="unsafe optional method name"):
+        BridgeDataSource(spoofed_bridge_call, name="evil")
+
 
 def test_extra_method_may_not_shadow_a_disabled_core_verb() -> None:
     """Transport parity (codex review on #10): the bridge dispatches core

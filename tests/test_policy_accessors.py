@@ -62,9 +62,10 @@ def test_static_fallback_when_no_accessors_supplied() -> None:
 
 def test_accessor_collection_uses_namespace_provenance() -> None:
     # A custom environment's unrelated helper callables must not be
-    # classified as data accessors (codex review): only names whose SAME
-    # callable also lives inside a source namespace count as flattened
-    # accessors.
+    # classified as data accessors (codex review): only namespaces the
+    # registry MARKED as data sources are scanned, and only names whose
+    # SAME callable also lives inside a marked namespace count as
+    # flattened accessors.
     from types import SimpleNamespace
 
     from droste.loop.rlm import _collect_data_accessors
@@ -75,10 +76,15 @@ def test_accessor_collection_uses_namespace_provenance() -> None:
     def parse(x):  # an env helper, not a data accessor
         return x
 
+    db = SimpleNamespace(search=search, query=lambda s: [])
+    db._droste_data_source = True  # what registry.globals() stamps
+    utils = SimpleNamespace(parse=parse)  # custom env helper bag — unmarked
+
     env = {
-        "db": SimpleNamespace(search=search, query=lambda s: []),
+        "db": db,
+        "utils": utils,
         "search": search,  # flattened default verb — same object as db.search
-        "parse": parse,  # helper with no namespace provenance
+        "parse": parse,  # helper with no marked-namespace provenance
         "llm_query": lambda p: "",
         "answer": {"content": "", "ready": False},
     }
@@ -86,3 +92,15 @@ def test_accessor_collection_uses_namespace_provenance() -> None:
     assert flat == {"search"}
     assert ("db", "search") in namespaced and ("db", "query") in namespaced
     assert "parse" not in flat
+    assert not any(ns == "utils" for ns, _ in namespaced)
+
+
+def test_registry_namespaces_carry_the_provenance_marker() -> None:
+    # The marker is what makes provenance detection reliable — if
+    # registry.globals() ever stops stamping it, accessor discovery
+    # silently collapses to the static fallback.
+    from droste.registry import DataSourceRegistry
+    from droste.testing import MockDataSource
+
+    env = DataSourceRegistry([MockDataSource()], default_source_name="mock").globals()
+    assert getattr(env["mock"], "_droste_data_source", False) is True
