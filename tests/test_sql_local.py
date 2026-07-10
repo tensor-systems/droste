@@ -356,26 +356,44 @@ def test_zero_timeout_never_arms_a_timer(tmp_path) -> None:
     mock_start.assert_not_called()
 
 
-def test_threadless_runtime_degrades_to_no_timer(tmp_path) -> None:
-    # Under Pyodide/WASM, threading imports fine but Timer.start() raises
-    # RuntimeError("can't start new thread"). The DEFAULT policy (5000ms)
-    # must degrade to no timer — with a RuntimeWarning naming the host's
-    # wall-clock timeout as the enforcement — instead of failing every
-    # query. Fix for #8.
+def test_threadless_platform_degrades_to_no_timer(tmp_path) -> None:
+    # Under Pyodide/WASM (sys.platform == "emscripten"), threading imports
+    # fine but Timer.start() raises RuntimeError("can't start new thread").
+    # The DEFAULT policy (5000ms) must degrade to no timer — with a
+    # RuntimeWarning naming the host's wall-clock timeout as the enforcement
+    # — instead of failing every query. Fix for #8.
     from unittest import mock
 
+    import droste.sources.sql_local as sql_local_mod
+
     src = _source(tmp_path)  # default policy: timeout_ms=5000, arms a timer
-    with mock.patch.object(
-        threading.Timer, "start", side_effect=RuntimeError("can't start new thread")
-    ):
-        with pytest.warns(RuntimeWarning, match="wall-clock"):
-            rows = src.query("SELECT 1 AS x")
+    with mock.patch.object(sql_local_mod.sys, "platform", "emscripten"):
+        with mock.patch.object(
+            threading.Timer, "start", side_effect=RuntimeError("can't start new thread")
+        ):
+            with pytest.warns(RuntimeWarning, match="wall-clock"):
+                rows = src.query("SELECT 1 AS x")
     assert rows == [{"x": 1}]
     # Back on a threaded runtime, the very next query arms a timer again —
     # the degradation is per-attempt, not a sticky global.
     with mock.patch.object(threading.Timer, "start") as mock_start:
         src.query("SELECT 1 AS x")
     mock_start.assert_called_once()
+
+
+def test_thread_exhaustion_on_threaded_platform_reraises(tmp_path) -> None:
+    # On a NORMAL platform the same RuntimeError means thread exhaustion —
+    # the process is resource-constrained, which is exactly when silently
+    # dropping the query timeout would hurt most. Re-raise, don't degrade
+    # (codex review on the #8 fix).
+    from unittest import mock
+
+    src = _source(tmp_path)
+    with mock.patch.object(
+        threading.Timer, "start", side_effect=RuntimeError("can't start new thread")
+    ):
+        with pytest.raises(RuntimeError, match="can't start new thread"):
+            src.query("SELECT 1 AS x")
 
 
 def test_timer_arms_inside_lock(tmp_path) -> None:

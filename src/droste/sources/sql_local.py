@@ -37,17 +37,20 @@ Threat model (important — do not overclaim):
     sandbox, not by this class alone.
 
 Threadless runtimes (Pyodide/WASM):
-    The per-query ``timeout_ms`` is enforced with a ``threading.Timer``. Where
-    thread creation is unavailable (e.g. Pyodide — ``threading`` imports but
-    ``start()`` raises ``RuntimeError``), queries still run: the timer is
-    skipped with a one-time ``RuntimeWarning`` and the substrate's own
-    wall-clock kill (e.g. the Deno relay's process timeout) is the enforcement.
+    The per-query ``timeout_ms`` is enforced with a ``threading.Timer``. On
+    platforms that are threadless by design (``sys.platform`` in
+    ``emscripten``/``wasi`` — ``threading`` imports but ``start()`` raises
+    ``RuntimeError``), queries still run: the timer is skipped with a one-time
+    ``RuntimeWarning`` and the substrate's own wall-clock kill (e.g. the Deno
+    relay's process timeout) is the enforcement. On normal threaded platforms
+    the same ``RuntimeError`` means thread exhaustion and is re-raised.
 """
 
 from __future__ import annotations
 
 import re
 import sqlite3
+import sys
 import threading
 import warnings
 from dataclasses import dataclass
@@ -361,19 +364,27 @@ class LocalSqlDataSource:
                 try:
                     timer.start()
                 except RuntimeError:
-                    # Threadless runtime (Pyodide/WASM: threading imports but
+                    # Threadless platform (Pyodide/WASM: threading imports but
                     # thread *creation* raises "can't start new thread").
                     # There is no thread to arm the interrupt from, so the
                     # policy's timeout_ms cannot be enforced at this layer —
                     # the substrate's own wall-clock kill (e.g. the host
                     # process timeout in the Deno+Pyodide relay) is the
                     # enforcement there. Degrade to no timer instead of
-                    # failing every query under the default policy.
+                    # failing every query under the default policy. Only on
+                    # platforms that are threadless BY DESIGN: on a normal
+                    # threaded runtime the same RuntimeError means thread
+                    # exhaustion, and silently dropping the timeout right
+                    # when the process is resource-constrained would be the
+                    # opposite of what the policy asks for — re-raise there.
+                    if sys.platform not in ("emscripten", "wasi"):
+                        raise
                     timer = None
                     warnings.warn(
-                        "sql_local: no OS threads available (WASM?); the "
-                        f"policy timeout ({timeout_ms} ms) is not enforced — "
-                        "rely on the host's wall-clock timeout",
+                        "sql_local: threads unavailable on this platform "
+                        f"({sys.platform}); the policy timeout ({timeout_ms} "
+                        "ms) is not enforced — rely on the host's wall-clock "
+                        "timeout",
                         RuntimeWarning,
                         stacklevel=2,
                     )
