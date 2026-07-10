@@ -1,7 +1,7 @@
 // llm_batch threading verification harness: pin what the runner's threads/signals-dependent paths
 // do under Pyodide (no OS threads, no signals), and prove the host-side fix.
 //
-// Findings (2026-07-07, Deno 2.9.1 / Pyodide 0.29.4):
+// Findings (2026-07-07, Deno 2.9.1 / pinned Pyodide (deps.ts)):
 //   - HTTPSubcallClient.llm_batch (ThreadPoolExecutor)  -> RuntimeError, CRASHES
 //   - HTTPSubcallClient.llm_batch_with_errors (raw Thread) -> RuntimeError, CRASHES
 //   - SqlDataSource query timeout (threading.Timer)     -> RuntimeError, CRASHES
@@ -12,12 +12,14 @@
 // the findings note. The host-side fan-out is built in the A-prime broker.
 //
 // Run: deno run --allow-read --allow-env --allow-ffi verify_16_threading.ts
-import { loadPyodide } from "npm:pyodide@0.29.4";
+import { loadPyodide } from "../src/droste/substrates/_relay/deps.ts";
 const py = await loadPyodide({ stdout: () => {}, stderr: () => {} });
 const log = (s: string) => console.log(s);
 const now = () => performance.now();
 const errLine = (e: unknown) =>
-  (e instanceof Error ? e.message.split("\n").filter((l) => /Error|thread/.test(l)).slice(-1)[0] : String(e))?.trim();
+  (e instanceof Error
+    ? e.message.split("\n").filter((l) => /Error|thread/.test(l)).slice(-1)[0]
+    : String(e))?.trim();
 
 const SUB = `
 import time
@@ -37,7 +39,9 @@ with ThreadPoolExecutor(max_workers=5) as ex:
     for f in as_completed(futs): res[futs[f]]=f.result()
 f"OK {res}"`);
   log("  " + o);
-} catch (e) { log("  CRASHES: " + errLine(e)); }
+} catch (e) {
+  log("  CRASHES: " + errLine(e));
+}
 
 log("\n== 2. llm_batch_with_errors: raw threading.Thread ==");
 try {
@@ -49,7 +53,9 @@ ts=[threading.Thread(target=one,args=(i,),daemon=True) for i in range(5)]
 [t.start() for t in ts]; [t.join() for t in ts]
 f"OK {res}"`);
   log("  " + o);
-} catch (e) { log("  CRASHES: " + errLine(e)); }
+} catch (e) {
+  log("  CRASHES: " + errLine(e));
+}
 
 log("\n== 3. SqlDataSource query timeout: threading.Timer ==");
 try {
@@ -60,10 +66,14 @@ threading.Timer(0.05, lambda: fired.append(1)).start()
 time.sleep(0.15)
 f"timer fired={bool(fired)}"`);
   log("  " + o);
-} catch (e) { log("  CRASHES: " + errLine(e)); }
+} catch (e) {
+  log("  CRASHES: " + errLine(e));
+}
 
 log("\n== 4. signal.setitimer / SIGALRM (alt timeout path) ==");
-const hasSig = await py.runPythonAsync(`import signal; hasattr(signal,"setitimer")`);
+const hasSig = await py.runPythonAsync(
+  `import signal; hasattr(signal,"setitimer")`,
+);
 log(`  signal.setitimer present: ${hasSig}`);
 
 log("\n== 5. sequential subcalls (correctness baseline) ==");
@@ -76,7 +86,13 @@ log("\n== 5. sequential subcalls (correctness baseline) ==");
 log("\n== 6. THE FIX: host-side fan-out via Promise.all ==");
 py.globals.set("_host_batch", async (j: string): Promise<string> => {
   const reqs: number[] = JSON.parse(j);
-  return JSON.stringify(await Promise.all(reqs.map((i) => new Promise<string>((r) => setTimeout(() => r(`r${i}`), 100)))));
+  return JSON.stringify(
+    await Promise.all(
+      reqs.map((i) =>
+        new Promise<string>((r) => setTimeout(() => r(`r${i}`), 100))
+      ),
+    ),
+  );
 });
 {
   const t = now();
@@ -87,5 +103,9 @@ def llm_batch_hosted(prompts):
     return json.loads(run_sync(_host_batch(json.dumps(prompts))))
 llm_batch_hosted(list(range(5)))`);
   const dt = Math.round(now() - t);
-  log(`  ${o}  wall=${dt}ms  => ${dt < 300 ? "PARALLELISM PRESERVED" : "serialized"}`);
+  log(
+    `  ${o}  wall=${dt}ms  => ${
+      dt < 300 ? "PARALLELISM PRESERVED" : "serialized"
+    }`,
+  );
 }

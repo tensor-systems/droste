@@ -5,11 +5,13 @@
 //   deno test pyodide/stream_test.ts
 
 import { strict as assert } from "node:assert";
-import { streamResponses } from "./stream.ts";
+import { streamResponses } from "../src/droste/substrates/_relay/stream.ts";
 
 function ndjson(events: unknown[]): Response {
   const body = events.map((e) => JSON.stringify(e) + "\n").join("");
-  return new Response(body, { headers: { "content-type": "application/x-ndjson" } });
+  return new Response(body, {
+    headers: { "content-type": "application/x-ndjson" },
+  });
 }
 
 Deno.test("reconstructs output + usage from completion; forwards deltas in order", async () => {
@@ -32,7 +34,11 @@ Deno.test("reconstructs output + usage from completion; forwards deltas in order
   assert.equal(payload.output[0].type, "message");
   assert.equal(payload.output[0].role, "assistant");
   assert.equal(payload.output[0].content[0].text, "Hello world");
-  assert.deepEqual(payload.usage, { input_tokens: 1, output_tokens: 2, total_tokens: 3 });
+  assert.deepEqual(payload.usage, {
+    input_tokens: 1,
+    output_tokens: 2,
+    total_tokens: 3,
+  });
   assert.deepEqual(deltas, ["Hello", " world"]);
 });
 
@@ -45,7 +51,10 @@ Deno.test("prefers completion.content over accumulated deltas (authoritative)", 
     ]),
     () => {},
   );
-  assert.equal(JSON.parse(out).output[0].content[0].text, "the full canonical answer");
+  assert.equal(
+    JSON.parse(out).output[0].content[0].text,
+    "the full canonical answer",
+  );
 });
 
 Deno.test("real wire shape: completion carries usage only, text from deltas", async () => {
@@ -56,16 +65,28 @@ Deno.test("real wire shape: completion carries usage only, text from deltas", as
   const deltas: string[] = [];
   const out = await streamResponses(
     ndjson([
-      { type: "start", stream_mode: "text-delta", stream_version: "v2", model: "m" },
+      {
+        type: "start",
+        stream_mode: "text-delta",
+        stream_version: "v2",
+        model: "m",
+      },
       { type: "update", delta: "Hello" },
       { type: "update", delta: " there" },
-      { type: "completion", usage: { input_tokens: 8, output_tokens: 46, total_tokens: 54 } },
+      {
+        type: "completion",
+        usage: { input_tokens: 8, output_tokens: 46, total_tokens: 54 },
+      },
     ]),
     (c) => deltas.push(c),
   );
   const payload = JSON.parse(out);
   assert.equal(payload.output[0].content[0].text, "Hello there");
-  assert.deepEqual(payload.usage, { input_tokens: 8, output_tokens: 46, total_tokens: 54 });
+  assert.deepEqual(payload.usage, {
+    input_tokens: 8,
+    output_tokens: 46,
+    total_tokens: 54,
+  });
   assert.deepEqual(deltas, ["Hello", " there"]);
 });
 
@@ -88,7 +109,11 @@ Deno.test("tolerates the content_delta/{delta:{content}} shape", async () => {
     ndjson([
       { type: "content_delta", delta: { type: "text", content: "Hi" } },
       { type: "content_delta", delta: { type: "text", content: "!" } },
-      { type: "completion", content: "Hi!", usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } },
+      {
+        type: "completion",
+        content: "Hi!",
+        usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      },
     ]),
     (c) => deltas.push(c),
   );
@@ -105,7 +130,9 @@ Deno.test("ignores keepalive/non-JSON lines and unknown event types", async () =
     JSON.stringify({ type: "update", delta: "ok" }),
     JSON.stringify({ type: "completion", content: "ok", usage: {} }),
   ].join("\n");
-  const r = new Response(body, { headers: { "content-type": "application/x-ndjson" } });
+  const r = new Response(body, {
+    headers: { "content-type": "application/x-ndjson" },
+  });
   const out = await streamResponses(r, () => {});
   assert.equal(JSON.parse(out).output[0].content[0].text, "ok");
 });

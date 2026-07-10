@@ -7,6 +7,7 @@
 // The events the engine + relay emit. The native subprocess runner uses the same
 // set on stdout NDJSON — one vocabulary across substrates.
 export const RLM_EVENT_TYPES = new Set<string>([
+  "startup", // {engine_version, runner_protocol, source_protocol} — contract handshake (#33)
   "progress", // coarse human-readable status
   "iteration_start", // {iteration, max_iterations}
   "code", // {iteration, code} — the model's generated code, streamed for live UIs

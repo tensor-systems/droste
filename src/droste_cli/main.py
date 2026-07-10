@@ -89,7 +89,8 @@ def build_parser() -> argparse.ArgumentParser:
             "setup: droste login chooses how to run (ModelRelay free credits, "
             "or your own key) and stores it; droste whoami / droste logout. "
             "--api-key / --base-url override for a single run; scripts can "
-            "set OPENAI_API_KEY / ANTHROPIC_API_KEY."
+            "set OPENAI_API_KEY / ANTHROPIC_API_KEY. embedders: droste "
+            "relay-path prints the bundled Deno relay directory."
         ),
     )
     parser.add_argument("--version", action="version", version=f"droste {_package_version()}")
@@ -557,8 +558,26 @@ def _run_auth_command(argv: list[str]) -> int:
     return auth.run_whoami()
 
 
+def _run_relay_path(argv: list[str]) -> int:
+    """Print the directory of the Deno relay sources bundled in the wheel
+    (#33) — embedder build scripts stage the relay from here instead of
+    downloading a separate release tarball."""
+    if argv:
+        raise CLIError("droste relay-path takes no arguments")
+    from droste.substrates import relay_dir
+
+    print(relay_dir())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "relay-path":
+        try:
+            return _run_relay_path(argv[1:])
+        except (CLIError, FileNotFoundError) as exc:
+            print(f"droste: error: {exc}", file=sys.stderr)
+            return 2
     if argv and argv[0] in ("login", "logout", "whoami"):
         from . import auth
 

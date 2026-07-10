@@ -7,7 +7,7 @@ import {
   isModelRelayResponsesCall,
   splitCredentials,
   stripAndInjectAuth,
-} from "./broker.ts";
+} from "../src/droste/substrates/_relay/broker.ts";
 
 Deno.test("isModelRelayResponsesCall: only POST https://api.modelrelay.ai/api/v1/responses qualifies", () => {
   // The one legitimate LLM-transport call.
