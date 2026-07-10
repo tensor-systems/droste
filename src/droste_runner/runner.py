@@ -485,14 +485,15 @@ def _protocol_error_response(requested: object, error_type: str) -> dict[str, An
 def _check_protocol_version(request: dict[str, Any]) -> dict[str, Any] | None:
     """Return a refusal response for a missing/mismatched version, else None."""
     raw = request.get("protocol_version")
-    if raw in (None, ""):
+    if raw is None or raw == "":
         return _protocol_error_response(None, "protocol_version_missing")
-    try:
-        requested = int(raw)
-    except (TypeError, ValueError):
+    # A strict gate must not coerce: JSON `1.9` or `true` would int() to 1
+    # and slip a malformed identifier through; only an actual (non-boolean)
+    # integer is a protocol version.
+    if isinstance(raw, bool) or not isinstance(raw, int):
         return _protocol_error_response(raw, "protocol_version_mismatch")
-    if requested != RUNNER_PROTOCOL_VERSION:
-        return _protocol_error_response(requested, "protocol_version_mismatch")
+    if raw != RUNNER_PROTOCOL_VERSION:
+        return _protocol_error_response(raw, "protocol_version_mismatch")
     return None
 
 
@@ -1091,6 +1092,13 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
 
 def main() -> None:
     request = _read_request()
+    # The version gate runs FIRST — before any other request-field check —
+    # so a bad envelope always gets the structured versioned refusal, never
+    # a generic error from a later validation the caller can't attribute.
+    refusal = _check_protocol_version(request)
+    if refusal is not None:
+        sys.stdout.write(json.dumps(refusal, ensure_ascii=True))
+        return
     # The request file is the untrusted boundary (hosted runners are fed one by
     # the parent process). A request must never name code to import: source
     # types come from register_source_type() in the entrypoint (Option C), and
@@ -1109,11 +1117,14 @@ if __name__ == "__main__":
         main()
     except Exception as exc:
         payload = {
+            # Exception envelopes are responses too — a host parsing for the
+            # documented protocol_version must find it on every output path.
+            "protocol_version": RUNNER_PROTOCOL_VERSION,
             "error": {
                 "type": exc.__class__.__name__,
                 "message": str(exc),
                 "traceback": traceback.format_exc(),
-            }
+            },
         }
         sys.stdout.write(json.dumps(payload, ensure_ascii=True))
         sys.exit(1)

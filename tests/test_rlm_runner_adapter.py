@@ -1,3 +1,4 @@
+import os
 import sys
 import types
 
@@ -86,6 +87,52 @@ def test_future_protocol_version_rejected_with_structured_error() -> None:
 def test_unparseable_protocol_version_rejected() -> None:
     result = runner.run({"question": "q", "protocol_version": "banana"})
     assert result["error"]["type"] == "protocol_version_mismatch"
+
+
+def test_non_integer_protocol_versions_are_not_coerced() -> None:
+    # A strict gate must not int()-coerce: JSON 1.9 or true would become 1
+    # and slip through (codex review). Booleans are ints in Python — reject
+    # them explicitly.
+    for bad in (1.9, True, 1.0, "1"):
+        result = runner.run({"question": "q", "protocol_version": bad})
+        assert result["error"]["type"] == "protocol_version_mismatch", bad
+
+
+def test_main_version_gate_precedes_adapter_module_rejection(monkeypatch, capsys) -> None:
+    # A request file with BOTH a bad envelope and a prohibited adapter_module
+    # must get the versioned refusal, not the generic adapter_module error —
+    # the version gate is the first check on the untrusted request boundary
+    # (codex review).
+    monkeypatch.setattr(runner, "_read_request", lambda: {"adapter_module": "evil.module"})
+    runner.main()
+    out = capsys.readouterr().out
+    import json
+
+    payload = json.loads(out)
+    assert payload["error"]["type"] == "protocol_version_missing"
+    assert payload["protocol_version"] == runner.RUNNER_PROTOCOL_VERSION
+
+
+def test_worker_exception_envelope_is_version_stamped(tmp_path) -> None:
+    # `python -m droste_runner` on a valid-version request that fails later
+    # (missing endpoints) emits the exception envelope — which must carry
+    # protocol_version like every other response (codex review).
+    import json
+    import subprocess
+    import sys as _sys
+
+    req = tmp_path / "request.json"
+    req.write_text(json.dumps({"protocol_version": 1, "question": "q"}))
+    proc = subprocess.run(
+        [_sys.executable, "-m", "droste_runner"],
+        env={**os.environ, "RLM_RUNNER_REQUEST_PATH": str(req)},
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 1
+    payload = json.loads(proc.stdout)
+    assert payload["protocol_version"] == runner.RUNNER_PROTOCOL_VERSION
+    assert "missing endpoints" in payload["error"]["message"]
 
 
 def test_version_gate_runs_before_adapter_dispatch() -> None:
