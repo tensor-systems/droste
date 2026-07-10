@@ -29,6 +29,7 @@ from droste.protocols.environment import (  # type: ignore
 )
 from droste.protocols.llm_client import TokenUsage  # type: ignore
 from droste.protocols.subcall_client import SubcallClient  # type: ignore
+from droste.protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest  # type: ignore
 from droste.registry import DataSourceRegistry  # type: ignore
 
 
@@ -159,6 +160,13 @@ class RunnerEnvironment(RLMEnvironment):
 
     def globals(self) -> dict[str, Any]:
         return self._globals
+
+    def accessor_manifest(self) -> AccessorManifest:
+        # Explicit accessor inventory for the count contract's len() check —
+        # the loop reads this instead of sniffing markers out of globals().
+        if self._registry is None:
+            return EMPTY_ACCESSOR_MANIFEST
+        return self._registry.accessor_manifest()
 
     def prompt_fragment(self) -> str:
         parts: list[str] = []

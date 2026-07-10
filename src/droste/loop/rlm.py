@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-from types import SimpleNamespace
 from typing import Any
 
 from ..exceptions import BatchLLMError, RLMError
@@ -10,6 +9,7 @@ from ..prompts.builder import SystemPromptBuilder
 from ..protocols.environment import RLMEnvironment
 from ..protocols.llm_client import LLMClient, total_tokens_from_usage
 from ..protocols.subcall_client import SubcallClient
+from ..protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest
 from .code_extractor import extract_code_block
 from .step import (
     EMPTY_OUTPUT_NUDGE,
@@ -66,39 +66,20 @@ EXTRACT_FALLBACK_SYSTEM_PROMPT = (
 
 ProgressCallback = Any
 
-_LLM_GLOBAL_NAMES = frozenset({"llm_query", "llm_batch", "batch_llm_query", "llm_query_batched"})
 
-
-def _collect_data_accessors(
-    env_globals: dict[str, Any],
-) -> tuple[set[str], set[tuple[str, str]]]:
+def _accessor_manifest(environment: RLMEnvironment) -> AccessorManifest:
     """Data-accessor names for the count contract's len() check (#10).
 
-    Provenance-based, not "every callable global": only namespaces the
-    registry marked as data sources (`_droste_data_source`) are scanned —
-    a custom environment's `utils`-style helper namespace is never
-    classified — and a flattened name counts as a data accessor only when
-    the SAME callable also lives inside a marked namespace (registry
-    flattening binds identical objects in both places). Namespaced verbs
-    are returned as (namespace, verb) pairs and match only under their own
-    namespace. Environments with no marked namespaces yield nothing, and
-    the policy layer falls back to its static generic verbs."""
-    namespaced: set[tuple[str, str]] = set()
-    member_ids: set[int] = set()
-    for key, value in env_globals.items():
-        if isinstance(value, SimpleNamespace) and getattr(value, "_droste_data_source", False):
-            for verb, fn in vars(value).items():
-                if verb.startswith("_"):
-                    continue  # the marker itself / private attrs
-                if callable(fn):
-                    namespaced.add((key, verb))
-                    member_ids.add(id(fn))
-    flat = {
-        key
-        for key, value in env_globals.items()
-        if key not in _LLM_GLOBAL_NAMES and callable(value) and id(value) in member_ids
-    }
-    return flat, namespaced
+    Explicit data, not sniffing: an environment that composes data sources
+    (e.g. one wrapping a DataSourceRegistry) reports them via an optional
+    ``accessor_manifest()`` method. Environments without one yield an empty
+    manifest, and the policy layer falls back to its static generic verbs."""
+    manifest_fn = getattr(environment, "accessor_manifest", None)
+    if callable(manifest_fn):
+        manifest = manifest_fn()
+        if isinstance(manifest, AccessorManifest):
+            return manifest
+    return EMPTY_ACCESSOR_MANIFEST
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -228,7 +209,9 @@ def run_rlm(
     env_globals.setdefault("llm_query_batched", subcalls.llm_batch)
     _apply_batch_error_guard(subcalls, env_globals)
 
-    data_accessor_names, namespaced_accessor_pairs = _collect_data_accessors(env_globals)
+    manifest = _accessor_manifest(environment)
+    data_accessor_names = set(manifest.flat)
+    namespaced_accessor_pairs = set(manifest.namespaced)
 
     if system_prompt is None:
         prompt_additions = environment.prompt_fragment()
