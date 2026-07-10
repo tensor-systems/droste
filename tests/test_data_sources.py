@@ -177,6 +177,7 @@ def test_run_threads_source_ctx_to_factories(monkeypatch) -> None:
     ctx = object()
     response = runner_mod.run(
         {
+            "protocol_version": 1,
             "question": "q",
             "token": "t",
             "root_endpoint": "https://cloud/root",

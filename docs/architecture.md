@@ -65,10 +65,25 @@ reads a response (answer, `ready`, `extracted`, iterations, subcalls,
 trajectory, usage). This is how non-Python hosts embed the engine.
 
 **Compatibility window**: the request/response schema and the source
-protocol are versioned. Fields are added optional-first; a control plane
-that serves embedded engines must tolerate a stated window of engine
-versions (embedded engines in the field can't be force-upgraded). Breaking
-changes require a protocol version bump.
+protocol are versioned, each by a single integer:
+
+- `RUNNER_PROTOCOL_VERSION` (currently 1) governs the request/response
+  envelope. Every request **must** carry `protocol_version` — requests are
+  self-describing, the same discipline as JSON-RPC's mandatory `"jsonrpc"`
+  field. A missing or mismatched version is answered with a structured
+  error (`protocol_version_missing` / `protocol_version_mismatch`) naming
+  both sides — a host detects incompatibility explicitly instead of
+  failing on a missing field. Every response is stamped with the engine's
+  `protocol_version`.
+- `SOURCE_PROTOCOL_VERSION` (currently 1) governs the data-source
+  registration contract and fails at startup, not per-request.
+
+The rules: **adding an optional field is not a version bump** (the 0.5.x
+subcall cost-control knobs are the worked example — older engines ignore
+them, newer engines honor them); renaming or removing a field, or changing
+a field's semantics, bumps the integer. A control plane that serves
+embedded engines must tolerate a stated window of engine versions
+(embedded engines in the field can't be force-upgraded).
 
 ## Sandboxing — the honest version
 
