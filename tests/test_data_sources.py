@@ -87,7 +87,7 @@ def test_registered_factory_builds_source_with_config_and_ctx() -> None:
         seen["ctx"] = ctx
         return MockDataSource(schema="tables: t")
 
-    register_source_type("sql", factory)
+    register_source_type("sql", factory, protocol=SOURCE_PROTOCOL_VERSION)
     ctx = object()
     sources, default = build_data_sources(
         {
@@ -102,31 +102,39 @@ def test_registered_factory_builds_source_with_config_and_ctx() -> None:
 
 
 def test_factory_dispatch_is_not_limited_to_sql_fs() -> None:
-    register_source_type("messages", lambda config, ctx: MockDataSource(schema="m"))
+    register_source_type(
+        "messages", lambda config, ctx: MockDataSource(schema="m"), protocol=SOURCE_PROTOCOL_VERSION
+    )
     sources, _ = build_data_sources({"data_sources": [{"type": "messages", "name": "chats"}]})
     assert len(sources) == 1
 
 
 def test_factory_returning_none_raises() -> None:
-    register_source_type("sql", lambda config, ctx: None)
+    register_source_type("sql", lambda config, ctx: None, protocol=SOURCE_PROTOCOL_VERSION)
     with pytest.raises(ValueError, match="returned no source"):
         build_data_sources({"data_sources": [{"type": "sql", "name": "db"}]})
 
 
 def test_duplicate_registration_raises() -> None:
-    register_source_type("sql", lambda config, ctx: MockDataSource(schema="t"))
+    register_source_type(
+        "sql", lambda config, ctx: MockDataSource(schema="t"), protocol=SOURCE_PROTOCOL_VERSION
+    )
     with pytest.raises(ValueError, match="already registered"):
-        register_source_type("sql", lambda config, ctx: MockDataSource(schema="t"))
+        register_source_type(
+            "sql", lambda config, ctx: MockDataSource(schema="t"), protocol=SOURCE_PROTOCOL_VERSION
+        )
 
 
 def test_wrapper_v1_cannot_be_reregistered() -> None:
     with pytest.raises(ValueError, match="built in"):
-        register_source_type("wrapper_v1", lambda config, ctx: None)
+        register_source_type(
+            "wrapper_v1", lambda config, ctx: None, protocol=SOURCE_PROTOCOL_VERSION
+        )
 
 
 def test_blank_type_rejected() -> None:
     with pytest.raises(ValueError, match="non-empty"):
-        register_source_type("  ", lambda config, ctx: None)
+        register_source_type("  ", lambda config, ctx: None, protocol=SOURCE_PROTOCOL_VERSION)
 
 
 def test_protocol_mismatch_fails_at_registration() -> None:
@@ -157,7 +165,7 @@ def test_run_threads_source_ctx_to_factories(monkeypatch) -> None:
         seen["ctx"] = ctx
         return MockDataSource(schema="t")
 
-    register_source_type("sql", factory)
+    register_source_type("sql", factory, protocol=SOURCE_PROTOCOL_VERSION)
 
     from types import SimpleNamespace
 

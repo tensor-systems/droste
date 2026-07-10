@@ -514,9 +514,17 @@ def register_source_type(
     stype: str,
     factory: SourceFactory,
     *,
-    protocol: int = SOURCE_PROTOCOL_VERSION,
+    protocol: int,
 ) -> None:
-    """Register a factory for a data source type (process-global, at startup)."""
+    """Register a factory for a data source type (process-global, at startup).
+
+    ``protocol`` is REQUIRED and must be the literal version the registrant
+    was written against — a default would let a stale extension silently
+    self-certify as current, defeating the startup compatibility check
+    (codex review on the v2 bump). In-tree sources pass the imported
+    constant because they are co-versioned with the engine; external
+    registrants must pass the literal they implement.
+    """
     if protocol != SOURCE_PROTOCOL_VERSION:
         raise RuntimeError(
             f"source type {stype!r} was registered against protocol {protocol}; "
