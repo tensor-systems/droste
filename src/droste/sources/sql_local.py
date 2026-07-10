@@ -35,6 +35,13 @@ Threat model (important — do not overclaim):
     itself be a scoped, short-lived, least-privilege read-only connection —
     the policy is enforced there by that constrained connection plus the
     sandbox, not by this class alone.
+
+Threadless runtimes (Pyodide/WASM):
+    The per-query ``timeout_ms`` is enforced with a ``threading.Timer``. Where
+    thread creation is unavailable (e.g. Pyodide — ``threading`` imports but
+    ``start()`` raises ``RuntimeError``), queries still run: the timer is
+    skipped with a one-time ``RuntimeWarning`` and the substrate's own
+    wall-clock kill (e.g. the Deno relay's process timeout) is the enforcement.
 """
 
 from __future__ import annotations
@@ -42,6 +49,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import threading
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
@@ -350,7 +358,25 @@ class LocalSqlDataSource:
             if timeout_ms > 0:
                 timer = threading.Timer(timeout_ms / 1000.0, conn.interrupt)
                 timer.daemon = True
-                timer.start()
+                try:
+                    timer.start()
+                except RuntimeError:
+                    # Threadless runtime (Pyodide/WASM: threading imports but
+                    # thread *creation* raises "can't start new thread").
+                    # There is no thread to arm the interrupt from, so the
+                    # policy's timeout_ms cannot be enforced at this layer —
+                    # the substrate's own wall-clock kill (e.g. the host
+                    # process timeout in the Deno+Pyodide relay) is the
+                    # enforcement there. Degrade to no timer instead of
+                    # failing every query under the default policy.
+                    timer = None
+                    warnings.warn(
+                        "sql_local: no OS threads available (WASM?); the "
+                        f"policy timeout ({timeout_ms} ms) is not enforced — "
+                        "rely on the host's wall-clock timeout",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
             try:
                 cursor = conn.execute(normalized)
                 columns = [d[0] for d in cursor.description or []]

@@ -180,20 +180,17 @@ So the contract your adapter sees is a clean "real Python `None`, or a real
 value." This is called out here only so nobody re-discovers and re-solves it in
 their own adapter — the relay owns it.
 
-### Gotcha 2 — `sql_local` timeouts under Pyodide (your responsibility)
+### Gotcha 2 — `sql_local` timeouts under Pyodide (handled, but know the limit)
 
-If your adapter uses `droste.sources.sql_local`, you **must** set the policy's
-`timeout_ms` to `0`. `LocalSqlDataSource.query()` enforces its per-query timeout
-with `threading.Timer`, which needs real OS threads — unavailable under
-Pyodide/WASM — so any query with a nonzero `timeout_ms` raises
-`RuntimeError: can't start new thread` on the very first call. `timeout_ms: 0`
-skips the timer branch entirely (the code treats `0` as "no timer"); the host's
-own wall-clock kill (Deno's process timeout) is the real enforcement in this
-substrate, exactly as `RunnerEnvironment(exec_timeout_ms=0, ...)` already is for
-exec timeouts. The reference adapter does this explicitly via its
-`_PYODIDE_SAFE_SQL_POLICY` constant. This is tracked as #8 (still open —
-until it's fixed in `sql_local.py` itself, `timeout_ms: 0` is the required
-opt-out for any Pyodide host using that source). See Known gaps.
+`LocalSqlDataSource.query()` enforces its per-query timeout with
+`threading.Timer`, which needs real OS threads — unavailable under
+Pyodide/WASM. Since the #8 fix, the source degrades gracefully there: the
+timer is skipped with a one-time `RuntimeWarning`, and queries run normally
+under the **default** policy. The thing to know is what that means: the
+policy's `timeout_ms` is simply **not enforced** in this substrate — the
+host's own wall-clock kill (Deno's process timeout) is the real enforcement,
+exactly as `RunnerEnvironment(exec_timeout_ms=0, ...)` already is for exec
+timeouts. Make sure your host actually has one.
 
 ## Configuration flags
 
@@ -322,16 +319,13 @@ Roughly three tiers of coverage:
   legacy path itself is still open. Not triggered by default; only reachable via
   the `RLM_DB_SERVICE=0` kill switch. This is a `relay.ts` gap in its own
   legacy mode, not a droste-package one.
-- **`sql_local.py`'s per-query timeout is incompatible with Pyodide (#8,
-  open).** `LocalSqlDataSource.query()` enforces `timeout_ms` with
-  `threading.Timer`, which needs real OS threads — so under Pyodide any nonzero
-  `timeout_ms` (including the default policy's `5000`) raises
-  `RuntimeError: can't start new thread` on the first query. A Pyodide host must
-  opt out with `timeout_ms: 0` (see "Writing a host adapter", Gotcha 2). The
-  branch fix that made an explicit `0` actually stick (it used to be silently
-  coerced back to `5000` by an `or` idiom) has landed; #8 tracks the remaining
-  work of properly hardening / documenting the threadless-runtime path in
-  `sql_local.py` itself so the *default* policy doesn't break under Pyodide.
+- **`sql_local.py`'s per-query `timeout_ms` is unenforced under Pyodide (#8,
+  fixed to degrade).** The timeout is a `threading.Timer`; where thread
+  creation is unavailable the source now skips the timer with a
+  `RuntimeWarning` instead of crashing on the first query, so the default
+  policy works. But no in-interpreter timeout exists in that substrate — the
+  host's wall-clock kill is the only enforcement (see "Writing a host
+  adapter", Gotcha 2).
 - **#6** — droste's own `LLMClient` protocol (`protocols/llm_client.py`)
   still declares a stale `batch_responses(requests) -> list[str]` method that
   droste's own core loop never calls (`subcalls.llm_batch` is the real path).
