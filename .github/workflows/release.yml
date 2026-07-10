@@ -22,9 +22,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history: the on-main ancestry check needs it
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+      - name: Tag must point at a commit on main
+        # A version tag pushed from an unmerged branch must not publish that
+        # branch's package permanently to PyPI — only merge commits release.
+        run: |
+          git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::tagged commit $GITHUB_SHA is not reachable from main — tag the merge commit on main"
+            exit 1
+          fi
       - name: Tag must match pyproject version
         run: |
           tag="${GITHUB_REF_NAME#v}"
@@ -46,6 +57,13 @@ jobs:
         # skips them instead of erroring on duplicate filenames.
         run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/droste/
       - name: GitHub release with artifacts
+        # Retry-safe like the PyPI step: create only when absent, and upload
+        # assets with replacement semantics so a rerun completes a partial
+        # release instead of failing on "already exists".
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
