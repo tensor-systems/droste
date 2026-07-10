@@ -439,6 +439,64 @@ class WrapperV1DataSource:
 # different contract fails at registration (startup), not subtly at request time.
 SOURCE_PROTOCOL_VERSION = 1
 
+# Version of the runner request/response envelope (#16). REQUIRED in every
+# request — a request without it is refused, so every request on the wire is
+# self-describing (the JSON-RPC "jsonrpc": "2.0" discipline). Additive-optional
+# fields do NOT bump this (that is the compatibility window's whole point —
+# see docs/architecture.md, "The runner protocol"); renaming/removing a field
+# or changing semantics does. A missing or mismatched version is answered
+# with a structured error naming both sides, so a host detects
+# incompatibility explicitly instead of failing on a missing field.
+RUNNER_PROTOCOL_VERSION = 1
+
+
+def _protocol_error_response(requested: object, error_type: str) -> dict[str, Any]:
+    """The versioned refusal: minimal envelope, structured error, no work done."""
+    if error_type == "protocol_version_missing":
+        message = (
+            "request has no protocol_version; this engine speaks "
+            f'{RUNNER_PROTOCOL_VERSION} — add "protocol_version": '
+            f"{RUNNER_PROTOCOL_VERSION} to the request"
+        )
+    else:
+        message = (
+            f"request speaks runner protocol {requested!r}; "
+            f"this engine speaks {RUNNER_PROTOCOL_VERSION}"
+        )
+    return {
+        "answer": "",
+        "ready": False,
+        "iterations": 0,
+        "tokens_used": 0,
+        "subcalls": 0,
+        "extracted": False,
+        "extract_error": None,
+        "trajectory": [],
+        "protocol_version": RUNNER_PROTOCOL_VERSION,
+        "error": {
+            "type": error_type,
+            "message": message,
+            "code": error_type,
+            "details": {"requested": requested, "supported": RUNNER_PROTOCOL_VERSION},
+        },
+    }
+
+
+def _check_protocol_version(request: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a refusal response for a missing/mismatched version, else None."""
+    raw = request.get("protocol_version")
+    if raw is None or raw == "":
+        return _protocol_error_response(None, "protocol_version_missing")
+    # A strict gate must not coerce: JSON `1.9` or `true` would int() to 1
+    # and slip a malformed identifier through; only an actual (non-boolean)
+    # integer is a protocol version.
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return _protocol_error_response(raw, "protocol_version_mismatch")
+    if raw != RUNNER_PROTOCOL_VERSION:
+        return _protocol_error_response(raw, "protocol_version_mismatch")
+    return None
+
+
 # factory(config, ctx) -> DataSource. `config` is the request's declarative
 # per-source entry; `ctx` is the host-supplied edge context (e.g. a live
 # read-only DB handle) threaded through build_data_sources — see §7.3.
@@ -847,9 +905,18 @@ def _run_adapter(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
+    refusal = _check_protocol_version(request)
+    if refusal is not None:
+        return refusal
+
     adapter_module = request.get("adapter_module")
     if isinstance(adapter_module, str) and adapter_module.strip():
-        return _run_adapter(request)
+        # Adapters own their response shape; the envelope version is stamped
+        # only when the adapter didn't claim one itself.
+        response = _run_adapter(request)
+        if isinstance(response, dict):
+            response.setdefault("protocol_version", RUNNER_PROTOCOL_VERSION)
+        return response
 
     context = _build_context(request)
     # source_ctx is the host-supplied edge context for registered source
@@ -1000,6 +1067,7 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
         "response_id": root_client.last_response_id,
         "stop_reason": root_client.last_stop_reason,
         "model": root_client.last_model or str(request.get("model") or ""),
+        "protocol_version": RUNNER_PROTOCOL_VERSION,
     }
     wrapper_sources = [s for s in sources if isinstance(s, WrapperV1DataSource)]
     if wrapper_sources:
@@ -1024,6 +1092,13 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
 
 def main() -> None:
     request = _read_request()
+    # The version gate runs FIRST — before any other request-field check —
+    # so a bad envelope always gets the structured versioned refusal, never
+    # a generic error from a later validation the caller can't attribute.
+    refusal = _check_protocol_version(request)
+    if refusal is not None:
+        sys.stdout.write(json.dumps(refusal, ensure_ascii=True))
+        return
     # The request file is the untrusted boundary (hosted runners are fed one by
     # the parent process). A request must never name code to import: source
     # types come from register_source_type() in the entrypoint (Option C), and
@@ -1042,11 +1117,14 @@ if __name__ == "__main__":
         main()
     except Exception as exc:
         payload = {
+            # Exception envelopes are responses too — a host parsing for the
+            # documented protocol_version must find it on every output path.
+            "protocol_version": RUNNER_PROTOCOL_VERSION,
             "error": {
                 "type": exc.__class__.__name__,
                 "message": str(exc),
                 "traceback": traceback.format_exc(),
-            }
+            },
         }
         sys.stdout.write(json.dumps(payload, ensure_ascii=True))
         sys.exit(1)
