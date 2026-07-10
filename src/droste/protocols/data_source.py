@@ -24,7 +24,16 @@ class DataSourceCapabilities(TypedDict):
 
 
 class DataSource(Protocol):
-    """Abstract data access layer."""
+    """Abstract data access layer.
+
+    The protocol is domain-blind: core verbs only, nothing that encodes any
+    particular host's data shape. A host whose source has domain-specific
+    verbs beyond these (a chat archive's bulk accessors, a citations
+    feature's ID tracking, ...) declares them in an ``extra_methods``
+    attribute — a tuple of method names — and the registry and the bridge's
+    ``DataSourceService`` expose exactly those callables to the sandbox, on
+    top of the capability-gated core verbs below.
+    """
 
     def name(self) -> str:
         """Unique name for namespacing in the environment."""
@@ -46,13 +55,12 @@ class DataSource(Protocol):
         self,
         query: str,
         limit: int = 50,
-        sender: str | None = None,
-        chat: str | None = None,
-        days: int | None = None,
-        table: str = "messages",
         filters: dict[str, Any] | None = None,
     ) -> list[SearchResult]:
-        """Full-text search (supports chat-archive-style args plus filters)."""
+        """Full-text search. Domain-specific narrowing goes in ``filters``
+        (or in a concrete source's own extra kwargs — the registry and
+        bridge forward call arguments verbatim, so an implementation may
+        accept more than the protocol declares)."""
         ...
 
     def query(self, sql: str) -> list[dict[str, Any]]:
@@ -65,18 +73,6 @@ class DataSource(Protocol):
 
     def get_recent(self, days: int = 7, limit: int = 100) -> list[dict[str, Any]]:
         """Get recent records."""
-        ...
-
-    def get_messages(self, limit: int | None = 10000) -> list[dict[str, Any]]:
-        """Get messages in bulk (optional)."""
-        ...
-
-    def get_chats(self) -> list[dict[str, Any]]:
-        """Get list of chats (optional)."""
-        ...
-
-    def get_chat_messages(self, chat_id: str, limit: int = 1000) -> list[dict[str, Any]]:
-        """Get messages from a chat (optional)."""
         ...
 
     def sample(self, n: int = 1000) -> list[dict[str, Any]]:

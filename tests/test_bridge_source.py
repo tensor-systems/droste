@@ -30,12 +30,15 @@ def test_describe_reports_capabilities_schema_and_optional_methods() -> None:
     assert bridged.name() == "mock"
     assert bridged.capabilities() == source.capabilities()
     assert bridged.get_schema() == "mock schema"
-    # MockDataSource defines these unconditionally -> hasattr is true -> bound.
-    for method in ("get_messages", "get_chats", "get_chat_messages", "sample"):
-        assert hasattr(bridged, method)
+    # MockDataSource defines sample unconditionally -> hasattr is true -> bound.
+    assert hasattr(bridged, "sample")
     # MockDataSource never defines "find" or "content".
     assert not hasattr(bridged, "find")
     assert not hasattr(bridged, "content")
+    # Domain verbs are no longer droste vocabulary (#10): nothing binds them
+    # unless a source declares them via extra_methods.
+    for method in ("get_messages", "get_chats", "get_chat_messages"):
+        assert not hasattr(bridged, method)
 
 
 def test_core_verbs_round_trip_through_the_bridge() -> None:
@@ -80,9 +83,35 @@ def test_optional_verb_forwards_through_the_bridge() -> None:
     service = DataSourceService(source)
     bridged = BridgeDataSource(service.handle, name="mock")
 
-    assert bridged.get_chats() == []
-    assert bridged.get_chat_messages("chat1", limit=10) == []
     assert bridged.sample(n=5) == []
+
+
+def test_source_declared_extra_methods_forward_and_reach_the_registry() -> None:
+    """The #10 seam end to end: a source declares its domain verbs in an
+    `extra_methods` attribute; DataSourceService picks them up with no
+    extra_methods= param, describe() reports them, BridgeDataSource binds
+    and re-exposes them, and a registry over the bridged source flattens
+    them into sandbox globals like any local source's."""
+
+    class ChatArchiveSource(MockDataSource):
+        extra_methods = ("get_messages", "get_chats")
+
+        def get_messages(self, limit=10000):
+            return [{"text": "hi"}]
+
+        def get_chats(self):
+            return [{"chat": "c1"}]
+
+    service = DataSourceService(ChatArchiveSource())
+    assert service.describe()["extra_methods"] == ["get_chats", "get_messages"]
+
+    bridged = BridgeDataSource(service.handle, name="mock")
+    assert bridged.get_messages(limit=5) == [{"text": "hi"}]
+    assert bridged.extra_methods == ("get_chats", "get_messages")
+
+    env = DataSourceRegistry([bridged], default_source_name="mock").globals()
+    assert env["get_chats"]() == [{"chat": "c1"}]
+    assert env["mock"].get_messages() == [{"text": "hi"}]
 
 
 def test_extra_methods_forward_like_any_other_optional_verb() -> None:
@@ -142,13 +171,13 @@ def test_optional_methods_not_bound_when_source_lacks_them(tmp_path) -> None:
     bridged = BridgeDataSource(service.handle, name="db")
 
     # LocalSqlDataSource has none of the optional verbs.
-    for method in ("find", "content", "get_messages", "get_chats", "get_chat_messages", "sample"):
+    for method in ("find", "content", "sample"):
         assert not hasattr(bridged, method)
     # And no class-level definitions leak through either — a second bridged
     # instance over a source that DOES have them must differ per-instance.
     other = BridgeDataSource(DataSourceService(MockDataSource()).handle, name="mock")
-    assert hasattr(other, "get_chats")
-    assert not hasattr(bridged, "get_chats")
+    assert hasattr(other, "sample")
+    assert not hasattr(bridged, "sample")
 
 
 # --- security: the fixed method allowlist is the real boundary -------------
@@ -186,7 +215,7 @@ def test_capability_gated_method_rejected_when_disabled(tmp_path) -> None:
 
 def test_optional_method_rejected_when_source_lacks_it() -> None:
     service = DataSourceService(MockDataSource())
-    raw = service.handle("get_messages", "{}")
+    raw = service.handle("sample", "{}")
     envelope = json.loads(raw)
     assert envelope["ok"] is True  # MockDataSource does implement it
 
@@ -223,10 +252,18 @@ def test_optional_method_rejected_when_source_lacks_it() -> None:
             return []
 
     bare_service = DataSourceService(NoOptional())
-    raw = bare_service.handle("get_messages", "{}")
+    raw = bare_service.handle("sample", "{}")
     envelope = json.loads(raw)
     assert envelope["ok"] is False
     assert envelope["error"]["type"] == "PermissionError"
+
+    # A domain verb nobody declared is not even a known method name — the
+    # allowlist rejects it as unknown, not merely unimplemented (#10).
+    raw = bare_service.handle("get_messages", "{}")
+    envelope = json.loads(raw)
+    assert envelope["ok"] is False
+    assert envelope["error"]["type"] == "ValueError"
+    assert "unknown bridge method" in envelope["error"]["message"]
 
 
 def test_bad_params_json_rejected() -> None:

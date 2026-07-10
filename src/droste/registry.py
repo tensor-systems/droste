@@ -54,14 +54,30 @@ class DataSourceRegistry:
 
             if hasattr(source, "content"):
                 ns["content"] = source.content
-            if hasattr(source, "get_messages"):
-                ns["get_messages"] = source.get_messages
-            if hasattr(source, "get_chats"):
-                ns["get_chats"] = source.get_chats
-            if hasattr(source, "get_chat_messages"):
-                ns["get_chat_messages"] = source.get_chat_messages
             if hasattr(source, "sample"):
                 ns["sample"] = source.sample
+
+            # Host extras (#10): the engine is domain-blind, so any verbs
+            # beyond the core set are declared by the source itself via an
+            # `extra_methods` attribute (a tuple of method names) — the same
+            # convention DataSourceService uses across the bridge, and what
+            # BridgeDataSource re-exposes from the service's describe().
+            for extra in tuple(getattr(source, "extra_methods", ()) or ()):
+                extra_name = str(extra)
+                if extra_name in RESERVED_NAMES:
+                    raise ValueError(
+                        f"extra method {extra_name!r} on source {name!r} shadows a reserved global"
+                    )
+                if extra_name in ns:
+                    raise ValueError(
+                        f"extra method {extra_name!r} on source {name!r} collides with a core verb"
+                    )
+                fn = getattr(source, extra_name, None)
+                if not callable(fn):
+                    raise ValueError(
+                        f"extra method {extra_name!r} on source {name!r} is not a callable"
+                    )
+                ns[extra_name] = fn
 
             # Expose an attribute-accessible namespace so the model can write
             # `db.query(...)` (a dict would force `db["query"](...)`). The verbs

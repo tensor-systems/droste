@@ -45,17 +45,15 @@ _CORE_METHODS: dict[str, str] = {
 }
 
 # Optional verbs, gated by hasattr(source, name) — mirrors registry.py's own
-# hasattr checks for these (no capabilities() flag governs them). Host-specific
-# extras that registry.py doesn't know about (e.g. a host's own retrieved-IDs
-# tracking) go through DataSourceService's extra_methods= instead of this
-# tuple — this one is droste's own sandbox-verb list, not a place for a
-# specific host's own conventions.
+# hasattr checks for these (no capabilities() flag governs them). Host- or
+# domain-specific verbs (a chat archive's bulk accessors, a citations
+# feature's ID tracking) are NOT listed here (#10): the engine is
+# domain-blind, so a source declares those itself via an `extra_methods`
+# attribute (or the host passes extra_methods= to DataSourceService) — this
+# tuple is droste's own generic sandbox-verb list only.
 _OPTIONAL_METHODS: tuple[str, ...] = (
     "find",
     "content",
-    "get_messages",
-    "get_chats",
-    "get_chat_messages",
     "sample",
 )
 
@@ -66,15 +64,19 @@ class DataSourceService:
     def __init__(self, source: DataSource, *, extra_methods: tuple[str, ...] = ()) -> None:
         self._source = source
         self._caps: dict[str, bool] = dict(source.capabilities())
-        # extra_methods: host-specific optional verbs beyond droste's own
-        # _OPTIONAL_METHODS — e.g. a host's DataSource may track retrieved-
-        # record IDs for a citations feature via a get_retrieved_guids()-shaped
-        # method that isn't part of the DataSource Protocol at all and means
-        # nothing to droste. Gated identically (hasattr on the wrapped source)
-        # and folded into the same describe()/dispatch machinery, so
-        # BridgeDataSource needs no changes to pick them up — it already binds
-        # whatever describe() reports in optional_methods.
-        self._optional_names: tuple[str, ...] = _OPTIONAL_METHODS + tuple(extra_methods)
+        # extra_methods: host-specific verbs beyond droste's own generic
+        # _OPTIONAL_METHODS — e.g. a chat archive's bulk accessors, or a
+        # citations feature's get_retrieved_guids() — methods that are not
+        # part of the DataSource Protocol at all and mean nothing to droste.
+        # Two declaration channels, merged: the source's own `extra_methods`
+        # attribute (the #10 convention the registry also reads) and the
+        # host-passed extra_methods= parameter. Gated identically (hasattr on
+        # the wrapped source) and folded into the same describe()/dispatch
+        # machinery; describe() reports them separately so BridgeDataSource
+        # can re-expose `extra_methods` to the in-process registry.
+        declared = tuple(getattr(source, "extra_methods", ()) or ())
+        self._extra_names: tuple[str, ...] = tuple(dict.fromkeys((*declared, *extra_methods)))
+        self._optional_names: tuple[str, ...] = _OPTIONAL_METHODS + self._extra_names
         self._optional: set[str] = {name for name in self._optional_names if hasattr(source, name)}
 
     def describe(self) -> dict[str, Any]:
@@ -84,6 +86,7 @@ class DataSourceService:
             "capabilities": self._caps,
             "schema": schema,
             "optional_methods": sorted(self._optional),
+            "extra_methods": sorted(n for n in self._extra_names if n in self._optional),
         }
 
     def handle(self, method: str, params_json: str) -> str:
@@ -126,8 +129,8 @@ BridgeCall = Callable[[str, str], Any]
 
 # Core verbs whose real-world signatures vary by source beyond what the
 # DataSource Protocol declares — e.g. WrapperV1DataSource.search(query,
-# filters=None, page=None) has a `page` the Protocol doesn't, and lacks
-# limit/sender/chat/days/table that other search()-capable sources use. A
+# filters=None, page=None) has a `page` the Protocol doesn't, and other
+# search()-capable sources accept their own extra kwargs. A
 # fixed BridgeDataSource signature can't proxy that faithfully in either
 # direction: a concrete default would get forwarded on every call even when
 # the caller omitted it (silently overriding the wrapped source's own
@@ -148,11 +151,14 @@ class BridgeDataSource:
         self._caps: dict[str, bool] = dict(described.get("capabilities") or {})
         self._schema: str = described.get("schema") or ""
         self._optional: set[str] = set(described.get("optional_methods") or [])
+        # Re-expose the service's host extras under the #10 convention so a
+        # registry wrapping THIS source binds them like any local source's.
+        self.extra_methods: tuple[str, ...] = tuple(described.get("extra_methods") or ())
         # Both the capability-gated core verbs and the hasattr-gated optional
         # verbs are bound as INSTANCE attributes, and only when the remote
         # side actually reports them — never defined at class level. A
         # class-level definition would make e.g. hasattr(bridged,
-        # "get_chats") true for every BridgeDataSource regardless of what the
+        # "sample") true for every BridgeDataSource regardless of what the
         # wrapped source actually supports (registry.py gates optional verbs
         # by hasattr), so a model calling it would get a runtime bridge error
         # instead of the method never being offered in the first place.
