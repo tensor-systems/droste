@@ -521,8 +521,18 @@ def _register_builtin_source_types() -> None:
     # The runner's built-in remote source registers through the same
     # mechanism as everyone else (#32) instead of a _build_one_source
     # carve-out; attempts to re-register the type fail like any duplicate.
-    if source_factory("wrapper_v1") is None:
-        register_source_type("wrapper_v1", _wrapper_v1_factory, protocol=SOURCE_PROTOCOL_VERSION)
+    # Import order must not subvert that (codex review): a consumer that
+    # registered its own 'wrapper_v1' BEFORE this module was imported gets a
+    # loud failure here, never a silent factory swap.
+    existing = source_factory("wrapper_v1")
+    if existing is _wrapper_v1_factory:
+        return
+    if existing is not None:
+        raise ValueError(
+            "source type 'wrapper_v1' is built in to droste_runner and cannot "
+            "be replaced by a pre-registered factory"
+        )
+    register_source_type("wrapper_v1", _wrapper_v1_factory, protocol=SOURCE_PROTOCOL_VERSION)
 
 
 _register_builtin_source_types()
