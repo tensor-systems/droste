@@ -1,6 +1,6 @@
 """Unified data sources: registry-through-runner + WrapperV1DataSource.
 
-Covers the droste#9 plumbing — build_data_sources(), the WrapperV1DataSource
+Covers the source-unification plumbing — build_data_sources(), the WrapperV1DataSource
 remote adapter, and that RunnerEnvironment now sources its globals/prompt from a
 DataSourceRegistry instead of the old flat data_source_* special-case.
 """
@@ -76,7 +76,7 @@ def test_data_sources_entry_must_be_object() -> None:
         build_data_sources({"data_sources": ["not-a-dict"]})
 
 
-# --- register_source_type (Option C, #9 source unification) -----------------
+# --- register_source_type (Option C, source unification) -----------------
 
 
 def test_registered_factory_builds_source_with_config_and_ctx() -> None:

@@ -1,4 +1,4 @@
-"""`droste login` / `logout` / `whoami` (droste#55).
+"""`droste login` / `logout` / `whoami`.
 
 In an interactive terminal, `droste login` is a chooser: ModelRelay with
 free credits (the default), or your own API key. Both choices are STORED in

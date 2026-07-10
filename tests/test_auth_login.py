@@ -1,4 +1,4 @@
-"""`droste login`/`logout`/`whoami` against a fake ModelRelay server (droste#55).
+"""`droste login`/`logout`/`whoami` against a fake ModelRelay server.
 
 Covers the login contract: loopback OAuth handoff (nonce-checked), the $0
 card-check gate (granted / reused-fingerprint / prepaid / unavailable), key

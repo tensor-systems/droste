@@ -1,4 +1,4 @@
-// Tests for the RLM stderr event filter (#2). Run: deno test events_test.ts
+// Tests for the RLM stderr event filter (#1). Run: deno test events_test.ts
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { isRlmEvent, RLM_EVENT_TYPES } from "./events.ts";
 

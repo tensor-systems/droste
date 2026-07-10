@@ -1,4 +1,4 @@
-"""Native Anthropic Messages client (#57): transport, accounting, detection."""
+"""Native Anthropic Messages client: transport, accounting, detection."""
 
 from __future__ import annotations
 
@@ -369,7 +369,7 @@ def test_cli_keyless_error_mentions_anthropic(tmp_path, monkeypatch, capsys):
 
 
 def test_clients_subpackage_reexports():
-    # codex review (#58): the droste.clients import surface must stay
+    # codex review: the droste.clients import surface must stay
     # consistent for all built-in clients. Assert names explicitly so a
     # linter can never strip the "unused" imports this test exists for.
     import droste.clients as clients

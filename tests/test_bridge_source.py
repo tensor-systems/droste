@@ -1,4 +1,4 @@
-"""Bridge-backed DataSource (droste#3, A'-2): DataSourceService <-> BridgeDataSource.
+"""Bridge-backed DataSource (A'-2 sandbox split): DataSourceService <-> BridgeDataSource.
 
 A pure in-process loopback (`BridgeDataSource(bridge_call=service.handle, ...)`)
 stands in for the real cross-interpreter transport (a Deno JSON-RPC bridge

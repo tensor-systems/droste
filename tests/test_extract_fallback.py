@@ -1,4 +1,4 @@
-"""Extract-fallback path (issue #21) — the post-exhaustion synthesis call, and
+"""Extract-fallback path — the post-exhaustion synthesis call, and
 the fix for it silently swallowing failures (found via a real user report:
 raw debug `print()` output was shown as a final answer with zero trace of why
 the synthesis call that should have replaced it never ran)."""

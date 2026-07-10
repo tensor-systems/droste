@@ -106,7 +106,7 @@ def test_concurrent_batch_counts_each_issued_call() -> None:
     assert context.stats.calls_made == 20
 
 
-# --- Subcall cost controls (#25): payload includes overrides when set, omits
+# --- Subcall cost controls: payload includes overrides when set, omits
 # them when unset (the server owns the defaults).
 
 
@@ -185,7 +185,7 @@ def test_subcall_payload_omits_cost_controls_when_unset() -> None:
 
 def test_explicit_zero_subcall_max_output_tokens_is_rejected() -> None:
     """A subcall cannot answer in 0 tokens; silently treating explicit 0 as
-    unset would mask a caller bug (codex catch on PR #26)."""
+    unset would mask a caller bug (codex catch)."""
     with pytest.raises(ValueError, match="subcall_max_output_tokens must be positive"):
         run(
             {
@@ -220,7 +220,7 @@ def test_wrapper_call_enforces_allowed_hosts():
 
 def test_wrapper_rejects_redirect_to_disallowed_host():
     # SSRF-via-redirect: a call starting at an allowed host must still refuse
-    # a 30x to a host outside the allowlist (codex review, #54).
+    # a 30x to a host outside the allowlist (codex review).
     from droste_runner.runner import _allowlist_opener
 
     opener = _allowlist_opener({"partner.example.com"})
@@ -238,7 +238,7 @@ def test_wrapper_rejects_redirect_to_disallowed_host():
 
 def test_wrapper_malformed_allowed_hosts_fails_closed():
     # A present-but-malformed allowed_hosts (string / empty list) is a config
-    # error, not an allow-all — fail closed (codex review, #54).
+    # error, not an allow-all — fail closed (codex review).
     import pytest as _pytest
 
     from droste_runner.runner import DataSourceWrapper

@@ -1,10 +1,10 @@
-"""Subcall-elicitation improvements (issues #19, #20, #21):
+"""Subcall-elicitation improvements:
 
-- #19: real system-prompt content — tips profiles are non-empty and wire into
+- tips: real system-prompt content — tips profiles are non-empty and wire into
   the built prompt.
-- #20: the environment describes the context (type, size, preview) and nudges
+- context preview: the environment describes the context (type, size, preview) and nudges
   on empty stdout.
-- #21: raised loop defaults, extract fallback on exhaustion, and a policy
+- loop defaults: raised loop defaults, extract fallback on exhaustion, and a policy
   violation that keeps (not wipes) the accumulated answer content.
 """
 
@@ -64,7 +64,7 @@ def _runner_env(context: Any) -> RunnerEnvironment:
     )
 
 
-# --- #19: tips profiles wire into the built system prompt -------------------
+# --- tips profiles wire into the built system prompt -------------------
 
 
 def test_tips_profiles_are_non_empty() -> None:
@@ -114,7 +114,7 @@ def test_run_rlm_default_profile_carries_tips_to_root_llm() -> None:
     assert "orchestrator, not a solver" in system["content"]
 
 
-# --- #20: context size + preview in prompt_fragment -------------------------
+# --- context size + preview in prompt_fragment -------------------------
 
 
 def test_prompt_fragment_includes_length_preview_and_subcall_capacity() -> None:
@@ -163,7 +163,7 @@ def test_describe_context_handles_none_and_escapes_fences() -> None:
     assert "```python" not in desc.split("```\n", 1)[1].rsplit("\n```", 1)[0]
 
 
-# --- #20: empty-output nudge -------------------------------------------------
+# --- empty-output nudge -------------------------------------------------
 
 
 def test_empty_stdout_becomes_nudge_in_feedback_and_trajectory() -> None:
@@ -207,7 +207,7 @@ def test_non_empty_stdout_is_passed_through_unchanged() -> None:
     assert result.trajectory[0].execution_result == "real output"
 
 
-# --- #21: raised defaults ----------------------------------------------------
+# --- raised defaults ----------------------------------------------------
 
 
 def test_loop_defaults_raised_for_explore_first_budget() -> None:
@@ -281,7 +281,7 @@ def test_runner_omitted_budgets_use_core_defaults_and_allow_subcalls() -> None:
 
 def test_runner_explicit_zero_subcalls_is_honored() -> None:
     """max_subcalls=0 passed explicitly means NO subcalls — it must not be
-    coerced to the omitted-value default (codex catch on PR #22)."""
+    coerced to the omitted-value default (codex catch)."""
     import json as jsonlib
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -335,7 +335,7 @@ def test_runner_explicit_zero_subcalls_is_honored() -> None:
     assert response["subcalls"] == 0
 
 
-# --- #21: extract fallback on exhaustion -------------------------------------
+# --- extract fallback on exhaustion -------------------------------------
 
 
 def test_extract_fallback_fires_when_iterations_exhausted() -> None:
@@ -399,7 +399,7 @@ def test_extract_fallback_failure_falls_back_to_best_answer() -> None:
     assert result.ready is False
 
 
-# --- #21: policy violation keeps content in-loop, withholds it from result ----
+# --- policy violation keeps content in-loop, withholds it from result ----
 
 
 def test_semantic_policy_violation_keeps_content_in_loop_but_withholds_from_result() -> None:

@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 ProgressCallback = Callable[[str], None]
 # Structured loop events (iteration_start / code / output / …) for "watch it
-# think" UIs and NDJSON streaming (#2). Separate from ProgressCallback: progress
+# think" UIs and NDJSON streaming (#1). Separate from ProgressCallback: progress
 # is a human-readable status string; an event is a typed dict.
 EventCallback = Callable[[dict[str, Any]], None]
 

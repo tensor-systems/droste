@@ -1,4 +1,4 @@
-"""Pyodide-substrate adapters for droste's core loop (droste#80 split).
+"""Pyodide-substrate adapters for droste's core loop (adapter-agnostic split).
 
 Two pieces are substrate-specific and injected into the otherwise-unchanged
 droste loop:

@@ -1,5 +1,5 @@
 // Droste-owned end-to-end proof that pyodide/relay.ts's host-adapter seam
-// (droste#80 follow-up) actually works: spawns the REAL relay.ts as a
+// (adapter-agnostic relay split) actually works: spawns the REAL relay.ts as a
 // subprocess — real Deno process boundary, real Pyodide interpreter, real
 // dynamic `importlib.import_module` of an adapter module, real stdin/stdout
 // HostRequest/HostResponse contract — with zero host-app dependency and
@@ -54,7 +54,7 @@ function startMockModelRelay(): Promise<{ port: number; shutdown: () => Promise<
 // A mock that always fails /responses with an HTTP 402 (out of balance) —
 // proves relay.ts's status-enrichment (attaching the captured HTTP status to
 // resp.error.status) happens without any JS-side re-parsing of the adapter's
-// response, per the same droste#80-follow-up finding the precision test above
+// response, per the same adapter-agnostic-split finding the precision test above
 // guards on the success path.
 function startFailingMockModelRelay(): Promise<{ port: number; shutdown: () => Promise<void> }> {
   const server = Deno.serve(
@@ -175,7 +175,7 @@ Deno.test({
       // Deno.env.toObject()) — both modes return the same answer here, so
       // the test would keep passing while testing the wrong code path.
       // Exercises build_db_service + the opaque meta blob + bridge_call, the
-      // parts droste#80 changed.
+      // parts the adapter-agnostic split changed.
       const resp = await runRelay(sourcesDir, request, port, { RLM_DB_SERVICE: "1" });
       assertEquals(resp.error, null);
       assertEquals(resp.answer, "3"); // real COUNT(*) via the real bridged query()

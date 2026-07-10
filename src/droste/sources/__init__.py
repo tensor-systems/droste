@@ -3,7 +3,7 @@
 The engine's base runner only builds remote ``wrapper_v1`` sources; everything
 in this package is opt-in. Most modules are registered by the consumer's
 entrypoint via :func:`droste_runner.runner.register_source_type` (Option C,
-the #9 source-unification design) — see each module's ``register()`` helper.
+the source-unification design) — see each module's ``register()`` helper.
 ``bridge.py`` is the exception: it's built directly by a trusted host process
 handing a concrete transport into an interpreter it created, not from a
 declarative request, so it has no ``register()``/factory.

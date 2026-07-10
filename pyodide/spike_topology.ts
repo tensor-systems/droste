@@ -1,4 +1,4 @@
-// Spike: measure the cost of the #3 sandbox-split topology options.
+// Spike: measure the cost of the sandbox-split topology options.
 //
 //   Option A — TWO Pyodide contexts in one Deno process:
 //              untrusted REPL  +  trusted "DB service".

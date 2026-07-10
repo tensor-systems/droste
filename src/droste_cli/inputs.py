@@ -1,4 +1,4 @@
-"""Argument classification and directory ingestion for the droste CLI (#44).
+"""Argument classification and directory ingestion for the droste CLI.
 
 The CLI's contract in one breath: *args that exist are data, the one that
 doesn't is the question, no args means here, pipes are data too, and it

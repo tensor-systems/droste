@@ -1,4 +1,4 @@
-// #16 verification harness: pin what the runner's threads/signals-dependent paths
+// llm_batch threading verification harness: pin what the runner's threads/signals-dependent paths
 // do under Pyodide (no OS threads, no signals), and prove the host-side fix.
 //
 // Findings (2026-07-07, Deno 2.9.1 / Pyodide 0.29.4):
@@ -9,7 +9,7 @@
 //   - sequential subcalls                               -> work (no parallelism)
 //   - host-side Promise.all fan-out                     -> works, PARALLELISM KEPT
 // Conclusion: batch fan-out AND query timeouts must move to the Deno host. See
-// the findings note and issue #16. The host-side fan-out is built in the #3 broker.
+// the findings note. The host-side fan-out is built in the A-prime broker.
 //
 // Run: deno run --allow-read --allow-env --allow-ffi verify_16_threading.ts
 import { loadPyodide } from "npm:pyodide@0.29.4";

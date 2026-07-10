@@ -85,7 +85,7 @@ its Pyodide timeout caveat under "Writing a host adapter" and Known gaps.
 **One honest caveat on reuse:** `BridgedLLMClient._post` and `broker.ts`'s
 `isModelRelayResponsesCall` scoping are ModelRelay-specific today. A host
 targeting a different LLM backend would need to extend the broker (the URL/auth
-scoping) and the client itself. That's real future work adjacent to droste#68
+scoping) and the client itself. That's real future work adjacent to #5
 (MCP-as-transport), not solved here.
 
 ## Writing a host adapter
@@ -191,7 +191,7 @@ skips the timer branch entirely (the code treats `0` as "no timer"); the host's
 own wall-clock kill (Deno's process timeout) is the real enforcement in this
 substrate, exactly as `RunnerEnvironment(exec_timeout_ms=0, ...)` already is for
 exec timeouts. The reference adapter does this explicitly via its
-`_PYODIDE_SAFE_SQL_POLICY` constant. This is tracked as droste#82 (still open —
+`_PYODIDE_SAFE_SQL_POLICY` constant. This is tracked as #8 (still open —
 until it's fixed in `sql_local.py` itself, `timeout_ms: 0` is the required
 opt-out for any Pyodide host using that source). See Known gaps.
 
@@ -280,7 +280,7 @@ Roughly three tiers of coverage:
 
 - **Pure / unit** (no Pyodide, no network): `broker_test.ts`, `events_test.ts`,
   `stream_test.ts` (Deno); `tests/test_pyodide_error_serialization.py` and
-  `tests/test_sql_local.py` (Python) — the latter includes the droste#82
+  `tests/test_sql_local.py` (Python) — the latter includes the #8
   regressions proving an explicit `timeout_ms: 0` survives (isn't defaulted back
   to 5000) and that a query then runs under it. `examples/pyodide-host/`
   `test_pyodide_host_adapter.py` is a fast *native* (no-Pyodide) sanity check of
@@ -306,7 +306,7 @@ Roughly three tiers of coverage:
 ## Known gaps
 
 - **`RLM_DB_SERVICE=0` mounts the whole data directory into the untrusted
-  interpreter, not just the DB (#79).** `relay.ts`'s legacy-mode branch
+  interpreter, not just the DB (#7).** `relay.ts`'s legacy-mode branch
   (`py.mountNodeFS("/data", dbDir)`) mounts the corpus DB's *parent directory*
   wholesale — no narrowing to just the DB files. (Pyodide's
   `mountNodeFS(path, hostPath)` has no read-only option at all, so narrowing to
@@ -322,22 +322,22 @@ Roughly three tiers of coverage:
   legacy path itself is still open. Not triggered by default; only reachable via
   the `RLM_DB_SERVICE=0` kill switch. This is a `relay.ts` gap in its own
   legacy mode, not a droste-package one.
-- **`sql_local.py`'s per-query timeout is incompatible with Pyodide (#82,
+- **`sql_local.py`'s per-query timeout is incompatible with Pyodide (#8,
   open).** `LocalSqlDataSource.query()` enforces `timeout_ms` with
   `threading.Timer`, which needs real OS threads — so under Pyodide any nonzero
   `timeout_ms` (including the default policy's `5000`) raises
   `RuntimeError: can't start new thread` on the first query. A Pyodide host must
   opt out with `timeout_ms: 0` (see "Writing a host adapter", Gotcha 2). The
   branch fix that made an explicit `0` actually stick (it used to be silently
-  coerced back to `5000` by an `or` idiom) has landed; #82 tracks the remaining
+  coerced back to `5000` by an `or` idiom) has landed; #8 tracks the remaining
   work of properly hardening / documenting the threadless-runtime path in
   `sql_local.py` itself so the *default* policy doesn't break under Pyodide.
-- **droste#74** — droste's own `LLMClient` protocol (`protocols/llm_client.py`)
+- **#6** — droste's own `LLMClient` protocol (`protocols/llm_client.py`)
   still declares a stale `batch_responses(requests) -> list[str]` method that
   droste's own core loop never calls (`subcalls.llm_batch` is the real path).
   The actually-used batch contract, `batch_responses_typed(...) -> BatchResponse`,
   is a ModelRelay-specific extension (only ModelRelay, among droste's clients,
-  has a real server-side batch endpoint). As of the droste#80 split it no longer
+  has a real server-side batch endpoint). As of the adapter-agnostic split it no longer
   lives on the substrate's shared `BridgedLLMClient` at all — it belongs on a
   host adapter's own client subclass, in the host's repo. That resolves the
   worse half of the awkwardness: the batch method is a genuine host extension,
@@ -360,7 +360,7 @@ engines (native 3.53.1 vs Pyodide's bundled 3.39.0) against a large real-world
 benchmark corpus, and that packaging a Deno binary + an offline
 `--cached-only` `DENO_DIR` (~14MB) beats shipping a signed `Python.framework` +
 wheelhouse per architecture. That work — plus the two security hardening passes
-(A′-1 and A′-2, the latter now on by default) and the droste#80 split that made
+(A′-1 and A′-2, the latter now on by default) and the adapter-agnostic split that made
 `relay.ts` fully adapter-agnostic and gave droste its own example host — is in
 this repo's git/PR history, not duplicated here. A few standalone investigation
 scripts from that era (`spike_topology.ts`, `probe_dual_sqlite.ts`,
