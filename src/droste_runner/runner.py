@@ -719,13 +719,34 @@ class HTTPSubcallClient(SubcallClient):
                 self._depth_set(depth - 1)
 
     def llm_batch(self, prompts: list[str], contexts: list[str] | None = None) -> list[str]:
+        results, errors = self._run_batch(prompts, contexts)
+        for err in errors:
+            if err is not None:
+                raise err
+        return results
+
+    def llm_batch_with_errors(
+        self,
+        prompts: list[str],
+        contexts: list[str] | None = None,
+    ) -> tuple[list[str], list[dict[str, object]]]:
+        results, errors = self._run_batch(prompts, contexts)
+        structured = [
+            {"index": idx, "error": str(err)} for idx, err in enumerate(errors) if err is not None
+        ]
+        return results, structured
+
+    def _run_batch(
+        self, prompts: list[str], contexts: list[str] | None
+    ) -> tuple[list[str], list[Exception | None]]:
         if contexts is None:
             contexts = [""] * len(prompts)
         if len(contexts) != len(prompts):
             raise ValueError("contexts length must match prompts length")
         results: list[str] = [""] * len(prompts)
+        errors: list[Exception | None] = [None] * len(prompts)
         if not prompts:
-            return results
+            return results, errors
         if len(prompts) > 50:
             raise ValueError("llm_batch prompt count exceeds max 50")
         max_parallel = 5
@@ -737,53 +758,17 @@ class HTTPSubcallClient(SubcallClient):
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        errors: list[Exception | None] = [None] * len(prompts)
         with ThreadPoolExecutor(max_workers=max_parallel) as executor:
-            futures = {}
-            for idx, (prompt, ctx) in enumerate(zip(prompts, contexts)):
-                future = executor.submit(_run_one, idx, prompt, ctx)
-                futures[future] = idx
+            futures = {
+                executor.submit(_run_one, idx, prompt, ctx): idx
+                for idx, (prompt, ctx) in enumerate(zip(prompts, contexts))
+            }
             for future in as_completed(futures):
                 idx = futures[future]
                 try:
                     results[idx] = future.result()
                 except Exception as exc:
                     errors[idx] = exc
-        for err in errors:
-            if err is not None:
-                raise err
-        return results
-
-    def llm_batch_with_errors(
-        self,
-        prompts: list[str],
-        contexts: list[str] | None = None,
-    ) -> tuple[list[str], list[dict[str, object]]]:
-        if contexts is None:
-            contexts = [""] * len(prompts)
-        if len(contexts) != len(prompts):
-            raise ValueError("contexts length must match prompts length")
-        results: list[str] = [""] * len(prompts)
-        errors: list[dict[str, object]] = []
-        if not prompts:
-            return results, errors
-
-        def _run_one(idx: int, prompt: str, ctx: str) -> None:
-            try:
-                results[idx] = self.llm_query(prompt, ctx)
-            except Exception as exc:
-                errors.append({"index": idx, "error": str(exc)})
-
-        threads = []
-        for idx, (prompt, ctx) in enumerate(zip(prompts, contexts)):
-            t = threading.Thread(
-                target=lambda i=idx, p=prompt, c=ctx: _run_one(i, p, c), daemon=True
-            )
-            threads.append(t)
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
         return results, errors
 
 
