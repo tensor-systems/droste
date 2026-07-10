@@ -1,0 +1,69 @@
+name: Release
+
+# Tag-driven releases (#14): pushing vX.Y.Z builds the sdist+wheel, publishes
+# to PyPI via trusted publishing (OIDC — no long-lived token anywhere), and
+# creates the GitHub release with the artifacts attached.
+#
+# One-time setup on PyPI (project "droste" → Publishing → add a trusted
+# publisher): owner tensor-systems, repository droste, workflow release.yml,
+# environment left blank. Until that exists, the publish step fails with an
+# OIDC exchange error and nothing is uploaded.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write # create the GitHub release + upload assets
+  id-token: write # mint the OIDC token PyPI trusted publishing exchanges
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history: the on-main ancestry check needs it
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Tag must point at a commit on main
+        # A version tag pushed from an unmerged branch must not publish that
+        # branch's package permanently to PyPI — only merge commits release.
+        run: |
+          git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::tagged commit $GITHUB_SHA is not reachable from main — tag the merge commit on main"
+            exit 1
+          fi
+      - name: Tag must match pyproject version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pyver="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          if [ "$tag" != "$pyver" ]; then
+            echo "::error::tag v$tag != pyproject version $pyver — bump pyproject.toml before tagging"
+            exit 1
+          fi
+      - name: Sync (locked)
+        run: uv sync --locked
+      - name: Tests gate the release
+        run: uv run pytest -q
+      - name: Build sdist + wheel
+        run: uv build
+      - name: Publish to PyPI (trusted publishing)
+        # --check-url makes re-runs idempotent: if a previous attempt uploaded
+        # some artifacts before failing (or the release step after this one
+        # failed), the retry verifies existing files against the index and
+        # skips them instead of erroring on duplicate filenames.
+        run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/droste/
+      - name: GitHub release with artifacts
+        # Retry-safe like the PyPI step: create only when absent, and upload
+        # assets with replacement semantics so a rerun completes a partial
+        # release instead of failing on "already exists".
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
