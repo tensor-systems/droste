@@ -62,22 +62,27 @@ export function isModelRelayResponsesCall(
 }
 
 /**
- * Pull credentials out of the request so they never become a sandbox global.
- * Returns the held creds and the request stripped of every credential field.
+ * Pull secret credentials out of the request so they never become a sandbox
+ * global. The normalized auth type is nonsecret routing metadata, so preserve
+ * it for adapters that must distinguish customer-tier defaults from tierless
+ * API-key requests without seeing either credential.
  */
 export function splitCredentials(
   request: Record<string, unknown>,
 ): { creds: Credentials; sandboxRequest: Record<string, unknown> } {
   const { api_key, customer_token, auth_type, ...rest } = request;
+  const normalizedAuthType = auth_type === "customer_token"
+    ? "customer_token"
+    : "api_key";
   return {
     creds: {
-      authType: typeof auth_type === "string" ? auth_type : "api_key",
+      authType: normalizedAuthType,
       apiKey: typeof api_key === "string" ? api_key : undefined,
       customerToken: typeof customer_token === "string"
         ? customer_token
         : undefined,
     },
-    sandboxRequest: rest,
+    sandboxRequest: { ...rest, auth_type: normalizedAuthType },
   };
 }
 

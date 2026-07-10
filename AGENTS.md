@@ -78,6 +78,14 @@ pip download droste --dest wheelhouse
 uv pip install --no-index --find-links wheelhouse droste
 ```
 
+## Pyodide Credential Broker
+
+- `pyodide/broker.ts` must remove secret credential values (`api_key` and
+  `customer_token`) before creating the sandbox request.
+- Preserve a normalized `auth_type` in that request. It is nonsecret routing
+  metadata required by adapters that distinguish customer-tier defaults from
+  tierless API-key requests without receiving either credential.
+
 ## Publishing
 
 The package ships on public PyPI. To build and publish a release:

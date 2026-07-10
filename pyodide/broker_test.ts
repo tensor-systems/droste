@@ -118,7 +118,7 @@ Deno.test("isModelRelayResponsesCall: the batch endpoint is scoped in too, but o
   );
 });
 
-Deno.test("splitCredentials removes every credential field from the sandbox request", () => {
+Deno.test("splitCredentials removes secrets and preserves normalized auth type", () => {
   const req = {
     question: "who texts me most?",
     db_path: "/data/shadow.db",
@@ -133,16 +133,14 @@ Deno.test("splitCredentials removes every credential field from the sandbox requ
     question: "who texts me most?",
     db_path: "/data/shadow.db",
     root_model: "gemini-3.5-flash",
+    auth_type: "customer_token",
   });
   assert(!("api_key" in sandboxRequest), "api_key must not reach the sandbox");
   assert(
     !("customer_token" in sandboxRequest),
     "customer_token must not reach the sandbox",
   );
-  assert(
-    !("auth_type" in sandboxRequest),
-    "auth_type must not reach the sandbox",
-  );
+  assertEquals(sandboxRequest.auth_type, "customer_token");
   // Held host-side.
   assertEquals(creds, {
     authType: "customer_token",
@@ -153,12 +151,21 @@ Deno.test("splitCredentials removes every credential field from the sandbox requ
 
 Deno.test("splitCredentials tolerates a request with no credentials", () => {
   const { creds, sandboxRequest } = splitCredentials({ question: "q" });
-  assertEquals(sandboxRequest, { question: "q" });
+  assertEquals(sandboxRequest, { question: "q", auth_type: "api_key" });
   assertEquals(creds, {
     authType: "api_key",
     apiKey: undefined,
     customerToken: undefined,
   });
+});
+
+Deno.test("splitCredentials normalizes unknown auth types to api_key", () => {
+  const { creds, sandboxRequest } = splitCredentials({
+    question: "q",
+    auth_type: "unexpected",
+  });
+  assertEquals(creds.authType, "api_key");
+  assertEquals(sandboxRequest.auth_type, "api_key");
 });
 
 Deno.test("authHeader: customer token takes precedence over api key", () => {
