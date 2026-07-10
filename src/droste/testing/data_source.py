@@ -40,10 +40,6 @@ class MockDataSource(DataSource):
         self,
         query: str,
         limit: int = 50,
-        sender: str | None = None,
-        chat: str | None = None,
-        days: int | None = None,
-        table: str = "messages",
         filters: dict[str, Any] | None = None,
     ) -> list[SearchResult]:
         return []
@@ -58,15 +54,6 @@ class MockDataSource(DataSource):
         return None
 
     def get_recent(self, days: int = 7, limit: int = 100) -> list[dict[str, Any]]:
-        return []
-
-    def get_messages(self, limit: int | None = 10000) -> list[dict[str, Any]]:
-        return []
-
-    def get_chats(self) -> list[dict[str, Any]]:
-        return []
-
-    def get_chat_messages(self, chat_id: str, limit: int = 1000) -> list[dict[str, Any]]:
         return []
 
     def sample(self, n: int = 1000) -> list[dict[str, Any]]:

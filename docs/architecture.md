@@ -75,8 +75,10 @@ protocol are versioned, each by a single integer:
   both sides — a host detects incompatibility explicitly instead of
   failing on a missing field. Every response is stamped with the engine's
   `protocol_version`.
-- `SOURCE_PROTOCOL_VERSION` (currently 1) governs the data-source
-  registration contract and fails at startup, not per-request.
+- `SOURCE_PROTOCOL_VERSION` (currently 2; v2 made the contract
+  domain-blind — domain verbs are source-declared `extra_methods`, no
+  longer auto-bound) governs the data-source registration contract and
+  fails at startup, not per-request.
 
 The rules: **adding an optional field is not a version bump** (the 0.5.x
 subcall cost-control knobs are the worked example — older engines ignore

@@ -30,12 +30,15 @@ def test_describe_reports_capabilities_schema_and_optional_methods() -> None:
     assert bridged.name() == "mock"
     assert bridged.capabilities() == source.capabilities()
     assert bridged.get_schema() == "mock schema"
-    # MockDataSource defines these unconditionally -> hasattr is true -> bound.
-    for method in ("get_messages", "get_chats", "get_chat_messages", "sample"):
-        assert hasattr(bridged, method)
+    # MockDataSource defines sample unconditionally -> hasattr is true -> bound.
+    assert hasattr(bridged, "sample")
     # MockDataSource never defines "find" or "content".
     assert not hasattr(bridged, "find")
     assert not hasattr(bridged, "content")
+    # Domain verbs are no longer droste vocabulary (#10): nothing binds them
+    # unless a source declares them via extra_methods.
+    for method in ("get_messages", "get_chats", "get_chat_messages"):
+        assert not hasattr(bridged, method)
 
 
 def test_core_verbs_round_trip_through_the_bridge() -> None:
@@ -80,9 +83,162 @@ def test_optional_verb_forwards_through_the_bridge() -> None:
     service = DataSourceService(source)
     bridged = BridgeDataSource(service.handle, name="mock")
 
-    assert bridged.get_chats() == []
-    assert bridged.get_chat_messages("chat1", limit=10) == []
     assert bridged.sample(n=5) == []
+
+
+def test_source_declared_extra_methods_forward_and_reach_the_registry() -> None:
+    """The #10 seam end to end: a source declares its domain verbs in an
+    `extra_methods` attribute; DataSourceService picks them up with no
+    extra_methods= param, describe() reports them, BridgeDataSource binds
+    and re-exposes them, and a registry over the bridged source flattens
+    them into sandbox globals like any local source's."""
+
+    class ChatArchiveSource(MockDataSource):
+        extra_methods = ("get_messages", "get_chats")
+
+        def get_messages(self, limit=10000):
+            return [{"text": "hi"}]
+
+        def get_chats(self):
+            return [{"chat": "c1"}]
+
+    service = DataSourceService(ChatArchiveSource())
+    assert service.describe()["extra_methods"] == ["get_chats", "get_messages"]
+
+    bridged = BridgeDataSource(service.handle, name="mock")
+    assert bridged.get_messages(limit=5) == [{"text": "hi"}]
+    assert bridged.extra_methods == ("get_chats", "get_messages")
+
+    env = DataSourceRegistry([bridged], default_source_name="mock").globals()
+    assert env["get_chats"]() == [{"chat": "c1"}]
+    assert env["mock"].get_messages() == [{"text": "hi"}]
+
+
+def test_service_validates_declared_extras_at_construction() -> None:
+    """Transport parity (codex review on #10): the registry raises a config
+    error for a bad declared extra; the service must too — not advertise it
+    through describe() and fail with a late TypeError inside a dispatch."""
+    import pytest
+
+    class DeclaredNotCallable(MockDataSource):
+        extra_methods = ("stats_blob",)
+        stats_blob = {"not": "callable"}
+
+    with pytest.raises(ValueError, match="is not a callable"):
+        DataSourceService(DeclaredNotCallable())
+
+    class DeclaredMissing(MockDataSource):
+        extra_methods = ("nonexistent_verb",)
+
+    with pytest.raises(ValueError, match="is not a callable"):
+        DataSourceService(DeclaredMissing())
+
+    class ParamNotCallable(MockDataSource):
+        weird = 42
+
+    with pytest.raises(ValueError, match="is not a callable"):
+        DataSourceService(ParamNotCallable(), extra_methods=("weird",))
+
+    class PresentButNone(MockDataSource):
+        maybe_verb = None
+
+    with pytest.raises(ValueError, match="is not a callable"):
+        DataSourceService(PresentButNone(), extra_methods=("maybe_verb",))
+
+    # Same vocabulary rule as the registry (transport parity): an extra may
+    # not reuse an engine verb, even a disabled one — the bridge dispatches
+    # core names first, so it would be advertised yet unreachable.
+    class ShadowsCoreVerb(MockDataSource):
+        extra_methods = ("query",)
+
+    with pytest.raises(ValueError, match="collides with an engine verb"):
+        DataSourceService(ShadowsCoreVerb())
+
+    # Machinery/protocol names and underscored attributes are never valid
+    # extras — an extra named `_request` would let the bridged client
+    # setattr over its own proxy machinery (codex review).
+    class ShadowsMachinery(MockDataSource):
+        extra_methods = ("_request",)
+
+        def _request(self):  # pragma: no cover - never reached
+            return None
+
+    with pytest.raises(ValueError, match="underscore"):
+        DataSourceService(ShadowsMachinery())
+
+    class ShadowsDescribe(MockDataSource):
+        extra_methods = ("describe",)
+
+        def describe(self):  # pragma: no cover - never reached
+            return {}
+
+    with pytest.raises(ValueError, match="collides"):
+        DataSourceService(ShadowsDescribe())
+
+    # Builtins: a flattened default-source verb named `len` would hijack
+    # every len() call in generated code (codex review).
+    class ShadowsBuiltin(MockDataSource):
+        extra_methods = ("len",)
+
+        def len(self):  # pragma: no cover - never reached  # noqa: A003
+            return 0
+
+    with pytest.raises(ValueError, match="builtin"):
+        DataSourceService(ShadowsBuiltin())
+
+    # Non-identifiers and keywords: generated code could never call
+    # `fetch-page()` or `class()` — reject at declaration (codex review).
+    for bad_name in ("fetch-page", "", "class"):
+
+        class BadName(MockDataSource):
+            extra_methods = (bad_name,)
+
+        with pytest.raises(ValueError, match="not a valid Python identifier"):
+            DataSourceService(BadName())
+
+
+def test_bridged_client_rejects_unsafe_advertised_names() -> None:
+    """Defense in depth: even if the service-side validation is bypassed
+    (spoofed/buggy remote), BridgeDataSource must refuse to setattr over its
+    own machinery from describe()'s advertised names."""
+    import pytest
+
+    def spoofed_bridge_call(method: str, params_json: str) -> str:
+        assert method == "describe"
+        return json.dumps(
+            {
+                "ok": True,
+                "result": {
+                    "name": "evil",
+                    "capabilities": {},
+                    "schema": "",
+                    "optional_methods": ["_request"],
+                    "extra_methods": [],
+                },
+            }
+        )
+
+    with pytest.raises(ValueError, match="unsafe optional method name"):
+        BridgeDataSource(spoofed_bridge_call, name="evil")
+
+
+def test_extra_method_may_not_shadow_a_disabled_core_verb() -> None:
+    """Transport parity (codex review on #10): the bridge dispatches core
+    names before extras, so an extra shadowing a DISABLED core verb would
+    work in-process but be rejected across the bridge. The registry must
+    reject it against the full engine vocabulary, not just enabled verbs."""
+    import pytest
+
+    class ShadowingSource(MockDataSource):
+        extra_methods = ("query",)
+
+        def capabilities(self):
+            caps = dict(super().capabilities())
+            caps["sql"] = False  # `query` core verb disabled...
+            return caps
+
+    with pytest.raises(ValueError, match="collides with an engine verb"):
+        DataSourceRegistry([ShadowingSource()]).globals()
 
 
 def test_extra_methods_forward_like_any_other_optional_verb() -> None:
@@ -142,13 +298,13 @@ def test_optional_methods_not_bound_when_source_lacks_them(tmp_path) -> None:
     bridged = BridgeDataSource(service.handle, name="db")
 
     # LocalSqlDataSource has none of the optional verbs.
-    for method in ("find", "content", "get_messages", "get_chats", "get_chat_messages", "sample"):
+    for method in ("find", "content", "sample"):
         assert not hasattr(bridged, method)
     # And no class-level definitions leak through either — a second bridged
     # instance over a source that DOES have them must differ per-instance.
     other = BridgeDataSource(DataSourceService(MockDataSource()).handle, name="mock")
-    assert hasattr(other, "get_chats")
-    assert not hasattr(bridged, "get_chats")
+    assert hasattr(other, "sample")
+    assert not hasattr(bridged, "sample")
 
 
 # --- security: the fixed method allowlist is the real boundary -------------
@@ -186,7 +342,7 @@ def test_capability_gated_method_rejected_when_disabled(tmp_path) -> None:
 
 def test_optional_method_rejected_when_source_lacks_it() -> None:
     service = DataSourceService(MockDataSource())
-    raw = service.handle("get_messages", "{}")
+    raw = service.handle("sample", "{}")
     envelope = json.loads(raw)
     assert envelope["ok"] is True  # MockDataSource does implement it
 
@@ -223,10 +379,18 @@ def test_optional_method_rejected_when_source_lacks_it() -> None:
             return []
 
     bare_service = DataSourceService(NoOptional())
-    raw = bare_service.handle("get_messages", "{}")
+    raw = bare_service.handle("sample", "{}")
     envelope = json.loads(raw)
     assert envelope["ok"] is False
     assert envelope["error"]["type"] == "PermissionError"
+
+    # A domain verb nobody declared is not even a known method name — the
+    # allowlist rejects it as unknown, not merely unimplemented (#10).
+    raw = bare_service.handle("get_messages", "{}")
+    envelope = json.loads(raw)
+    assert envelope["ok"] is False
+    assert envelope["error"]["type"] == "ValueError"
+    assert "unknown bridge method" in envelope["error"]["message"]
 
 
 def test_bad_params_json_rejected() -> None:

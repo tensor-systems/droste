@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 from ..exceptions import BatchLLMError, PolicyError, RLMError, SandboxError
@@ -98,6 +99,40 @@ class RLMResult:
 
 
 ProgressCallback = Any
+
+_LLM_GLOBAL_NAMES = frozenset({"llm_query", "llm_batch", "batch_llm_query", "llm_query_batched"})
+
+
+def _collect_data_accessors(
+    env_globals: dict[str, Any],
+) -> tuple[set[str], set[tuple[str, str]]]:
+    """Data-accessor names for the count contract's len() check (#10).
+
+    Provenance-based, not "every callable global": only namespaces the
+    registry marked as data sources (`_droste_data_source`) are scanned —
+    a custom environment's `utils`-style helper namespace is never
+    classified — and a flattened name counts as a data accessor only when
+    the SAME callable also lives inside a marked namespace (registry
+    flattening binds identical objects in both places). Namespaced verbs
+    are returned as (namespace, verb) pairs and match only under their own
+    namespace. Environments with no marked namespaces yield nothing, and
+    the policy layer falls back to its static generic verbs."""
+    namespaced: set[tuple[str, str]] = set()
+    member_ids: set[int] = set()
+    for key, value in env_globals.items():
+        if isinstance(value, SimpleNamespace) and getattr(value, "_droste_data_source", False):
+            for verb, fn in vars(value).items():
+                if verb.startswith("_"):
+                    continue  # the marker itself / private attrs
+                if callable(fn):
+                    namespaced.add((key, verb))
+                    member_ids.add(id(fn))
+    flat = {
+        key
+        for key, value in env_globals.items()
+        if key not in _LLM_GLOBAL_NAMES and callable(value) and id(value) in member_ids
+    }
+    return flat, namespaced
 
 
 def _execution_output(result: ExecutionResult | str) -> str:
@@ -300,6 +335,8 @@ def run_rlm(
     env_globals.setdefault("llm_query_batched", subcalls.llm_batch)
     _apply_batch_error_guard(subcalls, env_globals)
 
+    data_accessor_names, namespaced_accessor_pairs = _collect_data_accessors(env_globals)
+
     if system_prompt is None:
         prompt_additions = environment.prompt_fragment()
         if system_prompt_additions:
@@ -464,7 +501,9 @@ def run_rlm(
 
             try:
                 if cfg.enforce_contract:
-                    violations = contract_violations(code, cfg.policy_hints)
+                    violations = contract_violations(
+                        code, cfg.policy_hints, data_accessor_names, namespaced_accessor_pairs
+                    )
                     if violations:
                         raise PolicyError("Policy violation: " + " | ".join(violations))
 
@@ -585,7 +624,12 @@ def run_rlm(
                     )
                     try:
                         if cfg.enforce_contract:
-                            violations = contract_violations(repaired_code, cfg.policy_hints)
+                            violations = contract_violations(
+                                repaired_code,
+                                cfg.policy_hints,
+                                data_accessor_names,
+                                namespaced_accessor_pairs,
+                            )
                             if violations:
                                 raise PolicyError("Policy violation: " + " | ".join(violations))
 

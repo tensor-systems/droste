@@ -437,7 +437,12 @@ class WrapperV1DataSource:
 
 # Version of the DataSource/registration contract. A consumer built against a
 # different contract fails at registration (startup), not subtly at request time.
-SOURCE_PROTOCOL_VERSION = 1
+# v2 (#10): the engine no longer auto-binds domain verbs (get_messages/
+# get_chats/get_chat_messages) by hasattr — a source declares them via
+# `extra_methods` — and search() lost its chat-archive kwargs. A protocol-1
+# source registering against this engine must fail loudly at startup rather
+# than silently losing its accessors at runtime.
+SOURCE_PROTOCOL_VERSION = 2
 
 # Version of the runner request/response envelope (#16). REQUIRED in every
 # request — a request without it is refused, so every request on the wire is
@@ -509,9 +514,17 @@ def register_source_type(
     stype: str,
     factory: SourceFactory,
     *,
-    protocol: int = SOURCE_PROTOCOL_VERSION,
+    protocol: int,
 ) -> None:
-    """Register a factory for a data source type (process-global, at startup)."""
+    """Register a factory for a data source type (process-global, at startup).
+
+    ``protocol`` is REQUIRED and must be the literal version the registrant
+    was written against — a default would let a stale extension silently
+    self-certify as current, defeating the startup compatibility check
+    (codex review on the v2 bump). In-tree sources pass the imported
+    constant because they are co-versioned with the engine; external
+    registrants must pass the literal they implement.
+    """
     if protocol != SOURCE_PROTOCOL_VERSION:
         raise RuntimeError(
             f"source type {stype!r} was registered against protocol {protocol}; "
