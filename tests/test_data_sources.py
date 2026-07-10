@@ -125,8 +125,26 @@ def test_duplicate_registration_raises() -> None:
         )
 
 
-def test_wrapper_v1_cannot_be_reregistered() -> None:
+def test_builtin_wrapper_v1_cannot_be_preempted() -> None:
+    # Import order must not allow a consumer factory to stand in for the
+    # runner's built-in type (codex review): simulate a consumer registering
+    # 'wrapper_v1' through the droste-level registry before droste_runner's
+    # builtin registration runs.
+    from droste.sources import registration
+    from droste_runner.runner import _register_builtin_source_types
+
+    registration._reset_source_types()
+    registration.register_source_type(
+        "wrapper_v1", lambda config, ctx: None, protocol=SOURCE_PROTOCOL_VERSION
+    )
     with pytest.raises(ValueError, match="built in"):
+        _register_builtin_source_types()
+
+
+def test_wrapper_v1_cannot_be_reregistered() -> None:
+    # wrapper_v1 now registers through the same mechanism as everything else
+    # (#32), so re-registering it fails as a duplicate like any other type.
+    with pytest.raises(ValueError, match="already registered"):
         register_source_type(
             "wrapper_v1", lambda config, ctx: None, protocol=SOURCE_PROTOCOL_VERSION
         )
