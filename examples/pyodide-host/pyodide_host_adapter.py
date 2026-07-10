@@ -21,8 +21,8 @@ data source, `droste.sources.bridge` for the untrusted/trusted interpreter
 split, `droste_runner.runner.RunnerEnvironment` for the same in-process REPL
 environment droste's own CLI (`droste_cli.main.run_ask`) and `droste_runner`
 (ModelRelay's hosted runner) already use. No third-party or product-specific
-imports. A real host (e.g. Cozy's `rcl_rlm.pyodide_adapter`) looks like this
-file with its own data source and result shape substituted in.
+imports. A real host's production adapter looks like this file with its own
+data source and result shape substituted in.
 
 Subcalls (`llm_query`) are stubbed with `droste.testing.MockSubcallClient` —
 this example's job is to prove the relay's adapter-loading mechanism end to

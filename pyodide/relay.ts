@@ -1,4 +1,4 @@
-// Deno+Pyodide relay — a drop-in for the native `recall-rlm-helper`:
+// Deno+Pyodide relay — a drop-in for a host's native runner helper:
 // reads a HostRequest JSON from stdin, runs the RLM in Pyodide via a
 // host-supplied Python adapter module, writes a HostResponse JSON to stdout.
 // Deno holds the only ambient capabilities (narrow net to ModelRelay + read of
@@ -54,7 +54,7 @@ function realPathOr(path: string): string {
 
 // Stage the bundled Python sources into a Pyodide interpreter's /app — shared
 // between the REPL interpreter and (in DB-service mode) the second, trusted
-// interpreter, both of which import from droste/rcl_rlm.
+// interpreter, both of which import from droste and the host's adapter package.
 async function mountSources(interp: Awaited<ReturnType<typeof loadPyodide>>): Promise<void> {
   if (sources.endsWith(".zip")) {
     interp.unpackArchive(await Deno.readFile(sources), "zip", { extractDir: "/app" });
@@ -72,9 +72,9 @@ async function writeHostResponse(resp: unknown): Promise<void> {
 // A'-2 sandbox split (droste#3): move the DB out of the untrusted REPL
 // interpreter entirely, into a second, trusted "DB service" interpreter that
 // the REPL only ever reaches through a bridged RPC call (droste.sources.bridge).
-// On by default as of 2026-07-08: the live-corpus parity check (byte-identical
+// On by default as of 2026-07-08: a live-corpus parity check (byte-identical
 // answers, retrieved_guids, iterations, sub_calls_made, and total_tokens across
-// 3 representative queries against the 300k+-message benchmark corpus, both
+// 3 representative queries against a large benchmark corpus, in both
 // modes) found no behavior difference, so the stronger security posture (the
 // untrusted interpreter never holds the DB) ships as the default.
 // RLM_DB_SERVICE=0 reverts to the single-interpreter, db_path-in-sandbox
@@ -87,13 +87,13 @@ const DB_SERVICE = Deno.env.get("RLM_DB_SERVICE") !== "0";
 
 // Resolve symlinks before mounting. Pyodide's NODEFS mounts a host directory
 // into its own VFS; if the DB file is a symlink to an absolute host path
-// OUTSIDE that directory (e.g. the Recall→Cozy rename leaves
-// Cozy/shadow.db -> RecallRLM/shadow.db), the in-VFS symlink target is
+// OUTSIDE that directory (e.g. an app-data rename that leaves
+// NewApp/data.db -> OldApp/data.db), the in-VFS symlink target is
 // unreachable and SQLite reports "unable to open database file". Mounting the
 // resolved real directory (and opening the resolved file) sidesteps this.
 // Falls back to the original path if it cannot be resolved (e.g. not yet on
-// disk). The resolved directory must be in Deno's --allow-read (callers grant
-// it; see RLMHelperRunner.denoArgs and the CLI relay invocation).
+// disk). The resolved directory must be in Deno's --allow-read (the code that
+// spawns this relay grants it when building the deno invocation).
 const realDbPath = realPathOr(request.db_path);
 const dbDir = dirname(realDbPath);
 const hasContactsField = request.contacts_db_path && request.contacts_db_path !== "nil";

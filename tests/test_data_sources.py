@@ -76,7 +76,7 @@ def test_data_sources_entry_must_be_object() -> None:
         build_data_sources({"data_sources": ["not-a-dict"]})
 
 
-# --- register_source_type (Option C, unified-data-sources §7.2) -------------
+# --- register_source_type (Option C, #9 source unification) -----------------
 
 
 def test_registered_factory_builds_source_with_config_and_ctx() -> None:

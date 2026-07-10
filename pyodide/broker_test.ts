@@ -64,7 +64,7 @@ Deno.test("isModelRelayResponsesCall: only POST https://api.modelrelay.ai/api/v1
   assert(
     !isModelRelayResponsesCall(
       "POST",
-      "https://staging.api.modelrelay.ai/api/v1/responses",
+      "https://sub.api.modelrelay.ai/api/v1/responses",
     ),
   );
   // Garbage doesn't throw.
@@ -121,7 +121,7 @@ Deno.test("isModelRelayResponsesCall: the batch endpoint is scoped in too, but o
 Deno.test("splitCredentials removes secrets and preserves normalized auth type", () => {
   const req = {
     question: "who texts me most?",
-    db_path: "/data/shadow.db",
+    db_path: "/data/sample.db",
     api_key: "mr_sk_secret",
     customer_token: "ct_secret",
     auth_type: "customer_token",
@@ -131,7 +131,7 @@ Deno.test("splitCredentials removes secrets and preserves normalized auth type",
   // The sandbox request keeps the real work and NONE of the credentials.
   assertEquals(sandboxRequest, {
     question: "who texts me most?",
-    db_path: "/data/shadow.db",
+    db_path: "/data/sample.db",
     root_model: "gemini-3.5-flash",
     auth_type: "customer_token",
   });

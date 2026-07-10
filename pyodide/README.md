@@ -3,11 +3,11 @@
 The Deno + Pyodide (CPython-on-WASM) substrate runs droste's RLM engine under
 one Deno binary + an offline Pyodide runtime — no `Python.framework`, no
 wheelhouse, no per-`.so` code signing. It started as a feasibility spike (see
-History, below) and is the substrate Cozy runs by default in its shipped `.app`
-bundle.
+History, below) and now ships as the default substrate inside a production
+macOS `.app` bundle.
 
 This substrate has two layers, and the split matters if you're adopting droste
-for a host that isn't Cozy:
+for your own host:
 
 - **The substrate itself** — droste-general, reusable, ModelRelay-shaped but
   host-agnostic: `relay.ts`, `broker.ts`, `events.ts`, `stream.ts`, and the
@@ -27,12 +27,11 @@ for a host that isn't Cozy:
     example and the CI proof that `relay.ts` actually works end to end.
     Copy the *shape* of this file, substituting your own data source and result
     format.
-  - Cozy's production adapter — the real-world instance, backed by Cozy's own
-    `rcl_rlm` package instead of `droste.sources.sql_local`. It lives in Cozy's
-    repo (`cozy/tools/rcl-rlm/src/rcl_rlm/pyodide_adapter.py`), **not here** —
-    droste's repo has no Cozy-specific code anywhere under `pyodide/`. It is
-    analogous in shape to the example adapter, just with an iMessage-shaped
-    request contract and an `rcl_rlm` data layer.
+  - A production host's adapter — backed by the host's own data-layer package
+    instead of `droste.sources.sql_local`. It lives in the host's repo, **not
+    here** — droste's repo has no host-specific code anywhere under `pyodide/`.
+    Such an adapter is analogous in shape to the example adapter, just with the
+    host's own request contract and data layer.
 
 If you're reading this to embed droste elsewhere: everything in "the substrate"
 is yours to reuse as-is; write one adapter module of your own and point
@@ -114,9 +113,9 @@ def run_for_host_pyodide(request, host_fetch, bridge_call=None, meta=None) -> di
   real data source, and returns `(service, meta)`. `meta` is a plain dict of
   whatever facts are only computable where the DB file is visible; it is
   **opaque to `relay.ts`** (below). The reference adapter has nothing
-  host-specific to carry, so its `meta` is just `{}`; Cozy's carries things
-  like a `has_contacts` filesystem probe and a default call budget from a
-  `SELECT COUNT(*)`.
+  host-specific to carry, so its `meta` is just `{}`; a production adapter
+  might carry things like a filesystem-probe result or a default call budget
+  computed from a `SELECT COUNT(*)`.
 - **`run_for_host_pyodide(request, host_fetch, bridge_call=None, meta=None)`**
   runs in the *untrusted* REPL interpreter. It wires a `BridgedLLMClient` (over
   the injected `host_fetch`) and an environment into `droste.run_rlm`, and
@@ -160,9 +159,9 @@ across the boundary, `json.loads`'d, and handed back to
 `run_for_host_pyodide(..., meta=...)` completely unexamined. Only your adapter
 (present in both interpreters) knows or cares what's in it. Put anything
 JSON-serializable there that the trusted side computes and the untrusted side
-needs. (An earlier version of `relay.ts` hardcoded Cozy field names —
-`has_contacts` / `default_max_calls` — into its own Python template; making
-`meta` opaque is what removed the last host-specific knowledge from the relay.)
+needs. (An earlier version of `relay.ts` hardcoded one host's field names into
+its own Python template; making `meta` opaque is what removed the last
+host-specific knowledge from the relay.)
 
 ### Gotcha 1 — JsNull normalization (already handled for you)
 
@@ -226,7 +225,8 @@ the sandbox's `host_fetch` call tried to set — scoped to the exact
 Pyodide interpreter, a scripted *sync* `host_fetch`). The async branch —
 `relay.ts`'s real `host_fetch` is `async`, so `BridgedLLMClient._post` must
 `run_sync` the awaitable — isn't exercised by a dedicated in-repo broker test
-anymore (that was `broker_batch_integration_test.ts`, moved to Cozy's repo);
+anymore (that was `broker_batch_integration_test.ts`, which moved out to the
+host repo it depended on);
 it's still covered for real by `examples/pyodide-host/e2e_test.ts`, which
 spawns the actual `relay.ts` subprocess with its actual async `host_fetch`.
 
@@ -299,9 +299,9 @@ Roughly three tiers of coverage:
   round-trip (`SELECT COUNT(*)` → answer `"3"`), in both DB-service (default)
   and `RLM_DB_SERVICE=0` single-interpreter modes. **Zero real network and zero
   sibling checkout**, so it runs unconditionally in CI — no skip. This replaces
-  the two former Cozy-coupled tests (`db_service_integration_test.ts`,
-  `broker_batch_integration_test.ts`), which required a sibling `cozy` checkout
-  and moved to Cozy's repo alongside its own adapter.
+  two former host-coupled tests (`db_service_integration_test.ts`,
+  `broker_batch_integration_test.ts`), which required a sibling host-repo
+  checkout and moved to that host's repo alongside its own adapter.
 
 ## Known gaps
 
@@ -339,9 +339,9 @@ Roughly three tiers of coverage:
   is a ModelRelay-specific extension (only ModelRelay, among droste's clients,
   has a real server-side batch endpoint). As of the droste#80 split it no longer
   lives on the substrate's shared `BridgedLLMClient` at all — it belongs on a
-  host adapter's own client subclass (Cozy's, in Cozy's repo). That resolves the
+  host adapter's own client subclass, in the host's repo. That resolves the
   worse half of the awkwardness: the batch method is a genuine host extension,
-  not a Cozy-specific method squatting on droste's general client. What remains
+  not a host-specific method squatting on droste's general client. What remains
   is only that droste's *public* protocol still advertises the stale
   `batch_responses` it never uses. Tracked, not yet resolved.
 - **Extract-fallback failure rate is unknown.** When `max_iterations` is
@@ -356,13 +356,13 @@ Roughly three tiers of coverage:
 
 This substrate started as a feasibility spike: proving droste imports cleanly
 under Pyodide, that a real corpus returns byte-identical results across sqlite
-engines (native 3.53.1 vs Pyodide's bundled 3.39.0) against a real
-300k+-message benchmark, and that packaging a Deno binary + an offline
+engines (native 3.53.1 vs Pyodide's bundled 3.39.0) against a large real-world
+benchmark corpus, and that packaging a Deno binary + an offline
 `--cached-only` `DENO_DIR` (~14MB) beats shipping a signed `Python.framework` +
 wheelhouse per architecture. That work — plus the two security hardening passes
 (A′-1 and A′-2, the latter now on by default) and the droste#80 split that made
 `relay.ts` fully adapter-agnostic and gave droste its own example host — is in
 this repo's git/PR history, not duplicated here. A few standalone investigation
 scripts from that era (`spike_topology.ts`, `probe_dual_sqlite.ts`,
-`verify_16_threading.ts`, `score_pyodide_parity.py`) still live in this
-directory as reference, outside the `deno test` suite.
+`verify_16_threading.ts`) still live in this directory as reference, outside
+the `deno test` suite.

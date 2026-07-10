@@ -7,13 +7,13 @@
 //
 // Deliberately droste-only: the "trusted" interpreter hosts a small stub
 // DataSource shaped like a real one (asymmetric capabilities: sql+schema, no
-// search/get/recent), not cozy's iMessage-specific MessageDataSource (which
-// isn't available outside cozy's bundle, and not droste's own
+// search/get/recent), not a host app's product-specific data source (which
+// isn't available outside that host's bundle), and not droste's own
 // LocalSqlDataSource, whose query() arms a threading.Timer for its statement
 // timeout — threading is unavailable under Pyodide/WASM, a real but SEPARATE
 // constraint tracked by droste#16, orthogonal to the bridge wiring under test
-// here). This validates the same wire contract cozy's follow-up will drive
-// with a different source on the other end.
+// here. This validates the same wire contract a host adapter drives with a
+// different source on the other end.
 //
 // Run: deno test --allow-read --allow-env --allow-ffi bridge_source_integration_test.ts
 import { assert, assertEquals } from "jsr:@std/assert@1";

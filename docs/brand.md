@@ -28,9 +28,8 @@ Escher printed black on white; color only ever flat and structural.
 
 No other colors. No gradients, no shadows, no rounded corners. Blue-on-paper
 is blueprint/cyanotype heritage and the raw web's link color — and unowned
-in the AI space. House family note: Cozy is warm (the room at night), Droste
-is cool (the print on the wall); in both, a single accent element is *the
-answer* — Cozy's curl holds it, Droste's recursion arrives at it.
+in the AI space. Droste is cool (the print on the wall); the single accent
+element is *the answer* — the recursion arrives at it.
 
 ## Type
 

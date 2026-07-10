@@ -98,7 +98,7 @@ Transports *implement* that abstraction behind the broker, and adding one must
 never force a core rewrite:
 
 - **in-process** (direct call, no serialization) — first-class, the hot local
-  path: an embedded data source (e.g. a local `MessageDatabase`), the SQL/fs sources.
+  path: a host's embedded data source, the SQL/fs sources.
 - **MCP** — the *default external* transport: the broker acts as an MCP client,
   so a data source / host tool / sub-RLM can be an MCP server in any language.
 - **HTTP** (`wrapper_v1` demotes to this) — remains possible; keeps its

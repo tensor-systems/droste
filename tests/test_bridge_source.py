@@ -86,7 +86,7 @@ def test_optional_verb_forwards_through_the_bridge() -> None:
 
 
 def test_extra_methods_forward_like_any_other_optional_verb() -> None:
-    """A host's own optional verb (e.g. cozy's get_retrieved_guids(), not part
+    """A host's own optional verb (e.g. a host app's get_retrieved_guids(), not part
     of the DataSource Protocol or droste's own _OPTIONAL_METHODS) round-trips
     through extra_methods= with zero BridgeDataSource changes — it just binds
     dynamically from whatever describe() reports, same as any other optional

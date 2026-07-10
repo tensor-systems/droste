@@ -24,7 +24,7 @@ can omit them to keep behavior purely prompt-driven.
 
 ## droste_runner Package
 
-- `droste_runner` is a shared HTTP-backed runner used by host apps (ModelRelay's hosted runner, in-process embedders like Cozy). It reads the request JSON from `RLM_RUNNER_REQUEST_PATH` (or argv) and returns a JSON response payload.
+- `droste_runner` is a shared HTTP-backed runner used by host apps (ModelRelay's hosted runner, in-process embedders). It reads the request JSON from `RLM_RUNNER_REQUEST_PATH` (or argv) and returns a JSON response payload.
 - The runner wraps `droste` and supplies an HTTP `LLMClient` + `SubcallClient` plus a sandboxed `RunnerEnvironment`.
 - Timeouts in `RunnerEnvironment.execute` use `signal.setitimer` and restore the previous handler (`old_handler`) after each execution to avoid clobbering host signal handlers.
 - `droste_runner` expects HTTP endpoints for root and subcall execution (`root_endpoint`/`subcall_endpoint` + `token`).
@@ -85,6 +85,16 @@ uv pip install --no-index --find-links wheelhouse droste
 - Preserve a normalized `auth_type` in that request. It is nonsecret routing
   metadata required by adapters that distinguish customer-tier defaults from
   tierless API-key requests without receiving either credential.
+
+## Repo Hygiene (manual, before pushing docs/comments)
+
+This repo is public-facing: no references to internal strategy, private
+repos, or closed-product internals (host-app package/binary names, private
+corpus/db names, sibling-checkout paths). There is deliberately no CI term
+gate — a public workflow would have to enumerate the very vocabulary it
+exists to keep out. Check manually with `git grep -i` over the terms you
+know are internal before pushing prose or comments that discuss hosts or
+embedders; CI still scans for committed key material.
 
 ## Publishing
 

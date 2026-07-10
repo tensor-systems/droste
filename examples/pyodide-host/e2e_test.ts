@@ -2,16 +2,15 @@
 // (droste#80 follow-up) actually works: spawns the REAL relay.ts as a
 // subprocess — real Deno process boundary, real Pyodide interpreter, real
 // dynamic `importlib.import_module` of an adapter module, real stdin/stdout
-// HostRequest/HostResponse contract — with zero rcl_rlm / Cozy dependency and
+// HostRequest/HostResponse contract — with zero host-app dependency and
 // zero real network (a local mock server stands in for ModelRelay). Runs
 // unconditionally in droste's own CI: no sibling checkout, no skip.
 //
 // The two tests that used to prove this (db_service_integration_test.ts,
-// broker_batch_integration_test.ts) required a sibling `cozy` checkout and
-// tested Cozy's own adapter in-process; they moved to Cozy's repo alongside
-// the new `rcl_rlm.pyodide_adapter` module. This test proves the DROSTE side
-// of the same contract — the part that must work for ANY adapter, not just
-// Cozy's.
+// broker_batch_integration_test.ts) required a sibling host-repo checkout and
+// tested that host's own adapter in-process; they moved to that host's repo
+// alongside its adapter module. This test proves the DROSTE side of the same
+// contract — the part that must work for ANY adapter, not just one host's.
 //
 // Run: deno test --allow-run --allow-read --allow-write --allow-net=127.0.0.1 --allow-env examples/pyodide-host/e2e_test.ts
 import { assert, assertEquals } from "jsr:@std/assert@1";
