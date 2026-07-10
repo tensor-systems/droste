@@ -99,11 +99,16 @@ embedders; CI still scans for committed key material.
 
 ## Publishing
 
-The package ships on public PyPI. To build and publish a release:
+The package ships on public PyPI, released by CI — never by hand:
 
-```bash
-uv build
-uv publish        # requires a PyPI token (UV_PUBLISH_TOKEN)
-```
+1. Bump `version` in `pyproject.toml` (and merge to main).
+2. Tag the merge commit `vX.Y.Z` and push the tag.
+3. `.github/workflows/release.yml` runs tests, builds sdist+wheel,
+   publishes to PyPI via **trusted publishing** (OIDC — no token secret),
+   and creates the GitHub release with artifacts attached. The job fails
+   fast if the tag and `pyproject.toml` version disagree.
 
-Tag releases as `vX.Y.Z` and bump the version in `pyproject.toml`.
+The PyPI trusted publisher (project `droste` → Publishing) must name this
+repo and `release.yml`. A local `uv build && uv publish` remains possible
+in an emergency but needs a `UV_PUBLISH_TOKEN`, which is deliberately not
+kept as a repo secret.
