@@ -25,7 +25,12 @@ class ExecutionResult:
 
 
 class RLMEnvironment(Protocol):
-    """Abstract REPL environment interface."""
+    """Abstract REPL environment interface.
+
+    An environment that composes data sources should ALSO implement
+    ``AccessorManifestEnvironment`` (optional, checked structurally at
+    runtime) so the count contract enforces its actual accessor names.
+    """
 
     def capabilities(self) -> EnvCapabilities:
         """Return environment capabilities and limits."""
@@ -33,20 +38,6 @@ class RLMEnvironment(Protocol):
 
     def globals(self) -> dict[str, Any]:
         """Return mutable globals dict used for code execution."""
-        ...
-
-    def accessor_manifest(self) -> AccessorManifest:
-        """Report the data accessors bound into globals(), for the count
-        contract's len() check (#31).
-
-        An environment composing data sources should forward its registry's
-        ``accessor_manifest()`` (as RunnerEnvironment does). The loop treats
-        this method as optional for backward compatibility: an environment
-        without it — or one returning an empty manifest — gets the policy
-        layer's static generic-verb fallback, which does NOT cover custom
-        accessor names. Implement this to keep dynamic accessor names
-        enforced.
-        """
         ...
 
     def prompt_fragment(self) -> str:
@@ -59,4 +50,21 @@ class RLMEnvironment(Protocol):
 
     def close(self) -> None:
         """Release environment resources."""
+        ...
+
+
+class AccessorManifestEnvironment(Protocol):
+    """Optional companion protocol to ``RLMEnvironment`` (#31).
+
+    Kept separate so existing environments type-check unchanged: the loop
+    probes for the method at runtime. An environment composing data sources
+    should forward its registry's ``accessor_manifest()`` (as
+    RunnerEnvironment does) so the count contract's len() check enforces the
+    environment's actual accessor names. Without it — or with an empty
+    manifest — the policy layer falls back to its static generic verbs,
+    which do NOT cover custom accessor names.
+    """
+
+    def accessor_manifest(self) -> AccessorManifest:
+        """Report the data accessors bound into globals()."""
         ...

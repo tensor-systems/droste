@@ -7,7 +7,6 @@ from __future__ import annotations
 from droste.protocols.verbs import (
     CAPABILITY_GATED_VERBS,
     CORE_VERB_NAMES,
-    DYNAMIC_SIGNATURE_VERBS,
     EXTRA_METHOD_DISALLOWED,
     HASATTR_GATED_VERBS,
     RESERVED_NAMES,
@@ -15,7 +14,7 @@ from droste.protocols.verbs import (
     VERB_SPECS,
 )
 from droste.registry import DataSourceRegistry
-from droste.sources.bridge import DataSourceService
+from droste.sources.bridge import BridgeDataSource, DataSourceService
 from droste.testing import MockDataSource
 
 
@@ -25,11 +24,15 @@ def test_table_partitions_core_verbs_by_gate() -> None:
     assert len({spec.name for spec in VERB_SPECS}) == len(VERB_SPECS)
 
 
-def test_dynamic_signature_verbs_are_capability_gated() -> None:
-    # The bridge client resolves each dynamic verb's gate via
-    # CAPABILITY_GATED_VERBS[name]; a hasattr-gated row marked dynamic would
-    # KeyError at client construction.
-    assert set(DYNAMIC_SIGNATURE_VERBS) <= set(CAPABILITY_GATED_VERBS)
+def test_bridge_client_covers_every_capability_gated_verb() -> None:
+    # A future table row must not silently miss the bridge client (codex
+    # review): every verb the wrapped source enables is callable on the
+    # client — either a concrete implementation or a bound proxy.
+    source = MockDataSource()  # enables all six capability flags
+    client = BridgeDataSource(DataSourceService(source).handle, name="mock")
+    for verb, capability in CAPABILITY_GATED_VERBS.items():
+        assert source.capabilities().get(capability), "MockDataSource must enable every flag"
+        assert callable(getattr(client, verb, None)), f"bridge client misses {verb!r}"
 
 
 def test_extras_denylist_covers_the_whole_vocabulary() -> None:

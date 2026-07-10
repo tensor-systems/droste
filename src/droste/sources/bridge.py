@@ -33,7 +33,6 @@ from typing import Any, Callable
 from ..protocols.data_source import DataSource
 from ..protocols.verbs import (
     CAPABILITY_GATED_VERBS,
-    DYNAMIC_SIGNATURE_VERBS,
     HASATTR_GATED_VERBS,
     UNSAFE_BRIDGE_OPTIONAL_NAMES,
     validate_extra_method_name,
@@ -177,16 +176,22 @@ class BridgeDataSource:
         # wrapped source actually supports (registry.py gates optional verbs
         # by hasattr), so a model calling it would get a runtime bridge error
         # instead of the method never being offered in the first place.
-        # Dynamic-signature core verbs (see VerbSpec.dynamic_signature):
+        # Every enabled capability-gated verb is covered: verbs the class
+        # implements concretely (get_schema serves the describe() cache;
+        # get_stats below) keep those implementations, and every OTHER
+        # enabled row — including any future verb added to the table — gets
+        # a *args/**kwargs proxy. The dynamic default matters because
         # real-world signatures vary by source beyond what the DataSource
-        # Protocol declares — e.g. a wrapper's search(query, filters=None,
-        # page=None) has a `page` the Protocol doesn't. A fixed signature
-        # can't proxy that faithfully in either direction, so these forward
-        # *args/**kwargs verbatim — byte-identical, argument-wise, to calling
-        # the wrapped source directly.
-        for method in DYNAMIC_SIGNATURE_VERBS:
-            if self._caps.get(CAPABILITY_GATED_VERBS[method]):
-                setattr(self, method, functools.partial(self._request, method))
+        # Protocol declares (e.g. a wrapper's search(query, filters=None,
+        # page=None) has a `page` the Protocol doesn't); forwarding verbatim
+        # is byte-identical, argument-wise, to calling the wrapped source
+        # directly, for any signature.
+        for method, capability in CAPABILITY_GATED_VERBS.items():
+            if not self._caps.get(capability):
+                continue
+            if callable(getattr(type(self), method, None)):
+                continue  # concrete client implementation wins
+            setattr(self, method, functools.partial(self._request, method))
         for method in self._optional:
             # Defense in depth: describe() comes from the trusted side, but a
             # buggy or spoofed service must not be able to make this client
@@ -240,8 +245,7 @@ class BridgeDataSource:
     def get_stats(self) -> dict[str, Any]:
         return self._request("get_stats")
 
-    # The dynamic-signature core verbs are bound in __init__ (see
-    # DYNAMIC_SIGNATURE_VERBS) when the wrapped source enables them — not
-    # defined here, so calling one that isn't enabled fails the same way
-    # (AttributeError) as it would on any other DataSource that simply
-    # doesn't implement it.
+    # The remaining capability-gated verbs are bound in __init__ when the
+    # wrapped source enables them — not defined here, so calling one that
+    # isn't enabled fails the same way (AttributeError) as it would on any
+    # other DataSource that simply doesn't implement it.

@@ -27,18 +27,13 @@ class VerbSpec:
     # The capabilities() flag that enables the verb; None means the verb is
     # optional and gated by hasattr(source, name) instead.
     capability: str | None = None
-    # True when real-world signatures vary by source beyond what the
-    # DataSource Protocol declares (extra kwargs like a wrapper's `page`).
-    # The bridge client binds these as *args/**kwargs proxies instead of
-    # fixed-signature methods, so every call forwards argument-identically.
-    dynamic_signature: bool = False
 
 
 VERB_SPECS: tuple[VerbSpec, ...] = (
-    VerbSpec("search", capability="search", dynamic_signature=True),
-    VerbSpec("query", capability="sql", dynamic_signature=True),
-    VerbSpec("get", capability="get", dynamic_signature=True),
-    VerbSpec("get_recent", capability="recent", dynamic_signature=True),
+    VerbSpec("search", capability="search"),
+    VerbSpec("query", capability="sql"),
+    VerbSpec("get", capability="get"),
+    VerbSpec("get_recent", capability="recent"),
     VerbSpec("get_schema", capability="schema"),
     VerbSpec("get_stats", capability="stats"),
     VerbSpec("find"),
@@ -61,11 +56,6 @@ CAPABILITY_GATED_VERBS: dict[str, str] = {
 # Verbs gated by hasattr(source, name) — no capabilities() flag governs them.
 HASATTR_GATED_VERBS: tuple[str, ...] = tuple(
     spec.name for spec in VERB_SPECS if spec.capability is None
-)
-
-# Capability-gated verbs the bridge client binds dynamically (see VerbSpec).
-DYNAMIC_SIGNATURE_VERBS: tuple[str, ...] = tuple(
-    spec.name for spec in VERB_SPECS if spec.dynamic_signature
 )
 
 # Base globals the runner owns; a data source may not shadow them.
