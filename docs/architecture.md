@@ -50,7 +50,17 @@ A source declares capabilities (`{sql, schema}`, `{search}`, ...) and
 becomes a named variable in the REPL (`db.query("SELECT ...")`). Requests
 stay declarative: they can name a registered type and its config, never code
 to import. The registry rejects reserved names and protocol mismatches
-(`SOURCE_PROTOCOL_VERSION`).
+(`SOURCE_PROTOCOL_VERSION`; registrants pass the version they implement).
+
+The protocol is **domain-blind**: core verbs only, plus the generic
+optionals `find`/`content`/`sample`. Domain-specific verbs are declared by
+the source itself via an `extra_methods` attribute (a tuple of method
+names); the registry binds exactly those callables into the sandbox —
+validated against engine verbs, reserved globals, and Python builtins,
+and a flattened default-source verb additionally may not collide with
+another source's namespace — and the bridge's `DataSourceService` honors
+the same declaration, so a source behaves identically in-process and
+across the Pyodide bridge.
 
 The bundled SQLite source is local-mode: SELECT-only policy gate (single
 statement, masked-identifier keyword scanning, LIMIT injection, row caps,
@@ -73,8 +83,9 @@ protocol are versioned, each by a single integer:
   field. A missing or mismatched version is answered with a structured
   error (`protocol_version_missing` / `protocol_version_mismatch`) naming
   both sides — a host detects incompatibility explicitly instead of
-  failing on a missing field. Every response is stamped with the engine's
-  `protocol_version`.
+  failing on a missing field. Responses carry `protocol_version`: the
+  engine stamps its own everywhere except an `adapter_module` response
+  that already claimed one (adapters own their response shape).
 - `SOURCE_PROTOCOL_VERSION` (currently 2; v2 made the contract
   domain-blind — domain verbs are source-declared `extra_methods`, no
   longer auto-bound) governs the data-source registration contract and
