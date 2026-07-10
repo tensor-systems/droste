@@ -57,19 +57,16 @@ jobs:
         # skips them instead of erroring on duplicate filenames.
         run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/droste/
       - name: Bundle the Pyodide relay assets
-        # The Deno half of the Pyodide substrate (#15): hosts consume this
-        # tarball from the release instead of staging .ts files from a git
-        # checkout. Deliberately NOT in dist/ — uv publish uploads dist/* to
-        # PyPI and would choke on a tarball that isn't an sdist. The relay
-        # and the wheel are version-locked: the relay's request contract and
-        # droste.substrates.pyodide evolve together, so the stamp carries the
-        # same tag + commit as the wheel built above.
+        # Convenience artifact for non-Python consumers (#33): the EMBEDDER
+        # path is now the wheel itself — the relay ships as package data
+        # under droste/substrates/_relay (see `droste relay-path`), so wheel
+        # and relay are version-locked by construction. Deliberately NOT in
+        # dist/ — uv publish uploads dist/* to PyPI and would choke on a
+        # tarball that isn't an sdist.
         run: |
           staging="droste-relay-$GITHUB_REF_NAME"
           mkdir -p "$staging" relay-dist
-          cp pyodide/relay.ts pyodide/stream.ts pyodide/broker.ts \
-             pyodide/events.ts pyodide/offline-probe.ts pyodide/README.md \
-             "$staging/"
+          cp src/droste/substrates/_relay/*.ts pyodide/README.md "$staging/"
           printf '%s %s\n' "$GITHUB_REF_NAME" "$GITHUB_SHA" > "$staging/DROSTE_VERSION"
           tar czf "relay-dist/$staging.tar.gz" "$staging"
       - name: GitHub release with artifacts

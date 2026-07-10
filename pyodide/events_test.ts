@@ -1,6 +1,9 @@
 // Tests for the RLM stderr event filter (#1). Run: deno test events_test.ts
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { isRlmEvent, RLM_EVENT_TYPES } from "./events.ts";
+import {
+  isRlmEvent,
+  RLM_EVENT_TYPES,
+} from "../src/droste/substrates/_relay/events.ts";
 
 Deno.test("forwards every emitted event type (with json.dumps spacing)", () => {
   for (const type of RLM_EVENT_TYPES) {
@@ -50,7 +53,8 @@ Deno.test("a type that is not a string is not an event", () => {
 
 Deno.test("vocabulary matches the engine's emitters", () => {
   // Guard against drift: these are exactly what droste/execution + loop emit,
-  // plus relay-side reasoning_delta and the future subcall/done.
+  // plus the relay-side startup handshake (#33) and reasoning_delta, and the
+  // future subcall/done.
   assertEquals(
     [...RLM_EVENT_TYPES].sort(),
     [
@@ -61,6 +65,7 @@ Deno.test("vocabulary matches the engine's emitters", () => {
       "output",
       "progress",
       "reasoning_delta",
+      "startup",
       "subcall",
     ].sort(),
   );

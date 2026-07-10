@@ -17,7 +17,7 @@
 //
 // Run: deno test --allow-read --allow-env --allow-ffi bridge_source_integration_test.ts
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { loadPyodide } from "npm:pyodide@0.29.4";
+import { loadPyodide } from "../src/droste/substrates/_relay/deps.ts";
 
 const SRC_DIR = new URL("../src", import.meta.url).pathname;
 const quiet = { stdout: () => {}, stderr: () => {} };
@@ -32,7 +32,8 @@ async function loadWithDroste(): Promise<any> {
   // ModuleNotFoundError inside the interpreter.
   await interp.loadPackage("sqlite3", {
     messageCallback: () => {},
-    errorCallback: (msg: string) => console.error(`loadPackage(sqlite3): ${msg}`),
+    errorCallback: (msg: string) =>
+      console.error(`loadPackage(sqlite3): ${msg}`),
   });
   interp.mountNodeFS("/app", SRC_DIR);
   await interp.runPythonAsync(`import sys; sys.path.insert(0, "/app")`);
@@ -85,7 +86,10 @@ _DBSVC_MARKER = "only visible in the DB-service interpreter"
   // The bridge: an async JS forwarder into the OTHER interpreter, set as a
   // global the REPL's Python side calls synchronously via run_sync — same
   // shape as relay.ts's host_fetch and spike_topology.ts's _js_query.
-  const bridgeCall = async (method: string, paramsJson: string): Promise<string> => {
+  const bridgeCall = async (
+    method: string,
+    paramsJson: string,
+  ): Promise<string> => {
     return handle(method, paramsJson) as string;
   };
   repl.globals.set("bridge_call", bridgeCall);
@@ -111,9 +115,17 @@ json.dumps({"rows": rows, "schema": schema})
   // isolation check). The REPL sees only what came back over the bridge —
   // never the source object, the marker global, or dbsvc's memory space.
   const markerLeaked = await repl.runPythonAsync(`"_DBSVC_MARKER" in dir()`);
-  assert(!markerLeaked, "DB-service interpreter globals must not leak into the REPL interpreter");
-  const sourceLeaked = await repl.runPythonAsync(`"_source" in dir() or "_service" in dir()`);
-  assert(!sourceLeaked, "the real DataSource/DataSourceService must not exist in the REPL interpreter");
+  assert(
+    !markerLeaked,
+    "DB-service interpreter globals must not leak into the REPL interpreter",
+  );
+  const sourceLeaked = await repl.runPythonAsync(
+    `"_source" in dir() or "_service" in dir()`,
+  );
+  assert(
+    !sourceLeaked,
+    "the real DataSource/DataSourceService must not exist in the REPL interpreter",
+  );
 
   // -- security: a forged/unknown method name is rejected, not getattr'd. -----
   const forged = await repl.runPythonAsync(`

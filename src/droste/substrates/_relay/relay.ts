@@ -14,14 +14,15 @@
 // droste's own minimal, no-third-party-deps example. This relay is itself
 // droste-general: it knows nothing about any specific host's data layer or
 // product wiring, only the adapter contract.
-// Pin pyodide: an unpinned `npm:pyodide` lets `deno cache` drift to a new major
-// (e.g. 314.0.0) whose sqlite3 package/API differs, breaking the offline bundle
-// ("No known package with name 'sqlite3'"). 0.29.4 is the version this relay is
-// built and tested against (run_sync + mountNodeFS + loadPackage("sqlite3")).
-import { loadPyodide } from "npm:pyodide@0.29.4";
+// The Pyodide runtime pin lives in deps.ts — the single bump site (#33).
+import { loadPyodide } from "./deps.ts";
 import { basename, dirname } from "node:path";
 import { streamResponses } from "./stream.ts";
-import { isModelRelayResponsesCall, splitCredentials, stripAndInjectAuth } from "./broker.ts";
+import {
+  isModelRelayResponsesCall,
+  splitCredentials,
+  stripAndInjectAuth,
+} from "./broker.ts";
 import { isRlmEvent } from "./events.ts";
 
 const sources = Deno.args[0]; // bundled Python sources DIR (prod) or a .zip (dev)
@@ -34,7 +35,9 @@ const adapterModule = Deno.args[1]; // Python module implementing the host-adapt
 if (!adapterModule || !/^[A-Za-z_][A-Za-z0-9_.]*$/.test(adapterModule)) {
   console.error(
     `usage: relay.ts <sources> <adapter_module>\n` +
-      `<adapter_module> must be a dotted Python module path (got: ${JSON.stringify(adapterModule ?? null)})`,
+      `<adapter_module> must be a dotted Python module path (got: ${
+        JSON.stringify(adapterModule ?? null)
+      })`,
   );
   Deno.exit(1);
 }
@@ -55,9 +58,13 @@ function realPathOr(path: string): string {
 // Stage the bundled Python sources into a Pyodide interpreter's /app — shared
 // between the REPL interpreter and (in DB-service mode) the second, trusted
 // interpreter, both of which import from droste and the host's adapter package.
-async function mountSources(interp: Awaited<ReturnType<typeof loadPyodide>>): Promise<void> {
+async function mountSources(
+  interp: Awaited<ReturnType<typeof loadPyodide>>,
+): Promise<void> {
   if (sources.endsWith(".zip")) {
-    interp.unpackArchive(await Deno.readFile(sources), "zip", { extractDir: "/app" });
+    interp.unpackArchive(await Deno.readFile(sources), "zip", {
+      extractDir: "/app",
+    });
   } else {
     interp.mountNodeFS("/app", sources);
   }
@@ -96,14 +103,19 @@ const DB_SERVICE = Deno.env.get("RLM_DB_SERVICE") !== "0";
 // spawns this relay grants it when building the deno invocation).
 const realDbPath = realPathOr(request.db_path);
 const dbDir = dirname(realDbPath);
-const hasContactsField = request.contacts_db_path && request.contacts_db_path !== "nil";
-const realContactsPath = hasContactsField ? realPathOr(request.contacts_db_path) : null;
+const hasContactsField = request.contacts_db_path &&
+  request.contacts_db_path !== "nil";
+const realContactsPath = hasContactsField
+  ? realPathOr(request.contacts_db_path)
+  : null;
 
 // In DB-service mode, build the trusted interpreter FIRST, before the
 // untrusted REPL interpreter even exists — a bad db_path (or any bootstrap
 // failure) then costs one interpreter boot, not two, and can never surface as
 // a confusing bridge-timeout-shaped error from the REPL side.
-let bridgeCall: ((method: string, paramsJson: string) => Promise<string>) | null = null;
+let bridgeCall:
+  | ((method: string, paramsJson: string) => Promise<string>)
+  | null = null;
 // Opaque to this relay — whatever the adapter's build_db_service() returns,
 // ferried across to run_for_host_pyodide()'s meta= kwarg unexamined. Only the
 // adapter (on both sides of the bridge) knows or cares what's in it. Kept as
@@ -116,7 +128,10 @@ if (DB_SERVICE) {
   try {
     const quiet = { stdout: () => {}, stderr: () => {} };
     const dbsvc = await loadPyodide(quiet);
-    await dbsvc.loadPackage("sqlite3", { messageCallback: () => {}, errorCallback: () => {} });
+    await dbsvc.loadPackage("sqlite3", {
+      messageCallback: () => {},
+      errorCallback: () => {},
+    });
     await mountSources(dbsvc);
 
     dbsvc.mountNodeFS("/data", dbDir);
@@ -154,11 +169,15 @@ json.dumps(_meta)
     // Async wrapper: the REPL interpreter's Python side calls this via
     // run_sync, which requires an awaitable (proven in
     // bridge_source_integration_test.ts). handle() itself is synchronous.
-    bridgeCall = async (method: string, paramsJson: string) => handle(method, paramsJson) as string;
+    bridgeCall = async (method: string, paramsJson: string) =>
+      handle(method, paramsJson) as string;
   } catch (e) {
     await writeHostResponse({
       answer: null,
-      error: { type: "DBServiceError", message: String(e instanceof Error ? e.message : e) },
+      error: {
+        type: "DBServiceError",
+        message: String(e instanceof Error ? e.message : e),
+      },
     });
     Deno.exit(0); // match the existing contract: exit 0, error in the JSON body
   }
@@ -188,8 +207,44 @@ const py = await loadPyodide({
 // sql_local.py, which imports the stdlib sqlite3 module — the REPL
 // interpreter never OPENS a database, but it still needs the package loaded
 // just to import the client-side BridgeDataSource.
-await py.loadPackage("sqlite3", { messageCallback: () => {}, errorCallback: () => {} });
+await py.loadPackage("sqlite3", {
+  messageCallback: () => {},
+  errorCallback: () => {},
+});
 await mountSources(py);
+
+// Contract handshake (#33): announce engine + protocol versions as the first
+// event, so "did I adopt the new contract?" is a structured startup signal a
+// host can assert on instead of a changelog audit. The engine version comes
+// from the staged wheel's dist-info when present ("unknown" for raw source
+// mounts); the protocol versions are the actual compatibility contract, and a
+// missing one (null) means the staged sources don't even ship that package —
+// itself a loud signal. The guarded imports keep a handshake hiccup from ever
+// failing the run.
+emitEvent(JSON.parse(
+  await py.runPythonAsync(`
+import json
+try:
+    from importlib.metadata import version as _version
+    _engine_version = _version("droste")
+except Exception:
+    _engine_version = "unknown"
+try:
+    from droste_runner.runner import RUNNER_PROTOCOL_VERSION as _runner_protocol
+except Exception:
+    _runner_protocol = None
+try:
+    from droste.sources.registration import SOURCE_PROTOCOL_VERSION as _source_protocol
+except Exception:
+    _source_protocol = None
+json.dumps({
+    "type": "startup",
+    "engine_version": _engine_version,
+    "runner_protocol": _runner_protocol,
+    "source_protocol": _source_protocol,
+})
+`),
+));
 
 if (DB_SERVICE) {
   // The whole point of the split: the untrusted interpreter never sees the
@@ -255,44 +310,57 @@ const { creds, sandboxRequest } = splitCredentials(request);
 // callers (e.g. the Swift app) can branch on it (402 = out of balance) without
 // parsing the human-readable message string. Fresh per process (one run/query).
 let lastHttpErrorStatus = 0;
-py.globals.set("host_fetch", async (m: string, u: string, h: string, b: string) => {
-  const headers = JSON.parse(h);
-  // A′: host auth is authoritative — drop whatever auth header the sandbox sent
-  // and inject the held credential. Scoped to the exact `POST /api/v1/responses`
-  // ModelRelay call (isModelRelayResponsesCall parses method + URL), so the
-  // credential is a single-purpose LLM-transport key — sandbox code can't reuse
-  // it against other ModelRelay endpoints, another host, or over plaintext.
-  // Legacy mode leaves the sandbox-assembled header untouched.
-  if (!BRIDGE_LEGACY && isModelRelayResponsesCall(m, u)) {
-    stripAndInjectAuth(headers, creds);
-  }
-  // Ask ModelRelay to stream /responses so reasoning tokens reach the host live.
-  // Pyodide still receives one complete response (see streamResponses), so the
-  // sync RLM loop is unaffected.
-  const wantsStream = STREAM_ENABLED && m === "POST" && u.endsWith("/responses");
-  if (wantsStream) {
-    headers["Accept"] = 'application/x-ndjson; profile="responses-stream/v2"';
-  }
-  const r = await fetch(u, { method: m, headers, body: b });
-  // Surface HTTP errors instead of returning an error/empty body that the
-  // Python client would blindly json.loads() into a cryptic JSONDecodeError.
-  if (!r.ok) {
-    lastHttpErrorStatus = r.status;
-    const text = await r.text();
-    throw new Error(`ModelRelay HTTP ${r.status} ${r.statusText}: ${text.slice(0, 1000)}`);
-  }
-  // Stream only when we asked for it AND the server actually returned ndjson;
-  // otherwise fall back to the unary path — behavior identical to before.
-  const contentType = r.headers.get("content-type") || "";
-  const isNdjson = contentType.includes("ndjson") || contentType.includes("event-stream");
-  if (wantsStream && isNdjson) {
-    return await streamResponses(r, (chunk) => emitEvent({ type: "reasoning_delta", text: chunk }));
-  }
-  return await r.text();
-});
+py.globals.set(
+  "host_fetch",
+  async (m: string, u: string, h: string, b: string) => {
+    const headers = JSON.parse(h);
+    // A′: host auth is authoritative — drop whatever auth header the sandbox sent
+    // and inject the held credential. Scoped to the exact `POST /api/v1/responses`
+    // ModelRelay call (isModelRelayResponsesCall parses method + URL), so the
+    // credential is a single-purpose LLM-transport key — sandbox code can't reuse
+    // it against other ModelRelay endpoints, another host, or over plaintext.
+    // Legacy mode leaves the sandbox-assembled header untouched.
+    if (!BRIDGE_LEGACY && isModelRelayResponsesCall(m, u)) {
+      stripAndInjectAuth(headers, creds);
+    }
+    // Ask ModelRelay to stream /responses so reasoning tokens reach the host live.
+    // Pyodide still receives one complete response (see streamResponses), so the
+    // sync RLM loop is unaffected.
+    const wantsStream = STREAM_ENABLED && m === "POST" &&
+      u.endsWith("/responses");
+    if (wantsStream) {
+      headers["Accept"] = 'application/x-ndjson; profile="responses-stream/v2"';
+    }
+    const r = await fetch(u, { method: m, headers, body: b });
+    // Surface HTTP errors instead of returning an error/empty body that the
+    // Python client would blindly json.loads() into a cryptic JSONDecodeError.
+    if (!r.ok) {
+      lastHttpErrorStatus = r.status;
+      const text = await r.text();
+      throw new Error(
+        `ModelRelay HTTP ${r.status} ${r.statusText}: ${text.slice(0, 1000)}`,
+      );
+    }
+    // Stream only when we asked for it AND the server actually returned ndjson;
+    // otherwise fall back to the unary path — behavior identical to before.
+    const contentType = r.headers.get("content-type") || "";
+    const isNdjson = contentType.includes("ndjson") ||
+      contentType.includes("event-stream");
+    if (wantsStream && isNdjson) {
+      return await streamResponses(
+        r,
+        (chunk) => emitEvent({ type: "reasoning_delta", text: chunk }),
+      );
+    }
+    return await r.text();
+  },
+);
 // A′: the sandbox receives the credential-stripped request; legacy keeps the
 // full request (credential included) for the pre-A′ in-sandbox auth path.
-py.globals.set("request_json", JSON.stringify(BRIDGE_LEGACY ? request : sandboxRequest));
+py.globals.set(
+  "request_json",
+  JSON.stringify(BRIDGE_LEGACY ? request : sandboxRequest),
+);
 py.globals.set("adapter_module_name", adapterModule);
 // Always set, never conditionally interpolated — bridge_call/bridge_meta_json
 // are None/"null" outside DB-service mode, and the adapter's

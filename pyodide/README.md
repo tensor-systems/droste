@@ -37,11 +37,25 @@ If you're reading this to embed droste elsewhere: everything in "the substrate"
 is yours to reuse as-is; write one adapter module of your own and point
 `relay.ts` at it.
 
-**Getting the Deno half:** every tagged release attaches
-`droste-relay-vX.Y.Z.tar.gz` (these `.ts` files + this README + a
-`DROSTE_VERSION` stamp). Consume that artifact in your build — not a git
-checkout — and match its version to the `droste` wheel you install: the
-relay's request contract and `droste.substrates.pyodide` evolve together.
+**Getting the Deno half:** the relay ships **inside the droste wheel** (#33)
+as package data under `droste/substrates/_relay/` — `relay.ts`, `stream.ts`,
+`broker.ts`, `events.ts`, `offline-probe.ts`, and `deps.ts` (the single
+Pyodide version pin). Stage it in your build from the installed package:
+
+    relay_dir="$(droste relay-path)"
+    cp "$relay_dir"/*.ts <your-build-staging>/
+
+(Or `python -c 'from droste.substrates import relay_dir; print(relay_dir())'`.)
+The wheel is already the one pinned, hash-verified artifact in your lockfile,
+so relay and engine are version-locked by construction — no separate tarball
+download, no sha pin to keep in sync. At startup the relay emits a `startup`
+event (`{engine_version, runner_protocol, source_protocol}`) so contract
+adoption is a structured signal, not a changelog audit. (Tagged releases
+still attach `droste-relay-vX.Y.Z.tar.gz` as a convenience for non-Python
+consumers; it is no longer the embedder path.)
+
+In this repo the relay sources live at `src/droste/substrates/_relay/`; this
+directory (`pyodide/`) keeps the substrate's tests, spikes, and this README.
 
 ## The substrate (droste-general)
 

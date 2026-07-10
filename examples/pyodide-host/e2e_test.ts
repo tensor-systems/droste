@@ -18,13 +18,17 @@ import { copy } from "jsr:@std/fs@1/copy";
 
 const HERE = new URL(".", import.meta.url).pathname;
 const DROSTE_SRC = new URL("../../src", import.meta.url).pathname;
-const RELAY_TS = new URL("../../pyodide/relay.ts", import.meta.url).pathname;
+const RELAY_TS =
+  new URL("../../src/droste/substrates/_relay/relay.ts", import.meta.url)
+    .pathname;
 
 // A minimal ModelRelay stand-in: any POST to /responses gets one scripted
 // reply telling the RLM to query the real (bridged) SQL source and finish.
 // Proves the answer actually came from a real query() round-trip through
 // BridgeDataSource -> DataSourceService -> the real SQLite file, not a stub.
-function startMockModelRelay(): Promise<{ port: number; shutdown: () => Promise<void> }> {
+function startMockModelRelay(): Promise<
+  { port: number; shutdown: () => Promise<void> }
+> {
   const code = [
     "```python",
     'rows = query("SELECT COUNT(*) AS n FROM widgets")',
@@ -37,9 +41,16 @@ function startMockModelRelay(): Promise<{ port: number; shutdown: () => Promise<
     // documented least-privilege `--allow-net=127.0.0.1` permission rejects.
     { port: 0, hostname: "127.0.0.1", onListen: () => {} },
     (req) => {
-      if (req.method === "POST" && new URL(req.url).pathname.endsWith("/responses")) {
+      if (
+        req.method === "POST" &&
+        new URL(req.url).pathname.endsWith("/responses")
+      ) {
         return Response.json({
-          output: [{ type: "message", role: "assistant", content: [{ type: "text", text: code }] }],
+          output: [{
+            type: "message",
+            role: "assistant",
+            content: [{ type: "text", text: code }],
+          }],
         });
       }
       return new Response("not found", { status: 404 });
@@ -56,12 +67,19 @@ function startMockModelRelay(): Promise<{ port: number; shutdown: () => Promise<
 // resp.error.status) happens without any JS-side re-parsing of the adapter's
 // response, per the same adapter-agnostic-split finding the precision test above
 // guards on the success path.
-function startFailingMockModelRelay(): Promise<{ port: number; shutdown: () => Promise<void> }> {
+function startFailingMockModelRelay(): Promise<
+  { port: number; shutdown: () => Promise<void> }
+> {
   const server = Deno.serve(
     { port: 0, hostname: "127.0.0.1", onListen: () => {} },
     (req) => {
-      if (req.method === "POST" && new URL(req.url).pathname.endsWith("/responses")) {
-        return Response.json({ error: "insufficient balance" }, { status: 402 });
+      if (
+        req.method === "POST" &&
+        new URL(req.url).pathname.endsWith("/responses")
+      ) {
+        return Response.json({ error: "insufficient balance" }, {
+          status: 402,
+        });
       }
       return new Response("not found", { status: 404 });
     },
@@ -78,9 +96,19 @@ async function buildTempSources(): Promise<string> {
   // mounts as present but unreadable — importlib reports ModuleNotFoundError).
   const dir = await Deno.makeTempDir({ prefix: "droste-pyodide-e2e-" });
   await copy(`${DROSTE_SRC}/droste`, `${dir}/droste`, { overwrite: true });
-  await copy(`${DROSTE_SRC}/droste_runner`, `${dir}/droste_runner`, { overwrite: true });
-  await copy(`${HERE}pyodide_host_adapter.py`, `${dir}/pyodide_host_adapter.py`, { overwrite: true });
-  await copy(`${HERE}_meta_precision_adapter.py`, `${dir}/_meta_precision_adapter.py`, { overwrite: true });
+  await copy(`${DROSTE_SRC}/droste_runner`, `${dir}/droste_runner`, {
+    overwrite: true,
+  });
+  await copy(
+    `${HERE}pyodide_host_adapter.py`,
+    `${dir}/pyodide_host_adapter.py`,
+    { overwrite: true },
+  );
+  await copy(
+    `${HERE}_meta_precision_adapter.py`,
+    `${dir}/_meta_precision_adapter.py`,
+    { overwrite: true },
+  );
   return dir;
 }
 
@@ -97,7 +125,9 @@ async function buildTempDb(): Promise<string> {
   });
   const { code, stderr } = await p.output();
   if (code !== 0) {
-    throw new Error(`sqlite3 fixture build failed: ${new TextDecoder().decode(stderr)}`);
+    throw new Error(
+      `sqlite3 fixture build failed: ${new TextDecoder().decode(stderr)}`,
+    );
   }
   return dbPath;
 }
@@ -141,7 +171,9 @@ async function runRelayRaw(
       `relay.ts exited ${code}\nstdout: ${stdoutText}\nstderr: ${stderrText}`,
     );
   }
-  const lines = stdoutText.trim().split("\n").filter((l) => l.trim().startsWith("{"));
+  const lines = stdoutText.trim().split("\n").filter((l) =>
+    l.trim().startsWith("{")
+  );
   assert(lines.length > 0, `no JSON on stdout:\n${stdoutText}`);
   return { lastLine: lines[lines.length - 1], stderrText };
 }
@@ -152,12 +184,18 @@ async function runRelay(
   port: number,
   env: Record<string, string>,
 ): Promise<{ resp: Record<string, unknown>; stderrText: string }> {
-  const { lastLine, stderrText } = await runRelayRaw(sourcesDir, request, port, env);
+  const { lastLine, stderrText } = await runRelayRaw(
+    sourcesDir,
+    request,
+    port,
+    env,
+  );
   return { resp: JSON.parse(lastLine), stderrText };
 }
 
 Deno.test({
-  name: "relay.ts + pyodide_host_adapter.py: DB-service (bridge) mode, real subprocess + Pyodide + mocked ModelRelay",
+  name:
+    "relay.ts + pyodide_host_adapter.py: DB-service (bridge) mode, real subprocess + Pyodide + mocked ModelRelay",
   fn: async () => {
     const { port, shutdown } = await startMockModelRelay();
     try {
@@ -188,6 +226,19 @@ Deno.test({
         !stderrText.includes("RLM_DB_SERVICE=0"),
         `unexpected legacy-mode warning in DB-service mode:\n${stderrText}`,
       );
+      // Contract handshake (#33): the relay announces engine + protocol
+      // versions as a structured stderr event before doing any work.
+      const startup = stderrText.split("\n")
+        .filter((l) => l.trim().startsWith("{"))
+        .map((l) => JSON.parse(l))
+        .find((e) => e.type === "startup");
+      assert(startup, `no startup handshake event on stderr:\n${stderrText}`);
+      assertEquals(startup.runner_protocol, 1);
+      assertEquals(startup.source_protocol, 2);
+      assert(
+        typeof startup.engine_version === "string" &&
+          startup.engine_version.length > 0,
+      );
     } finally {
       await shutdown();
     }
@@ -195,7 +246,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "relay.ts + pyodide_host_adapter.py: single-interpreter (RLM_DB_SERVICE=0) mode, meta stays null",
+  name:
+    "relay.ts + pyodide_host_adapter.py: single-interpreter (RLM_DB_SERVICE=0) mode, meta stays null",
   fn: async () => {
     const { port, shutdown } = await startMockModelRelay();
     try {
@@ -230,7 +282,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "relay.ts: meta blob survives the DB-service round trip at full int64 precision",
+  name:
+    "relay.ts: meta blob survives the DB-service round trip at full int64 precision",
   fn: async () => {
     const { port, shutdown } = await startMockModelRelay();
     try {
@@ -267,7 +320,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "relay.ts: HTTP error status attaches to error.status without a JS-side JSON round trip",
+  name:
+    "relay.ts: HTTP error status attaches to error.status without a JS-side JSON round trip",
   fn: async () => {
     const { port, shutdown } = await startFailingMockModelRelay();
     try {
@@ -282,7 +336,10 @@ Deno.test({
         max_iterations: 1,
       };
       const { resp } = await runRelay(sourcesDir, request, port, {});
-      assertEquals(resp.error && (resp.error as Record<string, unknown>).status, 402);
+      assertEquals(
+        resp.error && (resp.error as Record<string, unknown>).status,
+        402,
+      );
     } finally {
       await shutdown();
     }

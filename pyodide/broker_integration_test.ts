@@ -7,12 +7,12 @@
 //
 // Run: deno test --allow-read --allow-env --allow-ffi broker_integration_test.ts
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { loadPyodide } from "npm:pyodide@0.29.4";
+import { loadPyodide } from "../src/droste/substrates/_relay/deps.ts";
 import {
   isModelRelayResponsesCall,
   splitCredentials,
   stripAndInjectAuth,
-} from "./broker.ts";
+} from "../src/droste/substrates/_relay/broker.ts";
 
 Deno.test("A′: credential is invisible to sandbox code and host auth is authoritative", async () => {
   const request = {

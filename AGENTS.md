@@ -81,7 +81,7 @@ uv pip install --no-index --find-links wheelhouse droste
 
 ## Pyodide Credential Broker
 
-- `pyodide/broker.ts` must remove secret credential values (`api_key` and
+- The relay broker (`src/droste/substrates/_relay/broker.ts`) must remove secret credential values (`api_key` and
   `customer_token`) before creating the sandbox request.
 - Preserve a normalized `auth_type` in that request. It is nonsecret routing
   metadata required by adapters that distinguish customer-tier defaults from
