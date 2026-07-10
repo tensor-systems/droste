@@ -258,6 +258,11 @@ cd pyodide
 deno test --allow-read --allow-env --allow-ffi .
 ```
 
+First run on a fresh machine also needs `--allow-net=cdn.jsdelivr.net`: the
+npm pyodide package unvendors stdlib `sqlite3`, so `loadPackage("sqlite3")`
+fetches the wheel from the CDN once and caches it alongside the pyodide npm
+install (no net needed thereafter — CI warms its cache the same way).
+
 droste's end-to-end proof of the whole relay + adapter path (in `examples/`,
 needs `--allow-run` to spawn the relay subprocess, `--allow-write` for its temp
 sources/DB dirs, and loopback net for its mock ModelRelay server):
