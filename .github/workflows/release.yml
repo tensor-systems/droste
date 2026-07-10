@@ -40,7 +40,11 @@ jobs:
       - name: Build sdist + wheel
         run: uv build
       - name: Publish to PyPI (trusted publishing)
-        run: uv publish --trusted-publishing always
+        # --check-url makes re-runs idempotent: if a previous attempt uploaded
+        # some artifacts before failing (or the release step after this one
+        # failed), the retry verifies existing files against the index and
+        # skips them instead of erroring on duplicate filenames.
+        run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/droste/
       - name: GitHub release with artifacts
         env:
           GH_TOKEN: ${{ github.token }}

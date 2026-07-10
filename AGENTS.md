@@ -101,7 +101,9 @@ embedders; CI still scans for committed key material.
 
 The package ships on public PyPI, released by CI — never by hand:
 
-1. Bump `version` in `pyproject.toml` (and merge to main).
+1. Bump `version` in `pyproject.toml`, run `uv lock` (the lockfile pins the
+   project's own version — `uv sync --locked` in the release job aborts on a
+   stale one), and merge both to main.
 2. Tag the merge commit `vX.Y.Z` and push the tag.
 3. `.github/workflows/release.yml` runs tests, builds sdist+wheel,
    publishes to PyPI via **trusted publishing** (OIDC — no token secret),
