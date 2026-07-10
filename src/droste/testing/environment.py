@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
+from ..protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest
 
 
 class MockEnvironment(RLMEnvironment):
@@ -15,6 +16,9 @@ class MockEnvironment(RLMEnvironment):
 
     def globals(self) -> dict[str, Any]:
         return self._globals
+
+    def accessor_manifest(self) -> AccessorManifest:
+        return EMPTY_ACCESSOR_MANIFEST
 
     def prompt_fragment(self) -> str:
         return ""

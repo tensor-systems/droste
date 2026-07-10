@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol, TypedDict
 
+from .verbs import AccessorManifest
+
 
 class EnvCapabilities(TypedDict):
     """Capabilities and limits for the RLM environment."""
@@ -31,6 +33,20 @@ class RLMEnvironment(Protocol):
 
     def globals(self) -> dict[str, Any]:
         """Return mutable globals dict used for code execution."""
+        ...
+
+    def accessor_manifest(self) -> AccessorManifest:
+        """Report the data accessors bound into globals(), for the count
+        contract's len() check (#31).
+
+        An environment composing data sources should forward its registry's
+        ``accessor_manifest()`` (as RunnerEnvironment does). The loop treats
+        this method as optional for backward compatibility: an environment
+        without it — or one returning an empty manifest — gets the policy
+        layer's static generic-verb fallback, which does NOT cover custom
+        accessor names. Implement this to keep dynamic accessor names
+        enforced.
+        """
         ...
 
     def prompt_fragment(self) -> str:
