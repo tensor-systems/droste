@@ -31,7 +31,7 @@ can omit them to keep behavior purely prompt-driven.
 - `adapter_module` lets callers delegate the runner to a custom module with `run(request)` (used by in-process embedders).
 
 
-## Login (droste#55)
+## Login
 
 - `droste login` runs loopback OAuth (RFC 8252) against ModelRelay: local
   127.0.0.1 server -> `POST /auth/oauth/start` -> browser -> the OAuth

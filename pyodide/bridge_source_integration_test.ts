@@ -1,4 +1,4 @@
-// Bridge-backed DataSource E2E (droste#3, A'-2): two REAL Pyodide interpreters,
+// Bridge-backed DataSource E2E (A'-2 sandbox split): two REAL Pyodide interpreters,
 // wired the way relay.ts's eventual DB-service split will wire them, running the
 // actual droste.sources.bridge contract (not the toy validator spike_topology.ts
 // used) — proves DataSourceService <-> BridgeDataSource works over the real
@@ -11,7 +11,7 @@
 // isn't available outside that host's bundle), and not droste's own
 // LocalSqlDataSource, whose query() arms a threading.Timer for its statement
 // timeout — threading is unavailable under Pyodide/WASM, a real but SEPARATE
-// constraint tracked by droste#16, orthogonal to the bridge wiring under test
+// constraint tracked by #8, orthogonal to the bridge wiring under test
 // here. This validates the same wire contract a host adapter drives with a
 // different source on the other end.
 //

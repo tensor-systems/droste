@@ -2,8 +2,8 @@
 
 *The north star for droste's evolution. `architecture.md` describes what is; this
 describes what everything should converge toward, and the test every new piece of
-structure must pass. Grounded in the 2026-07 architecture review (issues #3, #9,
-#14, #2) and the topology spike on #3.*
+structure must pass. Grounded in the 2026-07 architecture review and its
+topology spike.*
 
 ## The test: structure must be removable
 
@@ -29,8 +29,9 @@ structure we do ship divides into two kinds:
   improve.
 
 The failure modes this guards against are all live in the current code: a validator
-that is convention rather than boundary (#3), recursion capped at depth 1 by an
-architectural constant (#14), and orchestration strategy welded into the engine as
+that is convention rather than boundary (since hardened by the A′ sandbox split),
+recursion capped at depth 1 by an
+architectural constant (#2), and orchestration strategy welded into the engine as
 Python string constants (`prompts/tips.py`).
 
 ## The stack
@@ -68,7 +69,7 @@ Two primitives cross the boundary, nothing else:
 
 ```
 bridge.call(method, params) -> result     # sync from Python; request/response
-bridge.emit(event)                        # fire-and-forget; the event stream (#2)
+bridge.emit(event)                        # fire-and-forget; the event stream (#1)
 ```
 
 **Why this is not tool calling reinvented:** provider tool calling is
@@ -106,7 +107,7 @@ never force a core rewrite:
 
 What the MCP default buys: **every existing MCP server is a droste data source
 for free** — "integrate droste" becomes "point it at your MCP server" — and the
-registry stops being a Python-only abstraction (#9): manifests auto-generate both
+registry stops being a Python-only abstraction: manifests auto-generate both
 the sandbox bindings *and* the prompt's `{capabilities}` fragment, so the prompt
 can never lie about the API surface. But MCP is how capabilities are *populated*,
 not what droste *is*.
@@ -117,7 +118,7 @@ the broker, which owns auth, policy, budgets, validation, side-effect gating, an
 trace emission — MCP assumes a trusted caller, and ours is not.
 
 A network boundary and a trust boundary are the same shape. Making capabilities
-location-transparent *is* the sandbox split (#3): the untrusted REPL holds no DB
+location-transparent *is* the sandbox split: the untrusted REPL holds no DB
 handle, no credential, no raw tool — only the ability to make requests.
 
 ## 3. Define little, but define it sharply: the five ABIs
@@ -138,7 +139,7 @@ consumer-validated before frozen:
    provenance fields.
 5. **Trace ABI** — the run record: code executed, outputs, capability calls,
    usage, policy events, final answer. This unifies what already exists piecemeal
-   (`trajectory`/`IterationRecord`, `retrieved_guids`, the #2 event stream) into
+   (`trajectory`/`IterationRecord`, `retrieved_guids`, the #1 event stream) into
    one named boundary — it is what benchmarking, citations, replay, and billing
    all consume, and none of them should parse ad-hoc internals.
 
@@ -206,7 +207,7 @@ format is a branded profile of the packs/skills mechanism, not a parallel system
 
 ## 6. Trust topology
 
-Settled on #3 by spike (2026-07-06): the untrusted REPL and the trusted side are
+Settled by spike (2026-07-06): the untrusted REPL and the trusted side are
 separate interpreter contexts bridged by `call`/`emit` (Option A, phased **A′ →
 A″**; a second Pyodide context costs ~+42 MB, not 2×). One rule governs every
 future topology change, including nested recursion and the Worker evolution:
@@ -233,8 +234,8 @@ future topology change, including nested recursion and the Worker evolution:
 
 | principle | issue |
 |---|---|
-| bridge (`call`/`emit`, JSON-RPC 2.0, register) + A′ split | #3 |
-| providers are MCP; registry unification; wrapper_v1 demotion | #9 (+ MCP spike issue) |
-| one budget object; recursion as metered provider | #14 (+ budget issue) |
-| event stream over `emit` | #2 |
-| prompt packs + RLM skills | packs/skills issue |
+| bridge (`call`/`emit`, JSON-RPC 2.0, register) + A′ split | shipped (Pyodide substrate); broker generalization: #9 |
+| providers are MCP; registry unification; wrapper_v1 demotion | shipped; MCP spike: #5 |
+| one budget object; recursion as metered provider | #4 (budget) + #2 (recursion) |
+| event stream over `emit` | #1 |
+| prompt packs + RLM skills | #3 |

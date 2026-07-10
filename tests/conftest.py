@@ -1,7 +1,7 @@
 """Shared test isolation.
 
 Every test runs with an isolated ``XDG_CONFIG_HOME`` and without ambient
-provider credentials: the login flow (droste#55) makes stored credentials
+provider credentials: the login flow makes stored credentials
 and env keys part of the CLI's resolution order, so a developer's real
 ``~/.config/droste/credentials.json`` or exported ``OPENAI_API_KEY`` must
 never leak into test behavior.

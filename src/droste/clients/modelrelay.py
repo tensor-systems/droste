@@ -1,4 +1,4 @@
-"""Native ModelRelay clients for the logged-in path (droste#55).
+"""Native ModelRelay clients for the logged-in path.
 
 `droste login` stores a ModelRelay API key; these clients run the loop against
 ModelRelay's native `POST /responses` — the same endpoint the platform's hosted

@@ -1,4 +1,4 @@
-"""Native ModelRelay /responses clients against a stub server (droste#55).
+"""Native ModelRelay /responses clients against a stub server.
 
 Covers: root call with usage + auth header, input-item conversion, NDJSON
 streaming with on_delta, subcall accounting into the shared ExecutionContext

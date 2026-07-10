@@ -53,7 +53,7 @@ _DEFAULT_BASE_URL = "https://api.modelrelay.ai/api/v1"
 # query). timeout_ms=0 skips that branch entirely; the host's own wall-clock
 # kill (Deno's process timeout) is the real timeout enforcement here, exactly
 # like RunnerEnvironment(exec_timeout_ms=0, ...) below for exec timeouts.
-# Tracked as droste#82 — this is a real gap in sql_local.py's Pyodide
+# Tracked as #8 — this is a real gap in sql_local.py's Pyodide
 # compatibility, not a permanent design choice.
 _PYODIDE_SAFE_SQL_POLICY = {
     "dialect": "sqlite",
@@ -94,7 +94,7 @@ def run_for_host_pyodide(
 ) -> dict[str, Any]:
     """The Pyodide equivalent of an in-process `run_rlm` call.
 
-    `bridge_call` is the droste#3/A'-2 seam: when the host wires a second,
+    `bridge_call` is the A'-2 seam: when the host wires a second,
     trusted Pyodide interpreter running a `DataSourceService` built by
     `build_db_service`, it passes the resulting `bridge_call(method,
     params_json)` here instead of a raw `db_path`, and the DB never opens

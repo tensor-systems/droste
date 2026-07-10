@@ -428,7 +428,7 @@ class WrapperV1DataSource:
         return self._wrapper.content(id, format, max_bytes)
 
 
-# --- Option C: build-time source-type registration (#9 source unification)
+# --- Option C: build-time source-type registration (source unification)
 #
 # Consumers register factories for their own source types at *startup* — never
 # from the request. The request stays declarative ({type, name, ...} — no module
@@ -853,7 +853,7 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
 
     context = _build_context(request)
     # source_ctx is the host-supplied edge context for registered source
-    # factories (#9 source unification): in-process hosts pass live
+    # factories (source unification): in-process hosts pass live
     # handles; subprocess hosts pass whatever their entrypoint assembled.
     sources, default_source = build_data_sources(request, source_ctx)
     registry = DataSourceRegistry(sources, default_source_name=default_source) if sources else None

@@ -1,5 +1,5 @@
 """Bridge-backed `DataSource`: proxy a real data source across a trust
-boundary between two interpreter contexts (droste#3, A'-2).
+boundary between two interpreter contexts (A'-2 sandbox split).
 
 Two halves, kept in one file so the wire contract can't drift between them:
 

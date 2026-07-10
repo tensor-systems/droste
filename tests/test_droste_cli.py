@@ -91,7 +91,7 @@ def test_missing_model_is_usage_error(tmp_path, monkeypatch, capsys):
 
 def test_no_credentials_error_points_at_login(tmp_path, capsys):
     # Nothing configured, non-interactive (pytest stdin is not a TTY):
-    # a terse error pointing at the setup command (droste#55).
+    # a terse error pointing at the setup command.
     f = tmp_path / "a.txt"
     f.write_text("hello")
     assert main([str(f), "q"]) == 2
@@ -120,7 +120,7 @@ def test_db_missing_file_errors(tmp_path, capsys):
     assert "database not found" in capsys.readouterr().err
 
 
-# --- --db wiring to the local SQL source (droste#29) ---
+# --- --db wiring to the local SQL source ---
 
 
 def test_db_exposes_sqlite_as_source(tmp_path):
@@ -540,7 +540,7 @@ def test_key_check_matches_hostname_not_substring(tmp_path, monkeypatch, capsys)
     assert "no API key" in capsys.readouterr().err
 
 
-# --- stored ModelRelay credentials: resolution order + e2e (droste#55) ---
+# --- stored ModelRelay credentials: resolution order + e2e ---
 
 
 def _write_credentials(base_url: str, model: str = "cred-model") -> None:
@@ -683,7 +683,7 @@ def test_corrupt_credentials_file_is_actionable(tmp_path, capsys):
 
 def test_stored_byok_credentials_run_end_to_end(stub_server, tmp_path, capsys):
     # A key chosen during setup is stored and runs the BYOK path — no env
-    # vars involved (droste#55: choosing keys is a setup step, not an export).
+    # vars involved (choosing keys is a setup step, not an export).
     from droste_cli.credentials import Credentials, save_credentials
 
     save_credentials(

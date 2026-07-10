@@ -174,7 +174,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _load_sql_source(db_path: str) -> Any:
-    """Build the local-mode read-only SQLite data source (droste#29).
+    """Build the local-mode read-only SQLite data source.
 
     Exposes the database as the `db` source: SELECT-only, policy-gated, opened
     mode=ro. The policy is a guardrail, not a security boundary — OS file
@@ -246,7 +246,7 @@ def select_provider(args: argparse.Namespace) -> str:
 
 
 def resolve_run_target(args: argparse.Namespace) -> tuple[str, Credentials | None]:
-    """Credential resolution (droste#55):
+    """Credential resolution:
 
     1. Per-run flags (``--base-url`` / ``--api-key``) always win: an explicit
        flag is a statement about THIS run.

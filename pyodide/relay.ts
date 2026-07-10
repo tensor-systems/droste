@@ -69,7 +69,7 @@ async function writeHostResponse(resp: unknown): Promise<void> {
   await Deno.stdout.write(_enc.encode(JSON.stringify(resp) + "\n"));
 }
 
-// A'-2 sandbox split (droste#3): move the DB out of the untrusted REPL
+// A'-2 sandbox split: move the DB out of the untrusted REPL
 // interpreter entirely, into a second, trusted "DB service" interpreter that
 // the REPL only ever reaches through a bridged RPC call (droste.sources.bridge).
 // On by default as of 2026-07-08: a live-corpus parity check (byte-identical
