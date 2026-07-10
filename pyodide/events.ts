@@ -1,5 +1,5 @@
 // events.ts — the structured RLM event vocabulary and the stderr forwarding
-// filter (#2). The relay's Pyodide stderr carries the loop's NDJSON events
+// filter (#1). The relay's Pyodide stderr carries the loop's NDJSON events
 // (progress / iteration_start / code / output / subcall) plus package-loader
 // chatter and stray prints; only real events may reach the host. Extracted from
 // relay.ts so the filter is unit-testable (see events_test.ts).

@@ -1,4 +1,4 @@
-"""droste CLI (#28, #44): arg parsing, the unix contract, end-to-end over the stub server."""
+"""droste CLI: arg parsing, the unix contract, end-to-end over the stub server."""
 
 from __future__ import annotations
 
@@ -513,7 +513,7 @@ def test_file_args_ignore_inherited_stdin(stub_server, tmp_path, capsys, monkeyp
 
 
 def test_key_check_matches_hostname_not_substring(tmp_path, monkeypatch, capsys):
-    # codex review (#53): a proxy URL merely containing the string must not
+    # codex review: a proxy URL merely containing the string must not
     # trip the guard; host comparison is exact and case-insensitive.
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     f = tmp_path / "a.txt"

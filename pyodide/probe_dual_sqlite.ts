@@ -1,4 +1,4 @@
-// Owed check for topology Option A (#3): does the sqlite3 native extension load
+// Owed check for topology Option A: does the sqlite3 native extension load
 // and run in TWO co-resident Pyodide interpreters (untrusted REPL + DB service)?
 // Now runnable — the 0.29.4 sqlite3 wheel is primed in the deno cache (see the
 // "why blocked" diagnosis: npm tarball ships no wheels; indexURL is local).

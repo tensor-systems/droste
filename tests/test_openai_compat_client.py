@@ -1,4 +1,4 @@
-"""BYOK OpenAI-compatible client against a stub chat-completions server (#27).
+"""BYOK OpenAI-compatible client against a stub chat-completions server.
 
 Covers the launch-gating contract: root call with usage, batch subcalls with
 bounded concurrency, usage/call accounting into the shared ExecutionContext,
@@ -236,7 +236,7 @@ def test_subcall_llm_query_counts_calls_and_tokens(stub_server):
     assert context.stats.total_tokens == 10
     payload = stub_server.requests[0]
     assert payload["model"] == "sub-model"
-    assert payload["max_tokens"] == 2048  # bounded-output default (#25 parity)
+    assert payload["max_tokens"] == 2048  # bounded-output default (cost-control parity)
     assert "temperature" not in payload  # endpoint default unless configured
 
 
@@ -358,7 +358,7 @@ def test_run_rlm_end_to_end_with_byok_clients(stub_server):
 
 def test_message_content_tool_calls_without_text_raises():
     """A compat endpoint answering with tool_calls and null content must fail
-    loudly — this client sends no tools and cannot honor them (codex #32)."""
+    loudly — this client sends no tools and cannot honor them (codex review)."""
     from droste.clients.openai_compat import _message_content
 
     data = {
@@ -379,7 +379,7 @@ def test_message_content_null_without_tool_calls_is_empty():
 
 def test_batch_responses_preserves_explicit_zero_max_tokens(stub_server):
     """max_tokens=0 is an explicit opt-out and must not be coerced to the
-    default in the batch path (codex #32)."""
+    default in the batch path (codex review)."""
     client = OpenAICompatClient(base_url=stub_server.base_url, api_key="k", model="m")
     client.batch_responses([{"messages": [{"role": "user", "content": "hi"}], "max_tokens": 0}])
     assert "max_tokens" not in stub_server.requests[0]
@@ -421,7 +421,7 @@ def test_without_on_delta_request_does_not_stream(stub_server):
 
 
 def test_on_delta_retries_without_stream_options(stub_server):
-    # codex review (#49): endpoints that 400 on stream_options still stream.
+    # codex review: endpoints that 400 on stream_options still stream.
     from droste import OpenAICompatClient
 
     stub_server.reject_stream_options = True
@@ -443,7 +443,7 @@ def test_on_delta_retries_without_stream_options(stub_server):
 
 
 def test_streamed_error_chunk_raises(stub_server):
-    # codex review (#49): an SSE error payload mid-stream must fail the call,
+    # codex review: an SSE error payload mid-stream must fail the call,
     # not return partial text as success.
     import pytest as _pytest
 
@@ -496,7 +496,7 @@ def test_max_tokens_param_self_heals_for_modern_openai(stub_server):
 
 
 def test_retry_preserves_explicit_max_completion_tokens(stub_server):
-    # extra_body wins, even across the max_tokens retry (codex review, #56).
+    # extra_body wins, even across the max_tokens retry (codex review).
     from droste import OpenAICompatClient
 
     stub_server.reject_max_tokens = True
@@ -514,7 +514,7 @@ def test_retry_preserves_explicit_max_completion_tokens(stub_server):
 
 
 def test_subcalls_share_token_param_migration(stub_server):
-    # Subcalls hit the same modern-OpenAI rule (codex review, #56): first
+    # Subcalls hit the same modern-OpenAI rule (codex review): first
     # llm_query migrates, later ones (and batches) go straight to the new param.
     from droste import OpenAICompatSubcallClient, create_execution_context
 
@@ -534,7 +534,7 @@ def test_subcalls_share_token_param_migration(stub_server):
 
 
 def test_concurrent_batch_all_migrate_despite_state_race(stub_server):
-    # codex review (#56, P1): concurrent llm_batch workers all have
+    # codex review (codex review, P1): concurrent llm_batch workers all have
     # max_tokens in flight when the first 400 flips the shared state — every
     # one must still retry, not re-raise.
     from droste import OpenAICompatSubcallClient, create_execution_context
@@ -553,7 +553,7 @@ def test_concurrent_batch_all_migrate_despite_state_race(stub_server):
 
 
 def test_migration_is_per_model(stub_server):
-    # codex review (#56): a modern model's migration must not poison
+    # codex review: a modern model's migration must not poison
     # max_tokens-only models served by the same client.
     from droste import OpenAICompatClient
 

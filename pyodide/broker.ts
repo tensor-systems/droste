@@ -1,4 +1,4 @@
-// broker.ts — host-side credential handling for the A′ sandbox split (#3).
+// broker.ts — host-side credential handling for the A′ sandbox split.
 //
 // In the pre-A′ (legacy) relay, the full request — including the ModelRelay
 // api_key / customer_token — is set as a global INSIDE the untrusted Pyodide

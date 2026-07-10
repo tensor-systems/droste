@@ -1,6 +1,6 @@
 """droste — ask questions over files, folders, and SQLite from the terminal.
 
-The contract (#44): *args that exist are data, the one that doesn't is the
+The contract: *args that exist are data, the one that doesn't is the
 question, no args means here, pipes are data too, and it always tells you
 what it read.*
 

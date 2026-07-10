@@ -1,4 +1,4 @@
-// Tests for the A′ credential broker (#3). Pure functions — no Pyodide/network.
+// Tests for the A′ credential broker. Pure functions — no Pyodide/network.
 // Run: deno test --allow-none broker_test.ts
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {

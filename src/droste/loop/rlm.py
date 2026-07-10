@@ -35,11 +35,11 @@ Last execution output:
 Continue refining. When done, set `answer[\"ready\"] = True`."""
 
 # Fed back instead of an empty string when executed code prints nothing, so the
-# model learns that only stdout is visible (issue #20).
+# model learns that only stdout is visible.
 EMPTY_OUTPUT_NUDGE = "(no output - did you forget to print?)"
 
 # Compact per-iteration truncation budgets for the extract-fallback trajectory
-# summary (issue #21).
+# summary.
 _EXTRACT_CODE_CHARS = 1000
 _EXTRACT_OUTPUT_CHARS = 1500
 _EXTRACT_SUMMARY_CHARS = 60000
@@ -153,7 +153,7 @@ def _extract_final_answer(
     cfg: "RLMConfig",
     context: ExecutionContext,
 ) -> tuple[str, RLMError | None]:
-    """One extract pass (issue #21):
+    """One extract pass:
     when the loop exhausts max_iterations without answer['ready'], make a
     single root-LLM call over a compact trajectory summary so the run returns
     the best answer learnable from the work done, instead of scraps.
@@ -526,7 +526,7 @@ def run_rlm(
                 if isinstance(exec_error, BatchLLMError):
                     details = {"errors": exec_error.errors}
                 if isinstance(exec_error, PolicyError):
-                    # Softened (issue #21): revoke readiness so the gate still
+                    # Softened: revoke readiness so the gate still
                     # gates, but keep the accumulated content — the violation
                     # is fed back as guidance, not punished with a wiped draft.
                     answer["ready"] = False
@@ -635,7 +635,7 @@ def run_rlm(
                         if isinstance(repair_exec_error, BatchLLMError):
                             details = {"errors": repair_exec_error.errors}
                         if isinstance(repair_exec_error, PolicyError):
-                            # Softened (issue #21): see the main handler above.
+                            # Softened: see the main handler above.
                             answer["ready"] = False
                         error = RLMError(
                             type=repair_exec_error.__class__.__name__,
@@ -661,7 +661,7 @@ def run_rlm(
         else:
             final_answer = _best_answer(answer, last_output, last_response)
 
-        # Extract fallback (issue #21): the loop exhausted its iteration budget
+        # Extract fallback: the loop exhausted its iteration budget
         # without answer['ready']. Reaching here means the root client survived
         # every prior call (root failures return early above), so one more
         # extract call is affordable; a trajectory must exist or there is

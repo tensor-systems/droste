@@ -95,7 +95,7 @@ def _describe_files_context(files: list[Any]) -> str:
 
 def describe_context(context: Any) -> str:
     """Describe the `context` variable for the system prompt: type, total size,
-    and a short escaped head preview (issue #20). Dict-of-files contexts get a
+    and a short escaped head preview. Dict-of-files contexts get a
     shape summary (file count, per-file path + text length) instead of a raw
     dump."""
     if context is None:
@@ -166,7 +166,7 @@ class RunnerEnvironment(RLMEnvironment):
             "Context is available in a Python variable named `context`. "
             "If it contains files, expect context['files'] entries with path, name, mime, size, and optional text."
         )
-        # Size + preview signal (issue #20): without it the model reasonably
+        # Size + preview signal: without it the model reasonably
         # assumes the context fits in its own window and prints/counts in
         # Python instead of subcalling. Showing the variable's type,
         # length, and a short preview is the cue that keeps it subcalling.
@@ -536,7 +536,7 @@ def build_data_sources(request: dict[str, Any], ctx: Any = None) -> tuple[list[A
 
 
 # The bounded-read + redaction HTTP-error helpers moved to droste.clients.errors
-# so the BYOK OpenAI-compatible client shares them (#27). Aliased here because
+# so the BYOK OpenAI-compatible client shares them. Aliased here because
 # this module's callers (and its tests) know them by the underscored names.
 _redact_secrets = redact_secrets
 _http_error_excerpt = http_error_excerpt
@@ -567,7 +567,7 @@ class HTTPSubcallClient(SubcallClient):
         self._max_depth = int(max_depth)
         self._context = context
         self._depth = threading.local()
-        # Subcall cost controls (#25): included in each subcall payload when
+        # Subcall cost controls: included in each subcall payload when
         # set; omitted when unset so the server owns the defaults (bounded
         # output + no thinking).
         self._max_output_tokens = int(max_output_tokens or 0)
@@ -910,7 +910,7 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
         session=session,
         session_index=session_index,
     )
-    # Subcall cost controls (#25): optional per-run overrides forwarded in
+    # Subcall cost controls: optional per-run overrides forwarded in
     # every subcall payload; unset values are omitted so the server applies
     # its defaults (bounded output + no thinking for subcalls). An explicit
     # zero/negative budget is rejected: a subcall cannot answer in 0 tokens,

@@ -1,4 +1,4 @@
-"""BYOK client for Anthropic's native Messages API (#57).
+"""BYOK client for Anthropic's native Messages API.
 
 Anthropic's API is not OpenAI-compatible (its compat layer is documented as a
 testing shim), so first-class Claude support gets its own client pair speaking

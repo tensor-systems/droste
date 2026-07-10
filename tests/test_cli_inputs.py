@@ -1,4 +1,4 @@
-"""Input classification and ingestion (#44): the fact-based magic layer.
+"""Input classification and ingestion: the fact-based magic layer.
 
 The contract under test: args that exist are data, the one that doesn't is
 the question, SQLite is detected by magic bytes, ambiguity errors loudly,
@@ -92,7 +92,7 @@ def test_classify_dash_means_stdin():
 
 
 def test_classify_question_with_slash_and_spaces_is_a_question():
-    # codex review (#44): "client/server" inside a spaced question must not
+    # codex review: "client/server" inside a spaced question must not
     # trip the path-typo detector.
     c = classify(["what is the client/server split?"])
     assert c.question == "what is the client/server split?"
@@ -188,7 +188,7 @@ def test_load_no_data_empty_cwd_is_an_error(tmp_path, monkeypatch):
 
 
 def test_load_explicit_empty_dir_errors_instead_of_cwd_fallback(tmp_path, monkeypatch):
-    # codex review (#44): an explicitly-passed dir with nothing readable must
+    # codex review: an explicitly-passed dir with nothing readable must
     # error, never quietly swap in the current directory.
     cwd = tmp_path / "cwd"
     cwd.mkdir()
@@ -219,7 +219,7 @@ def test_load_explicit_dash_with_empty_stdin_errors(tmp_path, monkeypatch):
 
 
 def test_load_budget_counts_utf8_bytes_not_characters(tmp_path):
-    # codex review (#44): 100 é characters = 200 UTF-8 bytes; a 150-byte
+    # codex review: 100 é characters = 200 UTF-8 bytes; a 150-byte
     # budget must reject them even though len(text) == 100.
     f = tmp_path / "accents.txt"
     f.write_text("é" * 100, encoding="utf-8")
@@ -248,7 +248,7 @@ def test_report_line_counts_everything(tmp_path):
 
 
 def test_stdin_read_is_bounded_by_budget(monkeypatch):
-    # codex review (#44): a pipe larger than the budget errors immediately
+    # codex review: a pipe larger than the budget errors immediately
     # instead of buffering the whole stream.
     import io
 
@@ -265,7 +265,7 @@ def test_stdin_read_is_bounded_by_budget(monkeypatch):
 
 
 def test_walk_counts_unreadable_subtrees(tmp_path):
-    # codex review (#44): os.walk scan errors (permissions) are counted, not
+    # codex review: os.walk scan errors (permissions) are counted, not
     # silently swallowed.
     (tmp_path / "ok.md").write_text("fine")
     locked = tmp_path / "locked"
@@ -282,7 +282,7 @@ def test_walk_counts_unreadable_subtrees(tmp_path):
 
 
 def test_stdin_whitespace_only_is_still_data(monkeypatch):
-    # codex review (#44): a pipe of blank lines is data (a question about
+    # codex review: a pipe of blank lines is data (a question about
     # formatting is valid); only a zero-length read means "no stdin".
     import io
 
@@ -298,7 +298,7 @@ def test_stdin_whitespace_only_is_still_data(monkeypatch):
 
 
 def test_load_over_budget_explicit_file_errors_without_reading(tmp_path, monkeypatch):
-    # codex review (#44): the budget error fires on the size pre-check —
+    # codex review: the budget error fires on the size pre-check —
     # before the file is materialized.
     big = tmp_path / "big.txt"
     big.write_text("x" * 1000)
@@ -312,7 +312,7 @@ def test_load_over_budget_explicit_file_errors_without_reading(tmp_path, monkeyp
 
 
 def test_walk_skips_fifos_and_special_files(tmp_path):
-    # codex review (#44): a FIFO with no writer must be skipped, not opened
+    # codex review: a FIFO with no writer must be skipped, not opened
     # (opening it would block forever).
     (tmp_path / "ok.md").write_text("fine")
     os.mkfifo(tmp_path / "pipe.fifo")
@@ -323,7 +323,7 @@ def test_walk_skips_fifos_and_special_files(tmp_path):
 
 
 def test_walk_counts_symlinked_dirs_as_ignored(tmp_path):
-    # codex review (#44): symlinked subdirs are not followed (cycle safety) —
+    # codex review: symlinked subdirs are not followed (cycle safety) —
     # they must be counted, never silently omitted.
     real = tmp_path / "real"
     real.mkdir()
@@ -339,7 +339,7 @@ def test_walk_counts_symlinked_dirs_as_ignored(tmp_path):
 
 
 def test_load_explicit_dash_empty_pipe_errors_even_with_other_data(tmp_path):
-    # codex review (#44): `cat empty | droste - config.yml "q"` must not
+    # codex review: `cat empty | droste - config.yml "q"` must not
     # silently proceed without the requested stdin.
     f = tmp_path / "config.yml"
     f.write_text("key: value")
@@ -351,7 +351,7 @@ def test_load_explicit_dash_empty_pipe_errors_even_with_other_data(tmp_path):
 
 
 def test_load_explicit_empty_dir_errors_even_with_other_inputs(tmp_path):
-    # codex review (#44): `droste empty-dir notes.txt "q"` must error on the
+    # codex review: `droste empty-dir notes.txt "q"` must error on the
     # empty dir, not silently proceed over notes.txt alone.
     f = tmp_path / "notes.txt"
     f.write_text("content")
@@ -363,7 +363,7 @@ def test_load_explicit_empty_dir_errors_even_with_other_inputs(tmp_path):
 
 def test_slow_pipe_producer_is_waited_for(monkeypatch):
     # grep-style: a bare invocation under a pipeline waits for its producer —
-    # slow first bytes are data, not absence (codex review, #53).
+    # slow first bytes are data, not absence (codex review).
     import io
     import os as _os
     import threading

@@ -1,4 +1,4 @@
-"""BYOK client for any OpenAI-compatible chat-completions endpoint (#27).
+"""BYOK client for any OpenAI-compatible chat-completions endpoint.
 
 The engine's HTTP clients in droste_runner speak ModelRelay's root/subcall
 protocol only. This module lets an OSS user run the loop against any endpoint

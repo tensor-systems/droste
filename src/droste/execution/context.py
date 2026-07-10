@@ -29,7 +29,7 @@ class ExecutionContext:
             emit_progress(status)
 
     def emit_event(self, event: dict[str, Any]) -> None:
-        """Emit a structured loop event (#2) via callback if provided, else stderr."""
+        """Emit a structured loop event (#1) via callback if provided, else stderr."""
         if self.config.on_event is not None:
             self.config.on_event(event)
         else:

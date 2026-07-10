@@ -1,4 +1,4 @@
-// A′ credential-boundary E2E (#3): with a real Pyodide interpreter + a mock
+// A′ credential-boundary E2E: with a real Pyodide interpreter + a mock
 // ModelRelay, prove the two security properties the split exists for:
 //   (1) the credential is invisible to sandbox (LLM-authored) code, and
 //   (2) host auth is authoritative — anything the sandbox sends is overridden.

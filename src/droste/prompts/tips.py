@@ -4,7 +4,7 @@ from typing import Literal
 
 TipsProfile = Literal["full", "minimal", "none"]
 
-# Content informed by the two RLM reference implementations (issue #19):
+# Content informed by the two RLM reference implementations:
 # Design principles for the tips below (all original text):
 # - orchestrator-not-solver framing; a batching budget; "just read it if a
 #   search already pins the answer"; worked chunking examples.

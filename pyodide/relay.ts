@@ -167,7 +167,7 @@ json.dumps(_meta)
 // Route Python stdout off the relay's stdout (which carries only the response
 // JSON); silence the package loader's "Loading sqlite3" chatter too. Forward the
 // RLM's structured events (NDJSON lines on Python's stderr — progress plus the
-// loop events from #2: iteration_start/code/output/subcall) to the relay's own
+// loop events from #1: iteration_start/code/output/subcall) to the relay's own
 // stderr so the host can render real-time progress; drop other stderr noise.
 const py = await loadPyodide({
   stdout: () => {},
@@ -221,7 +221,7 @@ function emitEvent(obj: unknown): void {
 // no-rebuild kill switch). --allow-env is already granted (see usage header).
 const STREAM_ENABLED = Deno.env.get("RLM_STREAM") !== "0";
 
-// A′ sandbox split (#3): the untrusted interpreter must never hold the ModelRelay
+// A′ sandbox split: the untrusted interpreter must never hold the ModelRelay
 // credential. The broker strips it from the request the sandbox sees, holds it
 // host-side, and injects the auth header on every ModelRelay call below.
 // RLM_BRIDGE=legacy restores the pre-A′ behavior (credential visible to the

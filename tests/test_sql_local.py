@@ -204,7 +204,7 @@ def test_limit_inside_string_is_not_top_level() -> None:
     assert validate_local_sql(sql, DEFAULT_POLICY).endswith("LIMIT 1000")
 
 
-# --- codex adversarial-review regressions (PR #33) ---------------------------
+# --- codex adversarial-review regressions ---------------------------
 # Each exact bypass where the scanner disagreed with SQLite's lexer.
 
 
