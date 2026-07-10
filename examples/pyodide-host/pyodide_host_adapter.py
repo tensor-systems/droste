@@ -47,28 +47,15 @@ from droste_runner.runner import RunnerEnvironment
 # mock server instead of the real ModelRelay endpoint.
 _DEFAULT_BASE_URL = "https://api.modelrelay.ai/api/v1"
 
-# LocalSqlDataSource.query()'s default policy enforces its per-query timeout
-# with threading.Timer, which needs real OS threads — unavailable under
-# Pyodide/WASM ("RuntimeError: can't start new thread" on the very first
-# query). timeout_ms=0 skips that branch entirely; the host's own wall-clock
-# kill (Deno's process timeout) is the real timeout enforcement here, exactly
-# like RunnerEnvironment(exec_timeout_ms=0, ...) below for exec timeouts.
-# Tracked as #8 — this is a real gap in sql_local.py's Pyodide
-# compatibility, not a permanent design choice.
-_PYODIDE_SAFE_SQL_POLICY = {
-    "dialect": "sqlite",
-    "read_only": True,
-    "limits": {"default_limit": 1000, "max_limit": 10000, "timeout_ms": 0},
-    "aggregations": {
-        "allowed": True,
-        "functions": ["count", "sum", "avg", "min", "max", "total", "group_concat"],
-    },
-    "subqueries": {"allowed": True},
-}
 
-
+# The default SQL policy just works here: LocalSqlDataSource enforces its
+# per-query timeout with threading.Timer, and where thread creation is
+# unavailable (Pyodide/WASM) it degrades to no timer with a RuntimeWarning —
+# the host's own wall-clock kill (Deno's process timeout) is the real
+# enforcement in this substrate, exactly like
+# RunnerEnvironment(exec_timeout_ms=0, ...) below for exec timeouts.
 def _sql_source(db_path: str) -> Any:
-    return local_sql_source_factory({"name": "db", "sqlite_path": db_path, "policy": _PYODIDE_SAFE_SQL_POLICY})
+    return local_sql_source_factory({"name": "db", "sqlite_path": db_path})
 
 
 def build_db_service(
