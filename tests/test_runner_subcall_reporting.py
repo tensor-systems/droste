@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
@@ -105,6 +106,78 @@ def test_concurrent_batch_counts_each_issued_call() -> None:
     results = client.llm_batch([f"p{i}" for i in range(20)])
     assert results == ["ok"] * 20
     assert context.stats.calls_made == 20
+
+
+# --- llm_batch / llm_batch_with_errors share one bounded fan-out (#34).
+
+
+def test_llm_batch_with_errors_bounded_concurrency() -> None:
+    client, _ = _client(max_calls=200)
+    lock = threading.Lock()
+    active = 0
+    peak = 0
+
+    def _request(payload: dict[str, Any]) -> str:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.02)
+            return "ok"
+        finally:
+            with lock:
+                active -= 1
+
+    client._request = _request  # type: ignore[method-assign]
+    results, errors = client.llm_batch_with_errors([f"p{i}" for i in range(30)])
+    assert results == ["ok"] * 30
+    assert errors == []
+    assert peak <= 5
+
+
+def test_llm_batch_with_errors_enforces_prompt_cap() -> None:
+    client, _ = _client(max_calls=200)
+    with pytest.raises(ValueError, match="exceeds max 50"):
+        client.llm_batch_with_errors(["p"] * 51)
+
+
+def test_llm_batch_with_errors_orders_errors_by_index() -> None:
+    client, _ = _client(max_calls=50)
+
+    def _request(payload: dict[str, Any]) -> str:
+        prompt = payload["prompt"]
+        if prompt == "p1":
+            # Finish after p3's failure so completion order != index order.
+            time.sleep(0.05)
+            raise RuntimeError("boom p1")
+        if prompt == "p3":
+            raise RuntimeError("boom p3")
+        return "ok"
+
+    client._request = _request  # type: ignore[method-assign]
+    results, errors = client.llm_batch_with_errors([f"p{i}" for i in range(5)])
+    assert results == ["ok", "", "ok", "", "ok"]
+    assert [e["index"] for e in errors] == [1, 3]
+    assert "boom p1" in str(errors[0]["error"])
+    assert "boom p3" in str(errors[1]["error"])
+
+
+def test_llm_batch_raises_lowest_index_error_unwrapped() -> None:
+    client, _ = _client(max_calls=50)
+
+    class _Boom(RuntimeError):
+        pass
+
+    def _request(payload: dict[str, Any]) -> str:
+        prompt = payload["prompt"]
+        if prompt in ("p2", "p4"):
+            raise _Boom(f"boom {prompt}")
+        return "ok"
+
+    client._request = _request  # type: ignore[method-assign]
+    with pytest.raises(_Boom, match="boom p2"):
+        client.llm_batch([f"p{i}" for i in range(5)])
 
 
 # --- Subcall cost controls: payload includes overrides when set, omits
