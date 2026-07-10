@@ -48,9 +48,10 @@ class LLMClient(Protocol):
         """
         ...
 
-    def batch_responses(self, requests: list[dict[str, Any]]) -> list[str]:
-        """Batch multiple requests for parallel processing."""
-        ...
+    # NOTE deliberately no batch method: the core loop parallelizes subcalls
+    # via SubcallClient.llm_batch, and how THAT is transported (one gateway
+    # batch call vs bounded concurrent fan-out) is each client's own
+    # implementation detail — see the typed-batch design in #21.
 
     def get_model_context_window(self, model: str) -> int | None:
         """Return context window size for model, if known."""

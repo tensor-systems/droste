@@ -33,8 +33,5 @@ class MockLLMClient(LLMClient):
             return response.text, response.usage
         return response.text
 
-    def batch_responses(self, requests: list[dict[str, Any]]) -> list[str]:
-        raise NotImplementedError("batch_responses not implemented in MockLLMClient")
-
     def get_model_context_window(self, model: str) -> int | None:
         return None
