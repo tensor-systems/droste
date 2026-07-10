@@ -1052,7 +1052,10 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
         "trajectory": [
             {
                 "iteration": entry.iteration,
-                "llm_input": entry.llm_input,
+                # The record stores the structured message list; the wire
+                # contract keeps llm_input a string, so serialize as JSON
+                # (parseable, unlike the former Python repr).
+                "llm_input": json.dumps(entry.llm_input),
                 "llm_output": entry.llm_output,
                 "code_executed": entry.code_executed,
                 "execution_result": entry.execution_result,

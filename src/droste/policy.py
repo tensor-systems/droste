@@ -75,6 +75,30 @@ def _len_over_accessor_regex(
     return re.compile(rf"\blen\s*\(\s*({body})\s*\(")
 
 
+def ready_violations(
+    hints: PolicyHints | None,
+    *,
+    answer_ready: bool,
+    calls_made: int,
+    resolved_output: str,
+) -> list[str]:
+    """Ready-time contract checks — the answer-gate siblings of the pre-exec
+    ``contract_violations``. Only a ready answer is gated; violations revoke
+    readiness in the loop, they never wipe accumulated content."""
+    if hints is None or not answer_ready:
+        return []
+
+    violations: list[str] = []
+
+    if hints.semantic and calls_made == 0:
+        violations.append("semantic question must call llm_query/batch_llm_query at least once.")
+
+    if hints.numeric_output and not is_numeric_output(resolved_output):
+        violations.append("output must be a single number (optionally with %).")
+
+    return violations
+
+
 def contract_violations(
     code: str,
     hints: PolicyHints | None,
