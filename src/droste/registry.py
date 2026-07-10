@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 from types import SimpleNamespace
 from typing import Any
 
@@ -40,6 +41,12 @@ EXTRA_METHOD_DISALLOWED = frozenset(
 )
 
 
+# A default source's verbs are flattened into the sandbox's execution
+# globals, where a name like `len` or `print` would shadow the Python
+# builtin for every line of generated code.
+_BUILTIN_NAMES = frozenset(dir(builtins))
+
+
 def validate_extra_method_name(extra: object, source_name: str) -> str:
     """Shared extras-name validation (registry + bridge). Returns the name."""
     extra_name = str(extra)
@@ -53,6 +60,12 @@ def validate_extra_method_name(extra: object, source_name: str) -> str:
             f"extra method {extra_name!r} on source {source_name!r} collides with an "
             "engine verb, reserved global, or protocol attribute (core verbs may not "
             "be re-declared as extras, even when their capability is disabled)"
+        )
+    if extra_name in _BUILTIN_NAMES:
+        raise ValueError(
+            f"extra method {extra_name!r} on source {source_name!r} shadows a Python "
+            "builtin — a flattened default-source verb by that name would hijack "
+            "ordinary generated code"
         )
     return extra_name
 

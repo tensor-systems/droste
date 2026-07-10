@@ -175,6 +175,17 @@ def test_service_validates_declared_extras_at_construction() -> None:
     with pytest.raises(ValueError, match="collides"):
         DataSourceService(ShadowsDescribe())
 
+    # Builtins: a flattened default-source verb named `len` would hijack
+    # every len() call in generated code (codex review).
+    class ShadowsBuiltin(MockDataSource):
+        extra_methods = ("len",)
+
+        def len(self):  # pragma: no cover - never reached  # noqa: A003
+            return 0
+
+    with pytest.raises(ValueError, match="builtin"):
+        DataSourceService(ShadowsBuiltin())
+
 
 def test_bridged_client_rejects_unsafe_advertised_names() -> None:
     """Defense in depth: even if the service-side validation is bypassed
