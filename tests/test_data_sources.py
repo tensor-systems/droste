@@ -126,7 +126,9 @@ def test_duplicate_registration_raises() -> None:
 
 
 def test_wrapper_v1_cannot_be_reregistered() -> None:
-    with pytest.raises(ValueError, match="built in"):
+    # wrapper_v1 now registers through the same mechanism as everything else
+    # (#32), so re-registering it fails as a duplicate like any other type.
+    with pytest.raises(ValueError, match="already registered"):
         register_source_type(
             "wrapper_v1", lambda config, ctx: None, protocol=SOURCE_PROTOCOL_VERSION
         )

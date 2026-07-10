@@ -56,6 +56,8 @@ import warnings
 from dataclasses import dataclass
 from typing import Any
 
+from .registration import SOURCE_PROTOCOL_VERSION, register_source_type
+
 # Read-only policy used when the spec carries no policy: SELECT-only with sane
 # limits, but otherwise permissive (aggregates, joins, subqueries) — it's the
 # user's own local file, and the restrictive knobs exist for locked-down
@@ -441,8 +443,4 @@ def register() -> None:
     requests stay declarative). Spec shape: ``{"type": "sql", "name": ...,
     "sqlite_path": ..., "policy": {...optional overrides...}}``.
     """
-    # Imported lazily: droste_runner already imports droste, and this helper is
-    # the one place the dependency points the other way.
-    from droste_runner.runner import SOURCE_PROTOCOL_VERSION, register_source_type
-
     register_source_type("sql", local_sql_source_factory, protocol=SOURCE_PROTOCOL_VERSION)

@@ -12,7 +12,7 @@ import time
 import traceback
 import urllib.error
 import urllib.request
-from typing import Any, Callable
+from typing import Any
 
 PACKAGE_ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(PACKAGE_ROOT)
@@ -31,6 +31,17 @@ from droste.protocols.llm_client import TokenUsage  # type: ignore
 from droste.protocols.subcall_client import SubcallClient  # type: ignore
 from droste.protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest  # type: ignore
 from droste.registry import DataSourceRegistry  # type: ignore
+from droste.sources.registration import (  # type: ignore
+    SOURCE_PROTOCOL_VERSION,
+    register_source_type,
+    source_factory,
+)
+from droste.sources.registration import (
+    SourceFactory as SourceFactory,  # noqa: F401 - re-export  # type: ignore
+)
+from droste.sources.registration import (  # type: ignore
+    _reset_source_types as _registration_reset_source_types,
+)
 
 
 class OutputBuffer(io.StringIO):
@@ -439,18 +450,9 @@ class WrapperV1DataSource:
 # --- Option C: build-time source-type registration (source unification)
 #
 # Consumers register factories for their own source types at *startup* — never
-# from the request. The request stays declarative ({type, name, ...} — no module
-# paths, no code); the set of runnable types is fixed by the deployment's own
-# entrypoint, so there is no request-controlled import path.
-
-# Version of the DataSource/registration contract. A consumer built against a
-# different contract fails at registration (startup), not subtly at request time.
-# v2 (#10): the engine no longer auto-binds domain verbs (get_messages/
-# get_chats/get_chat_messages) by hasattr — a source declares them via
-# `extra_methods` — and search() lost its chat-archive kwargs. A protocol-1
-# source registering against this engine must fail loudly at startup rather
-# than silently losing its accessors at runtime.
-SOURCE_PROTOCOL_VERSION = 2
+# from the request. The machinery lives in droste.sources.registration (#32)
+# so non-runner embedders can use it too; this module re-exports the names
+# and registers the runner's own built-in wrapper_v1 type through it.
 
 # Version of the runner request/response envelope (#16). REQUIRED in every
 # request — a request without it is refused, so every request on the wire is
@@ -510,57 +512,31 @@ def _check_protocol_version(request: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-# factory(config, ctx) -> DataSource. `config` is the request's declarative
-# per-source entry; `ctx` is the host-supplied edge context (e.g. a live
-# read-only DB handle) threaded through build_data_sources — see §7.3.
-SourceFactory = Callable[[dict[str, Any], Any], Any]
-
-_source_factories: dict[str, SourceFactory] = {}
+def _wrapper_v1_factory(spec: dict[str, Any], ctx: Any = None) -> Any:
+    name = str(spec.get("name") or "").strip()
+    return WrapperV1DataSource(spec, name=name or "wrapper")
 
 
-def register_source_type(
-    stype: str,
-    factory: SourceFactory,
-    *,
-    protocol: int,
-) -> None:
-    """Register a factory for a data source type (process-global, at startup).
+def _register_builtin_source_types() -> None:
+    # The runner's built-in remote source registers through the same
+    # mechanism as everyone else (#32) instead of a _build_one_source
+    # carve-out; attempts to re-register the type fail like any duplicate.
+    if source_factory("wrapper_v1") is None:
+        register_source_type("wrapper_v1", _wrapper_v1_factory, protocol=SOURCE_PROTOCOL_VERSION)
 
-    ``protocol`` is REQUIRED and must be the literal version the registrant
-    was written against — a default would let a stale extension silently
-    self-certify as current, defeating the startup compatibility check
-    (codex review on the v2 bump). In-tree sources pass the imported
-    constant because they are co-versioned with the engine; external
-    registrants must pass the literal they implement.
-    """
-    if protocol != SOURCE_PROTOCOL_VERSION:
-        raise RuntimeError(
-            f"source type {stype!r} was registered against protocol {protocol}; "
-            f"this engine speaks protocol {SOURCE_PROTOCOL_VERSION}"
-        )
-    key = str(stype or "").strip()
-    if not key:
-        raise ValueError("source type must be a non-empty string")
-    if key == "wrapper_v1":
-        raise ValueError("source type 'wrapper_v1' is built in and cannot be re-registered")
-    if key in _source_factories:
-        raise ValueError(f"source type {key!r} is already registered")
-    if not callable(factory):
-        raise TypeError("factory must be callable")
-    _source_factories[key] = factory
+
+_register_builtin_source_types()
 
 
 def _reset_source_types() -> None:
-    """Test hook: clear registered source-type factories."""
-    _source_factories.clear()
+    """Test hook: clear registered source-type factories (builtins stay)."""
+    _registration_reset_source_types()
+    _register_builtin_source_types()
 
 
 def _build_one_source(spec: dict[str, Any], ctx: Any = None) -> Any:
     stype = str(spec.get("type") or "").strip()
-    name = str(spec.get("name") or "").strip()
-    if stype == "wrapper_v1":
-        return WrapperV1DataSource(spec, name=name or "wrapper")
-    factory = _source_factories.get(stype)
+    factory = source_factory(stype)
     if factory is not None:
         source = factory(spec, ctx)
         if source is None:
