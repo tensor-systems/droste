@@ -70,7 +70,9 @@ def _len_over_accessor_regex(
     for ns, verb in pairs:
         alternatives.append(re.escape(ns) + r"\." + re.escape(verb))
     body = "|".join(alternatives)
-    return re.compile(rf"\blen\s*\(\s*({body})\s*\(", re.IGNORECASE)
+    # Case-sensitive: Python identifiers are — len(FETCH(...)) is a distinct
+    # local function, not the source's fetch accessor.
+    return re.compile(rf"\blen\s*\(\s*({body})\s*\(")
 
 
 def contract_violations(

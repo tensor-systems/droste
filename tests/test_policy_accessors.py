@@ -54,6 +54,35 @@ def test_len_over_arbitrary_receiver_is_not_flagged() -> None:
     assert contract_violations(code2, COUNT, namespaced_accessors=(("db", "get"),))
 
 
+def test_accessor_matching_is_case_sensitive() -> None:
+    # Python identifiers are case-sensitive: len(FETCH(...)) calls a distinct
+    # local function, not the source's fetch accessor (codex review).
+    code = 'query("SELECT COUNT(*) FROM t")\nprint(len(FETCH("x")))'
+    assert contract_violations(code, COUNT, data_accessors=("fetch",)) == []
+
+
+def test_flattened_extra_may_not_overwrite_another_sources_namespace() -> None:
+    # A default source's flattened verb must never replace env["<other
+    # source>"] (codex review).
+    import pytest
+
+    from droste.registry import DataSourceRegistry
+    from droste.testing import MockDataSource
+
+    class Archive(MockDataSource):
+        def name(self):
+            return "archive"
+
+    class Default(MockDataSource):
+        extra_methods = ("archive",)
+
+        def archive(self):
+            return []
+
+    with pytest.raises(ValueError, match="overwrite a registered source"):
+        DataSourceRegistry([Archive(), Default()], default_source_name="mock").globals()
+
+
 def test_static_fallback_when_no_accessors_supplied() -> None:
     # Callers that pass no accessor names keep the historical generic check.
     code = 'query("SELECT COUNT(*) FROM t")\nprint(len(search("x")))'

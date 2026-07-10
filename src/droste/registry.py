@@ -85,6 +85,12 @@ class DataSourceRegistry:
     def globals(self) -> dict[str, Any]:
         env: dict[str, Any] = {}
         seen: set[str] = set()
+        # All source names up front: a flattened default-source verb (core or
+        # extra) must never overwrite another source's namespace object —
+        # e.g. a default source with extra_methods=("archive",) next to a
+        # source named "archive" would silently replace env["archive"] with
+        # a bound method.
+        all_source_names = {s.name() for s in self._sources}
         for source in self._sources:
             name = source.name()
             if name in RESERVED_NAMES:
@@ -143,6 +149,11 @@ class DataSourceRegistry:
 
             if self._default_source_name == name:
                 for key, value in ns.items():
+                    if key in all_source_names:
+                        raise ValueError(
+                            f"flattened verb {key!r} of default source {name!r} would "
+                            "overwrite a registered source's namespace"
+                        )
                     env[key] = value
 
         if self._default_source_name is not None and self._default_source_name not in seen:
