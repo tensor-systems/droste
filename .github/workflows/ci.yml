@@ -85,12 +85,15 @@ jobs:
           path: ~/.cache/deno
           key: deno-${{ runner.os }}-pyodide-0.29.4
       - name: Substrate tests (unit + real-Pyodide integration)
-        # cdn.jsdelivr.net: the npm pyodide package unvendors stdlib sqlite3;
-        # loadPackage("sqlite3") fetches the wheel from the CDN on first run
-        # and caches it inside the pyodide npm dir (i.e. into DENO_DIR, so
-        # the cache step above persists it and the e2e step below reads it
-        # from disk with no net of its own).
-        run: deno test --allow-read --allow-env --allow-ffi --allow-net=cdn.jsdelivr.net pyodide/
+        # cdn.jsdelivr.net + write to the deno cache: the npm pyodide package
+        # unvendors stdlib sqlite3; loadPackage("sqlite3") fetches the wheel
+        # from the CDN on first run and writes it inside the pyodide npm dir
+        # (under DENO_DIR, so the cache step above persists it and the e2e
+        # step below reads it from disk with no net or write of its own).
+        run: >-
+          deno test --allow-read --allow-env --allow-ffi
+          --allow-net=cdn.jsdelivr.net --allow-write="$HOME/.cache/deno"
+          pyodide/
       - name: Relay E2E (spawns the real relay.ts subprocess)
         run: >-
           deno test --allow-run --allow-read --allow-write
