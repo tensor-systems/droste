@@ -202,7 +202,7 @@ an independent kill switch / bisect — the four combinations of `RLM_BRIDGE` ×
 | Flag | Default | Set it to... | ...to get |
 |------|---------|---------------|-----------|
 | `RLM_BRIDGE` | (unset) | `legacy` | Pre-A′-1 behavior: the ModelRelay credential is a visible global inside the untrusted REPL interpreter, which assembles its own auth header. Kill switch only — the split is one `host_fetch` call site catching a real design mistake, not a feature. |
-| `RLM_DB_SERVICE` | on | `0` | Single-interpreter mode: the untrusted REPL interpreter mounts the DB directly (`db_path` in the sandbox request), instead of routing through the trusted DB-service interpreter over a bridge call. |
+| `RLM_DB_SERVICE` | on | `0` | Single-interpreter mode: the untrusted REPL interpreter mounts the DB directly (`db_path` in the sandbox request), instead of routing through the trusted DB-service interpreter over a bridge call. Debugging kill switch only — it mounts the whole DB directory read-write into the untrusted interpreter (see Known gaps, #7) and emits a WARNING event on every activation. |
 | `RLM_STREAM` | on | `0` | Legacy unary ModelRelay call (no SSE), for when NDJSON streaming from `/responses` is suspected of causing an issue. |
 
 ## Security model
@@ -309,22 +309,19 @@ Roughly three tiers of coverage:
 ## Known gaps
 
 - **`RLM_DB_SERVICE=0` mounts the whole data directory into the untrusted
-  interpreter, not just the DB (#7).** `relay.ts`'s legacy-mode branch
-  (`py.mountNodeFS("/data", dbDir)`) mounts the corpus DB's *parent directory*
-  wholesale — no narrowing to just the DB files. (Pyodide's
-  `mountNodeFS(path, hostPath)` has no read-only option at all, so narrowing to
-  individual files, or copying just those files into a scratch directory first,
-  would be the only available mitigation.) If that directory also holds
-  application state or config, LLM-generated code running in this mode could
-  read or write those siblings directly via plain `open()` calls — an opened DB
-  file's own read-only mode protects only the DB, not the sibling files sharing
-  the mount. This is exactly the risk the original spike flagged as a "do before
-  shipping" item; it was never actually implemented — superseded instead by
-  defaulting `RLM_DB_SERVICE` to on (the DB-service split removes the DB mount
-  from the untrusted interpreter entirely, a strictly stronger fix), but the
-  legacy path itself is still open. Not triggered by default; only reachable via
-  the `RLM_DB_SERVICE=0` kill switch. This is a `relay.ts` gap in its own
-  legacy mode, not a droste-package one.
+  interpreter — deliberate, documented, loud (#7, decided 2026-07-10).**
+  `relay.ts`'s legacy-mode branch (`py.mountNodeFS("/data", dbDir)`) mounts
+  the corpus DB's *parent directory* wholesale; `mountNodeFS` has no
+  read-only or per-file option, so sibling files (app config, session state)
+  are readable and writable by LLM-generated code in this mode. The decision:
+  this stays unhardened. The default (`RLM_DB_SERVICE` on) removes the mount
+  from the untrusted interpreter entirely — a strictly stronger fix — and the
+  rejected mitigations cost more than the kill switch is worth (a scratch-dir
+  copy means copying a multi-GB corpus per run; hardlinks add a new
+  `--allow-write` requirement to every host's spawn contract). Legacy mode is
+  a debugging bisect for bridge/DB-service regressions only, never a shipping
+  configuration, and every activation now emits a WARNING progress event so
+  it cannot be enabled silently.
 - **`sql_local.py`'s per-query `timeout_ms` is unenforced under Pyodide (#8,
   fixed to degrade).** The timeout is a `threading.Timer`; where thread
   creation is unavailable the source now skips the timer with a
