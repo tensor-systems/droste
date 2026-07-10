@@ -114,6 +114,25 @@ def test_source_declared_extra_methods_forward_and_reach_the_registry() -> None:
     assert env["mock"].get_messages() == [{"text": "hi"}]
 
 
+def test_extra_method_may_not_shadow_a_disabled_core_verb() -> None:
+    """Transport parity (codex review on #10): the bridge dispatches core
+    names before extras, so an extra shadowing a DISABLED core verb would
+    work in-process but be rejected across the bridge. The registry must
+    reject it against the full engine vocabulary, not just enabled verbs."""
+    import pytest
+
+    class ShadowingSource(MockDataSource):
+        extra_methods = ("query",)
+
+        def capabilities(self):
+            caps = dict(super().capabilities())
+            caps["sql"] = False  # `query` core verb disabled...
+            return caps
+
+    with pytest.raises(ValueError, match="collides with an engine verb"):
+        DataSourceRegistry([ShadowingSource()]).globals()
+
+
 def test_extra_methods_forward_like_any_other_optional_verb() -> None:
     """A host's own optional verb (e.g. a host app's get_retrieved_guids(), not part
     of the DataSource Protocol or droste's own _OPTIONAL_METHODS) round-trips

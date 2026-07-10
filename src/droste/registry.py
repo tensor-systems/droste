@@ -10,6 +10,26 @@ RESERVED_NAMES = frozenset(
     {"answer", "context", "llm_query", "llm_batch", "batch_llm_query", "llm_query_batched"}
 )
 
+# The engine's own verb vocabulary — capability-gated core verbs plus the
+# generic hasattr-gated optionals. extra_methods may not reuse ANY of these,
+# enabled or not: the bridge's dispatch checks core names before extras, so
+# an extra that shadows a disabled core verb would work in-process but be
+# rejected across the bridge — the same source must behave identically on
+# every transport.
+CORE_VERB_NAMES = frozenset(
+    {
+        "search",
+        "query",
+        "get",
+        "get_recent",
+        "get_schema",
+        "get_stats",
+        "find",
+        "content",
+        "sample",
+    }
+)
+
 
 class DataSourceRegistry:
     """Registry for composing data sources into environment globals."""
@@ -68,9 +88,11 @@ class DataSourceRegistry:
                     raise ValueError(
                         f"extra method {extra_name!r} on source {name!r} shadows a reserved global"
                     )
-                if extra_name in ns:
+                if extra_name in CORE_VERB_NAMES or extra_name in ns:
                     raise ValueError(
-                        f"extra method {extra_name!r} on source {name!r} collides with a core verb"
+                        f"extra method {extra_name!r} on source {name!r} collides with an "
+                        "engine verb (core verbs may not be re-declared as extras, even "
+                        "when their capability is disabled)"
                     )
                 fn = getattr(source, extra_name, None)
                 if not callable(fn):
