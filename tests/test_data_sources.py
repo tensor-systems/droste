@@ -196,7 +196,10 @@ def test_main_rejects_adapter_module_from_request_file(monkeypatch, tmp_path) ->
     import droste_runner.runner as runner_mod
 
     request_path = tmp_path / "request.json"
-    request_path.write_text('{"adapter_module": "evil.module"}')
+    # protocol_version present so the request reaches the security check —
+    # the version gate deliberately runs first (see test_rlm_runner_adapter's
+    # test_main_version_gate_precedes_adapter_module_rejection).
+    request_path.write_text('{"protocol_version": 1, "adapter_module": "evil.module"}')
     monkeypatch.setenv("RLM_RUNNER_REQUEST_PATH", str(request_path))
     with pytest.raises(RuntimeError, match="not accepted from the request file"):
         runner_mod.main()
