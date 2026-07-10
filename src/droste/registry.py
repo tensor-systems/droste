@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import keyword
 from types import SimpleNamespace
 from typing import Any
 
@@ -50,6 +51,11 @@ _BUILTIN_NAMES = frozenset(dir(builtins))
 def validate_extra_method_name(extra: object, source_name: str) -> str:
     """Shared extras-name validation (registry + bridge). Returns the name."""
     extra_name = str(extra)
+    if not extra_name.isidentifier() or keyword.iskeyword(extra_name):
+        raise ValueError(
+            f"extra method {extra_name!r} on source {source_name!r} is not a valid "
+            "Python identifier — generated code could never call it"
+        )
     if extra_name.startswith("_"):
         raise ValueError(
             f"extra method {extra_name!r} on source {source_name!r} may not begin "

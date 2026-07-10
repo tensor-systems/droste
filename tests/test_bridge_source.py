@@ -186,6 +186,16 @@ def test_service_validates_declared_extras_at_construction() -> None:
     with pytest.raises(ValueError, match="builtin"):
         DataSourceService(ShadowsBuiltin())
 
+    # Non-identifiers and keywords: generated code could never call
+    # `fetch-page()` or `class()` — reject at declaration (codex review).
+    for bad_name in ("fetch-page", "", "class"):
+
+        class BadName(MockDataSource):
+            extra_methods = (bad_name,)
+
+        with pytest.raises(ValueError, match="not a valid Python identifier"):
+            DataSourceService(BadName())
+
 
 def test_bridged_client_rejects_unsafe_advertised_names() -> None:
     """Defense in depth: even if the service-side validation is bypassed
