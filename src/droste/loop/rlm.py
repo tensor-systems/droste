@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 from ..exceptions import BatchLLMError, PolicyError, RLMError, SandboxError
@@ -300,6 +301,21 @@ def run_rlm(
     env_globals.setdefault("llm_query_batched", subcalls.llm_batch)
     _apply_batch_error_guard(subcalls, env_globals)
 
+    # The data-accessor names actually bound in this sandbox — flattened
+    # default-source verbs plus every namespaced source's verbs, including
+    # host-declared extras — so the count contract's len()-over-accessor
+    # check enforces against whatever THIS environment exposes (#10), not a
+    # hardcoded verb list.
+    _llm_names = {"llm_query", "llm_batch", "batch_llm_query", "llm_query_batched"}
+    data_accessor_names: set[str] = set()
+    for _key, _value in env_globals.items():
+        if _key in _llm_names:
+            continue
+        if callable(_value):
+            data_accessor_names.add(_key)
+        elif isinstance(_value, SimpleNamespace):
+            data_accessor_names.update(k for k, v in vars(_value).items() if callable(v))
+
     if system_prompt is None:
         prompt_additions = environment.prompt_fragment()
         if system_prompt_additions:
@@ -464,7 +480,7 @@ def run_rlm(
 
             try:
                 if cfg.enforce_contract:
-                    violations = contract_violations(code, cfg.policy_hints)
+                    violations = contract_violations(code, cfg.policy_hints, data_accessor_names)
                     if violations:
                         raise PolicyError("Policy violation: " + " | ".join(violations))
 
@@ -585,7 +601,9 @@ def run_rlm(
                     )
                     try:
                         if cfg.enforce_contract:
-                            violations = contract_violations(repaired_code, cfg.policy_hints)
+                            violations = contract_violations(
+                                repaired_code, cfg.policy_hints, data_accessor_names
+                            )
                             if violations:
                                 raise PolicyError("Policy violation: " + " | ".join(violations))
 

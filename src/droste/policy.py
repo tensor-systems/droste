@@ -46,7 +46,22 @@ def is_numeric_output(text: str) -> bool:
     return bool(NUMERIC_OUTPUT_REGEX.match(str(text).strip()))
 
 
-def contract_violations(code: str, hints: PolicyHints | None) -> list[str]:
+def _len_over_accessor_regex(data_accessors: Iterable[str]) -> re.Pattern[str]:
+    """`len(<accessor>(...))` detector over the verbs actually bound in the
+    sandbox — including host-declared extras — so the count contract stays
+    enforced no matter what a source names its accessors (#10). Falls back
+    to the static generic verbs when the caller supplies none. The optional
+    `\\w+\\.` prefix also catches namespaced calls (`len(db.search(...))`)."""
+    names = sorted({str(n) for n in data_accessors if n}) or ["search", "get_recent"]
+    alternation = "|".join(re.escape(n) for n in names)
+    return re.compile(rf"\blen\s*\(\s*(?:\w+\.)?({alternation})\s*\(", re.IGNORECASE)
+
+
+def contract_violations(
+    code: str,
+    hints: PolicyHints | None,
+    data_accessors: Iterable[str] = (),
+) -> list[str]:
     if hints is None:
         return []
 
@@ -64,9 +79,10 @@ def contract_violations(code: str, hints: PolicyHints | None) -> list[str]:
                 "Count/percentage question must use SQL aggregates via query(), "
                 "e.g. SELECT COUNT(*). Do not compute counts with len() over accessor results."
             )
-        elif LEN_SEARCH_REGEX.search(code):
+        elif _len_over_accessor_regex(data_accessors).search(code):
             violations.append(
-                "Do not compute counts with len(search()/get_recent()). Use SQL COUNT() in query()."
+                "Do not compute counts with len() over data-accessor results. "
+                "Use SQL COUNT() in query()."
             )
 
     return violations

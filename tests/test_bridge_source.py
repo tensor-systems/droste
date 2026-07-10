@@ -114,6 +114,32 @@ def test_source_declared_extra_methods_forward_and_reach_the_registry() -> None:
     assert env["mock"].get_messages() == [{"text": "hi"}]
 
 
+def test_service_validates_declared_extras_at_construction() -> None:
+    """Transport parity (codex review on #10): the registry raises a config
+    error for a bad declared extra; the service must too — not advertise it
+    through describe() and fail with a late TypeError inside a dispatch."""
+    import pytest
+
+    class DeclaredNotCallable(MockDataSource):
+        extra_methods = ("stats_blob",)
+        stats_blob = {"not": "callable"}
+
+    with pytest.raises(ValueError, match="is not a callable"):
+        DataSourceService(DeclaredNotCallable())
+
+    class DeclaredMissing(MockDataSource):
+        extra_methods = ("nonexistent_verb",)
+
+    with pytest.raises(ValueError, match="is not a callable"):
+        DataSourceService(DeclaredMissing())
+
+    class ParamNotCallable(MockDataSource):
+        weird = 42
+
+    with pytest.raises(ValueError, match="is not a callable"):
+        DataSourceService(ParamNotCallable(), extra_methods=("weird",))
+
+
 def test_extra_method_may_not_shadow_a_disabled_core_verb() -> None:
     """Transport parity (codex review on #10): the bridge dispatches core
     names before extras, so an extra shadowing a DISABLED core verb would

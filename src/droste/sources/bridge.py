@@ -75,6 +75,24 @@ class DataSourceService:
         # machinery; describe() reports them separately so BridgeDataSource
         # can re-expose `extra_methods` to the in-process registry.
         declared = tuple(getattr(source, "extra_methods", ()) or ())
+        # Validate at construction, matching the registry's strictness so the
+        # same source behaves identically on every transport: a source that
+        # DECLARES an extra must implement it as a callable (config error
+        # here, not a late TypeError inside a dispatched call); a host-passed
+        # extra may be absent (speculative allowlisting is tested behavior)
+        # but must be callable when present.
+        for extra in declared:
+            if not callable(getattr(source, str(extra), None)):
+                raise ValueError(
+                    f"extra method {str(extra)!r} declared by source "
+                    f"{source.name()!r} is not a callable"
+                )
+        for extra in extra_methods:
+            attr = getattr(source, str(extra), None)
+            if attr is not None and not callable(attr):
+                raise ValueError(
+                    f"extra method {str(extra)!r} on source {source.name()!r} is not a callable"
+                )
         self._extra_names: tuple[str, ...] = tuple(dict.fromkeys((*declared, *extra_methods)))
         self._optional_names: tuple[str, ...] = _OPTIONAL_METHODS + self._extra_names
         self._optional: set[str] = {name for name in self._optional_names if hasattr(source, name)}
