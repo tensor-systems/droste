@@ -37,6 +37,12 @@ If you're reading this to embed droste elsewhere: everything in "the substrate"
 is yours to reuse as-is; write one adapter module of your own and point
 `relay.ts` at it.
 
+**Getting the Deno half:** every tagged release attaches
+`droste-relay-vX.Y.Z.tar.gz` (these `.ts` files + this README + a
+`DROSTE_VERSION` stamp). Consume that artifact in your build — not a git
+checkout — and match its version to the `droste` wheel you install: the
+relay's request contract and `droste.substrates.pyodide` evolve together.
+
 ## The substrate (droste-general)
 
 Deno-side modules, all ModelRelay-aware but host-data-layer-agnostic:
