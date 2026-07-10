@@ -139,6 +139,21 @@ def test_service_validates_declared_extras_at_construction() -> None:
     with pytest.raises(ValueError, match="is not a callable"):
         DataSourceService(ParamNotCallable(), extra_methods=("weird",))
 
+    class PresentButNone(MockDataSource):
+        maybe_verb = None
+
+    with pytest.raises(ValueError, match="is not a callable"):
+        DataSourceService(PresentButNone(), extra_methods=("maybe_verb",))
+
+    # Same vocabulary rule as the registry (transport parity): an extra may
+    # not reuse an engine verb, even a disabled one — the bridge dispatches
+    # core names first, so it would be advertised yet unreachable.
+    class ShadowsCoreVerb(MockDataSource):
+        extra_methods = ("query",)
+
+    with pytest.raises(ValueError, match="collides with an engine verb"):
+        DataSourceService(ShadowsCoreVerb())
+
 
 def test_extra_method_may_not_shadow_a_disabled_core_verb() -> None:
     """Transport parity (codex review on #10): the bridge dispatches core

@@ -100,6 +100,37 @@ class RLMResult:
 
 ProgressCallback = Any
 
+_LLM_GLOBAL_NAMES = frozenset({"llm_query", "llm_batch", "batch_llm_query", "llm_query_batched"})
+
+
+def _collect_data_accessors(
+    env_globals: dict[str, Any],
+) -> tuple[set[str], set[tuple[str, str]]]:
+    """Data-accessor names for the count contract's len() check (#10).
+
+    Provenance-based, not "every callable global": a flattened name counts
+    as a data accessor only when the SAME callable also lives inside a
+    source namespace (registry flattening binds identical objects in both
+    places), so a custom environment's unrelated helpers (`parse`, ...)
+    are never misclassified. Namespaced verbs are returned as
+    (namespace, verb) pairs and match only under their own namespace.
+    Environments with no source namespaces yield nothing, and the policy
+    layer falls back to its static generic verbs."""
+    namespaced: set[tuple[str, str]] = set()
+    member_ids: set[int] = set()
+    for key, value in env_globals.items():
+        if isinstance(value, SimpleNamespace):
+            for verb, fn in vars(value).items():
+                if callable(fn):
+                    namespaced.add((key, verb))
+                    member_ids.add(id(fn))
+    flat = {
+        key
+        for key, value in env_globals.items()
+        if key not in _LLM_GLOBAL_NAMES and callable(value) and id(value) in member_ids
+    }
+    return flat, namespaced
+
 
 def _execution_output(result: ExecutionResult | str) -> str:
     if isinstance(result, ExecutionResult):
@@ -301,24 +332,7 @@ def run_rlm(
     env_globals.setdefault("llm_query_batched", subcalls.llm_batch)
     _apply_batch_error_guard(subcalls, env_globals)
 
-    # The data-accessor names actually bound in this sandbox — flattened
-    # default-source verbs (matched unqualified) and every namespaced
-    # source's verbs (matched only under their own namespace), including
-    # host-declared extras — so the count contract's len()-over-accessor
-    # check enforces against whatever THIS environment exposes (#10), not a
-    # hardcoded verb list, and never against arbitrary receivers.
-    _llm_names = {"llm_query", "llm_batch", "batch_llm_query", "llm_query_batched"}
-    data_accessor_names: set[str] = set()
-    namespaced_accessor_pairs: set[tuple[str, str]] = set()
-    for _key, _value in env_globals.items():
-        if _key in _llm_names:
-            continue
-        if callable(_value):
-            data_accessor_names.add(_key)
-        elif isinstance(_value, SimpleNamespace):
-            namespaced_accessor_pairs.update(
-                (_key, k) for k, v in vars(_value).items() if callable(v)
-            )
+    data_accessor_names, namespaced_accessor_pairs = _collect_data_accessors(env_globals)
 
     if system_prompt is None:
         prompt_additions = environment.prompt_fragment()

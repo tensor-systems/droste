@@ -31,6 +31,7 @@ import json
 from typing import Any, Callable
 
 from ..protocols.data_source import DataSource
+from ..registry import CORE_VERB_NAMES, RESERVED_NAMES
 
 # Core protocol verbs, gated by the corresponding capabilities() flag (mirrors
 # registry.py's own gating, so a method the registry would never bind into the
@@ -85,6 +86,16 @@ class DataSourceService:
         # here, not a late TypeError inside a dispatched call); a host-passed
         # extra may be absent (speculative allowlisting is tested behavior)
         # but must be callable when present.
+        for extra in (*declared, *extra_methods):
+            # Same vocabulary rule as the registry (transport parity): an
+            # extra may not reuse an engine verb — _dispatch checks core
+            # names first, so a shadowing extra would be advertised by
+            # describe() yet unreachable through the bridge.
+            if str(extra) in CORE_VERB_NAMES or str(extra) in RESERVED_NAMES:
+                raise ValueError(
+                    f"extra method {str(extra)!r} on source {source.name()!r} collides "
+                    "with an engine verb or reserved global"
+                )
         for extra in declared:
             if not callable(getattr(source, str(extra), None)):
                 raise ValueError(

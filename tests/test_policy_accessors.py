@@ -58,3 +58,31 @@ def test_static_fallback_when_no_accessors_supplied() -> None:
     # Callers that pass no accessor names keep the historical generic check.
     code = 'query("SELECT COUNT(*) FROM t")\nprint(len(search("x")))'
     assert contract_violations(code, COUNT)
+
+
+def test_accessor_collection_uses_namespace_provenance() -> None:
+    # A custom environment's unrelated helper callables must not be
+    # classified as data accessors (codex review): only names whose SAME
+    # callable also lives inside a source namespace count as flattened
+    # accessors.
+    from types import SimpleNamespace
+
+    from droste.loop.rlm import _collect_data_accessors
+
+    def search(q):
+        return []
+
+    def parse(x):  # an env helper, not a data accessor
+        return x
+
+    env = {
+        "db": SimpleNamespace(search=search, query=lambda s: []),
+        "search": search,  # flattened default verb — same object as db.search
+        "parse": parse,  # helper with no namespace provenance
+        "llm_query": lambda p: "",
+        "answer": {"content": "", "ready": False},
+    }
+    flat, namespaced = _collect_data_accessors(env)
+    assert flat == {"search"}
+    assert ("db", "search") in namespaced and ("db", "query") in namespaced
+    assert "parse" not in flat
