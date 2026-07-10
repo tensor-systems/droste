@@ -267,9 +267,9 @@ def _complete_with_token_param_migration(
     Modern OpenAI models 400 on ``max_tokens`` ("use max_completion_tokens");
     the wider compat ecosystem (Google, Ollama, vLLM) speaks ``max_tokens``.
     On that specific 400 the param migrates and ``param_state`` remembers it
-    **per model** (one client can serve mixed models via batch_responses;
-    a modern model must not poison max_tokens-only models on the same
-    endpoint). ``extra_body`` wins: a caller-set max_completion_tokens
+    **per model** (one client can serve mixed models across concurrent
+    subcall workers; a modern model must not poison max_tokens-only models
+    on the same endpoint). ``extra_body`` wins: a caller-set max_completion_tokens
     survives. The retry decision keys off the PAYLOAD, not the state —
     concurrent batch workers race the state flip.
     """
@@ -387,25 +387,6 @@ class OpenAICompatClient:
         if return_usage:
             return result, _usage_from(data)
         return result
-
-    def batch_responses(self, requests: list[dict[str, Any]]) -> list[str]:
-        results: list[str] = []
-        for request in requests:
-            raw_max = request.get("max_tokens")
-            # Preserve an explicit 0 (opt-out); only a missing value defaults.
-            max_tokens = 4096 if raw_max in (None, "") else int(raw_max)
-            response = self.responses_create(
-                request.get("messages") or [],
-                model=str(request.get("model") or ""),
-                max_tokens=max_tokens,
-                temperature=(
-                    float(request["temperature"])
-                    if request.get("temperature") is not None
-                    else None
-                ),
-            )
-            results.append(str(response))
-        return results
 
     def get_model_context_window(self, model: str) -> int | None:
         return None

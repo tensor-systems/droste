@@ -332,18 +332,15 @@ Roughly three tiers of coverage:
   policy works. But no in-interpreter timeout exists in that substrate — the
   host's wall-clock kill is the only enforcement (see "Writing a host
   adapter", Gotcha 2).
-- **#6** — droste's own `LLMClient` protocol (`protocols/llm_client.py`)
-  still declares a stale `batch_responses(requests) -> list[str]` method that
-  droste's own core loop never calls (`subcalls.llm_batch` is the real path).
-  The actually-used batch contract, `batch_responses_typed(...) -> BatchResponse`,
-  is a ModelRelay-specific extension (only ModelRelay, among droste's clients,
-  has a real server-side batch endpoint). As of the adapter-agnostic split it no longer
-  lives on the substrate's shared `BridgedLLMClient` at all — it belongs on a
-  host adapter's own client subclass, in the host's repo. That resolves the
-  worse half of the awkwardness: the batch method is a genuine host extension,
-  not a host-specific method squatting on droste's general client. What remains
-  is only that droste's *public* protocol still advertises the stale
-  `batch_responses` it never uses. Tracked, not yet resolved.
+- **Typed server-side batch is a host extension today (#21).** droste's
+  `LLMClient` protocol deliberately has no batch method (#6 removed the stale,
+  never-called `batch_responses`): the loop parallelizes via
+  `subcalls.llm_batch`, and how that is transported is each client's own
+  implementation. The typed `batch_responses_typed(...) -> BatchResponse`
+  contract against a real server-side batch endpoint lives on host adapters'
+  own client subclasses; #21 designs its first-class home (one wire call on
+  batch-capable gateway clients — no fallbacks, no capability sniffing in the
+  loop).
 - **Extract-fallback failure rate is unknown.** When `max_iterations` is
   exhausted without `answer["ready"]`, one more LLM call tries to synthesize a
   best-effort answer; a failure there now surfaces as a structured

@@ -332,26 +332,6 @@ class AnthropicClient:
             return result, _usage_from(data)
         return result
 
-    def batch_responses(self, requests: list[dict[str, Any]]) -> list[str]:
-        results: list[str] = []
-        for request in requests:
-            raw_max = request.get("max_tokens")
-            # Preserve an explicit 0 only as "use the default" — the API
-            # requires a positive max_tokens.
-            max_tokens = DEFAULT_ANTHROPIC_MAX_TOKENS if raw_max in (None, "", 0) else int(raw_max)
-            response = self.responses_create(
-                request.get("messages") or [],
-                model=str(request.get("model") or ""),
-                max_tokens=max_tokens,
-                temperature=(
-                    float(request["temperature"])
-                    if request.get("temperature") is not None
-                    else None
-                ),
-            )
-            results.append(str(response))
-        return results
-
     def get_model_context_window(self, model: str) -> int | None:
         return None
 

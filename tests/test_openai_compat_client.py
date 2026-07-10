@@ -377,14 +377,6 @@ def test_message_content_null_without_tool_calls_is_empty():
     assert _message_content(data, label="root") == ""
 
 
-def test_batch_responses_preserves_explicit_zero_max_tokens(stub_server):
-    """max_tokens=0 is an explicit opt-out and must not be coerced to the
-    default in the batch path (codex review)."""
-    client = OpenAICompatClient(base_url=stub_server.base_url, api_key="k", model="m")
-    client.batch_responses([{"messages": [{"role": "user", "content": "hi"}], "max_tokens": 0}])
-    assert "max_tokens" not in stub_server.requests[0]
-
-
 # --- root streaming (on_delta) ---
 
 
