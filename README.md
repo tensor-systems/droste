@@ -208,6 +208,10 @@ flowchart LR
 ```
 
 **Runner Inputs**
+- `protocol_version`: **required** on every request (currently `1`) — a
+  missing or mismatched version gets a structured refusal, so hosts detect
+  incompatibility instead of failing on a missing field. See
+  [docs/architecture.md](docs/architecture.md) for the compatibility rules.
 - `root_endpoint` + `subcall_endpoint` + `token`: required for HTTP-backed runs.
 - `adapter_module`: optional Python module path to override the runner entirely.
 
@@ -221,6 +225,26 @@ Implement these to integrate with your infrastructure:
 - **`LLMClient`** - Chat completion interface for the root LLM
 - **`SubcallClient`** - Provides `llm_query()` and `llm_batch()` for sub-LLM calls
 - **`DataSource`** - Optional data source integration
+
+#### Data sources are domain-blind
+
+`DataSource` carries core verbs only — `query`, `search`, `get`,
+`get_recent`, `get_schema`, `get_stats`, plus the generic optionals
+`find`/`content`/`sample`. The engine knows nothing about any product's
+data shape. A source with domain-specific verbs declares them itself:
+
+```python
+class MessageArchiveSource:
+    extra_methods = ("get_messages", "get_chats")  # your verbs, your names
+    ...
+```
+
+Exactly those callables are exposed to the sandbox — validated against
+engine verbs, Python builtins, and reserved names — and the declaration
+works identically in-process and across the Pyodide bridge. Registrations
+via `register_source_type` must pass the source-protocol version they
+implement (`protocol=2` today); a stale extension fails loudly at startup
+instead of silently losing its verbs.
 
 #### Configuration
 

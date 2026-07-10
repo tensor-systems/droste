@@ -50,7 +50,16 @@ A source declares capabilities (`{sql, schema}`, `{search}`, ...) and
 becomes a named variable in the REPL (`db.query("SELECT ...")`). Requests
 stay declarative: they can name a registered type and its config, never code
 to import. The registry rejects reserved names and protocol mismatches
-(`SOURCE_PROTOCOL_VERSION`).
+(`SOURCE_PROTOCOL_VERSION`; registrants pass the version they implement).
+
+The protocol is **domain-blind**: core verbs only, plus the generic
+optionals `find`/`content`/`sample`. Domain-specific verbs are declared by
+the source itself via an `extra_methods` attribute (a tuple of method
+names); the registry binds exactly those callables into the sandbox —
+validated against engine verbs, reserved globals, Python builtins, and
+other sources' names — and the bridge's `DataSourceService` honors the
+same declaration, so a source behaves identically in-process and across
+the Pyodide bridge.
 
 The bundled SQLite source is local-mode: SELECT-only policy gate (single
 statement, masked-identifier keyword scanning, LIMIT injection, row caps,
