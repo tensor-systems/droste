@@ -197,6 +197,22 @@ if (DB_SERVICE) {
   delete request.db_path;
   delete request.contacts_db_path;
 } else {
+  // DELIBERATE (#7, decided 2026-07-10): legacy mode mounts the DB's whole
+  // parent directory READ-WRITE into the untrusted interpreter — mountNodeFS
+  // has no read-only or per-file option, so any sibling file in that
+  // directory (app config, session state) is readable and writable by
+  // LLM-generated code. The alternatives were rejected: copying the DB into
+  // a scratch dir costs a full corpus copy (GBs) per run, and hardlinking
+  // requires a new --allow-write grant in every host's spawn contract —
+  // both worse than hardening a deliberately-opt-in debugging kill switch.
+  // This mode is for bisecting bridge/DB-service regressions only; never
+  // ship it as a default. The warning below makes every activation loud.
+  emitEvent({
+    type: "progress",
+    status: "WARNING: RLM_DB_SERVICE=0 (legacy mode) mounts the whole DB " +
+      "directory read-write into the untrusted interpreter — debugging " +
+      "kill switch only, do not ship",
+  });
   py.mountNodeFS("/data", dbDir);
   request.db_path = "/data/" + basename(realDbPath);
   if (realContactsPath) {

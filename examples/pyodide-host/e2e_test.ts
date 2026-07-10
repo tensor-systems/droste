@@ -108,15 +108,15 @@ async function runRelayRaw(
   port: number,
   env: Record<string, string>,
   adapterModule = "pyodide_host_adapter",
-): Promise<string> {
+): Promise<{ lastLine: string; stderrText: string }> {
   const cmd = new Deno.Command("deno", {
     args: [
       "run",
       `--allow-net=127.0.0.1:${port}`,
       // Unscoped read: this dev/CI run uses the ambient Deno cache (Pyodide's
       // wasm assets live there), unlike a production host's offline bundle
-      // (own isolated DENO_DIR, narrowly --allow-read-scoped — see
-      // RLMHelperRunner.denoArgs / the CLI relay invocation for that shape).
+      // (own isolated DENO_DIR, narrowly --allow-read-scoped — the shape a
+      // host's runner spawn args / the CLI relay invocation use).
       "--allow-read",
       "--allow-env",
       RELAY_TS,
@@ -135,14 +135,15 @@ async function runRelayRaw(
   const { code, stdout, stderr } = await child.output();
 
   const stdoutText = new TextDecoder().decode(stdout);
+  const stderrText = new TextDecoder().decode(stderr);
   if (code !== 0) {
     throw new Error(
-      `relay.ts exited ${code}\nstdout: ${stdoutText}\nstderr: ${new TextDecoder().decode(stderr)}`,
+      `relay.ts exited ${code}\nstdout: ${stdoutText}\nstderr: ${stderrText}`,
     );
   }
   const lines = stdoutText.trim().split("\n").filter((l) => l.trim().startsWith("{"));
   assert(lines.length > 0, `no JSON on stdout:\n${stdoutText}`);
-  return lines[lines.length - 1];
+  return { lastLine: lines[lines.length - 1], stderrText };
 }
 
 async function runRelay(
@@ -150,8 +151,9 @@ async function runRelay(
   request: Record<string, unknown>,
   port: number,
   env: Record<string, string>,
-): Promise<Record<string, unknown>> {
-  return JSON.parse(await runRelayRaw(sourcesDir, request, port, env));
+): Promise<{ resp: Record<string, unknown>; stderrText: string }> {
+  const { lastLine, stderrText } = await runRelayRaw(sourcesDir, request, port, env);
+  return { resp: JSON.parse(lastLine), stderrText };
 }
 
 Deno.test({
@@ -176,9 +178,16 @@ Deno.test({
       // the test would keep passing while testing the wrong code path.
       // Exercises build_db_service + the opaque meta blob + bridge_call, the
       // parts the adapter-agnostic split changed.
-      const resp = await runRelay(sourcesDir, request, port, { RLM_DB_SERVICE: "1" });
+      const { resp, stderrText } = await runRelay(sourcesDir, request, port, {
+        RLM_DB_SERVICE: "1",
+      });
       assertEquals(resp.error, null);
       assertEquals(resp.answer, "3"); // real COUNT(*) via the real bridged query()
+      // The legacy-mode WARNING must NOT fire on the default path.
+      assert(
+        !stderrText.includes("RLM_DB_SERVICE=0"),
+        `unexpected legacy-mode warning in DB-service mode:\n${stderrText}`,
+      );
     } finally {
       await shutdown();
     }
@@ -203,9 +212,17 @@ Deno.test({
       // build_db_service/bridge_call are never invoked on this path; the
       // adapter's run_for_host_pyodide must handle bridge_call=None,
       // meta=None cleanly (opens db_path directly, single interpreter).
-      const resp = await runRelay(sourcesDir, request, port, { RLM_DB_SERVICE: "0" });
+      const { resp, stderrText } = await runRelay(sourcesDir, request, port, {
+        RLM_DB_SERVICE: "0",
+      });
       assertEquals(resp.error, null);
       assertEquals(resp.answer, "3");
+      // Legacy mode must announce itself (#7): a WARNING progress event on
+      // stderr, so this mode can never be enabled silently.
+      assert(
+        stderrText.includes("RLM_DB_SERVICE=0 (legacy mode)"),
+        `expected the legacy-mode warning on stderr, got:\n${stderrText}`,
+      );
     } finally {
       await shutdown();
     }
@@ -227,7 +244,13 @@ Deno.test({
         api_key: "test-key",
         max_iterations: 3,
       };
-      const raw = await runRelayRaw(sourcesDir, request, port, { RLM_DB_SERVICE: "1" }, "_meta_precision_adapter");
+      const { lastLine: raw } = await runRelayRaw(
+        sourcesDir,
+        request,
+        port,
+        { RLM_DB_SERVICE: "1" },
+        "_meta_precision_adapter",
+      );
       // Deliberately NOT JSON.parse()'d: parsing in this test would itself
       // round the value back to a float64, masking the exact regression
       // this test exists to catch. A raw substring match on the literal
@@ -258,7 +281,7 @@ Deno.test({
         api_key: "test-key",
         max_iterations: 1,
       };
-      const resp = await runRelay(sourcesDir, request, port, {});
+      const { resp } = await runRelay(sourcesDir, request, port, {});
       assertEquals(resp.error && (resp.error as Record<string, unknown>).status, 402);
     } finally {
       await shutdown();
