@@ -24,7 +24,7 @@ def test_len_over_declared_extra_is_rejected() -> None:
 
 def test_len_over_namespaced_accessor_is_rejected() -> None:
     code = 'query("SELECT COUNT(*) FROM t")\nprint(len(db.search("x")))'
-    violations = contract_violations(code, COUNT, data_accessors=("search",))
+    violations = contract_violations(code, COUNT, namespaced_accessors=(("db", "search"),))
     assert violations
 
 
@@ -33,6 +33,25 @@ def test_len_over_plain_variable_is_fine() -> None:
     # Python, not contract circumvention.
     code = 'rows = query("SELECT COUNT(*) FROM t")\nprint(len(rows))'
     assert contract_violations(code, COUNT, data_accessors=("get_messages",)) == []
+
+
+def test_len_over_arbitrary_receiver_is_not_flagged() -> None:
+    # A source exposing a verb named `get` must not make ordinary dict code
+    # trip the contract (codex review): only the source's OWN namespace
+    # qualifies, and unqualified matching applies only to flattened verbs.
+    code = 'query("SELECT COUNT(*) FROM t")\nprint(len(row.get("items", [])))'
+    assert (
+        contract_violations(
+            code,
+            COUNT,
+            data_accessors=("search",),
+            namespaced_accessors=(("db", "get"),),
+        )
+        == []
+    )
+    # But the same verb under its real namespace still trips.
+    code2 = 'query("SELECT COUNT(*) FROM t")\nprint(len(db.get("id1")))'
+    assert contract_violations(code2, COUNT, namespaced_accessors=(("db", "get"),))
 
 
 def test_static_fallback_when_no_accessors_supplied() -> None:

@@ -302,19 +302,23 @@ def run_rlm(
     _apply_batch_error_guard(subcalls, env_globals)
 
     # The data-accessor names actually bound in this sandbox — flattened
-    # default-source verbs plus every namespaced source's verbs, including
+    # default-source verbs (matched unqualified) and every namespaced
+    # source's verbs (matched only under their own namespace), including
     # host-declared extras — so the count contract's len()-over-accessor
     # check enforces against whatever THIS environment exposes (#10), not a
-    # hardcoded verb list.
+    # hardcoded verb list, and never against arbitrary receivers.
     _llm_names = {"llm_query", "llm_batch", "batch_llm_query", "llm_query_batched"}
     data_accessor_names: set[str] = set()
+    namespaced_accessor_pairs: set[tuple[str, str]] = set()
     for _key, _value in env_globals.items():
         if _key in _llm_names:
             continue
         if callable(_value):
             data_accessor_names.add(_key)
         elif isinstance(_value, SimpleNamespace):
-            data_accessor_names.update(k for k, v in vars(_value).items() if callable(v))
+            namespaced_accessor_pairs.update(
+                (_key, k) for k, v in vars(_value).items() if callable(v)
+            )
 
     if system_prompt is None:
         prompt_additions = environment.prompt_fragment()
@@ -480,7 +484,9 @@ def run_rlm(
 
             try:
                 if cfg.enforce_contract:
-                    violations = contract_violations(code, cfg.policy_hints, data_accessor_names)
+                    violations = contract_violations(
+                        code, cfg.policy_hints, data_accessor_names, namespaced_accessor_pairs
+                    )
                     if violations:
                         raise PolicyError("Policy violation: " + " | ".join(violations))
 
@@ -602,7 +608,10 @@ def run_rlm(
                     try:
                         if cfg.enforce_contract:
                             violations = contract_violations(
-                                repaired_code, cfg.policy_hints, data_accessor_names
+                                repaired_code,
+                                cfg.policy_hints,
+                                data_accessor_names,
+                                namespaced_accessor_pairs,
                             )
                             if violations:
                                 raise PolicyError("Policy violation: " + " | ".join(violations))

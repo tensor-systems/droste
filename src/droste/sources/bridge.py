@@ -57,6 +57,10 @@ _OPTIONAL_METHODS: tuple[str, ...] = (
     "sample",
 )
 
+# Distinguishes "attribute absent" from "attribute present with value None"
+# in extras validation — the two must behave differently (skip vs reject).
+_MISSING = object()
+
 
 class DataSourceService:
     """Server half: dispatches bridge calls to a real `DataSource`."""
@@ -88,8 +92,14 @@ class DataSourceService:
                     f"{source.name()!r} is not a callable"
                 )
         for extra in extra_methods:
-            attr = getattr(source, str(extra), None)
-            if attr is not None and not callable(attr):
+            # Sentinel, not None: an attribute that exists with value None is
+            # present-but-not-callable (config error), not absent — hasattr
+            # would otherwise advertise it and the failure would surface as a
+            # late TypeError inside a dispatched call.
+            attr = getattr(source, str(extra), _MISSING)
+            if attr is _MISSING:
+                continue  # speculative host allowlisting over an absent verb is fine
+            if not callable(attr):
                 raise ValueError(
                     f"extra method {str(extra)!r} on source {source.name()!r} is not a callable"
                 )
