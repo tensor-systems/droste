@@ -19,6 +19,12 @@ export async function streamResponses(
   let assembled = ""; // accumulated from deltas (live display + fallback text)
   let finalContent: string | null = null; // authoritative text from `completion`
   let usage: unknown = null;
+  // The wire contract (responses-stream/v2) terminates every stream with
+  // exactly one `completion` or `error` record. Anything else — a dropped
+  // connection, a proxy timeout — leaves this false, and the accumulated
+  // deltas are a TRUNCATED answer that must never be returned as success
+  // (droste#43): the loop would execute partial generated code.
+  let sawCompletion = false;
 
   const handleLine = (raw: string) => {
     const line = raw.trim();
@@ -47,8 +53,22 @@ export async function streamResponses(
       return;
     }
     if (ev.type === "completion") {
+      sawCompletion = true;
       if (typeof ev.content === "string") finalContent = ev.content;
       if (ev.usage) usage = ev.usage;
+      return;
+    }
+    if (ev.type === "error") {
+      // Mid-stream provider failure: surface it as the failure it is,
+      // never keep accumulating toward a fake success.
+      const status = typeof ev.status === "number" ? ev.status : 0;
+      const message = typeof ev.message === "string" && ev.message
+        ? ev.message
+        : "provider stream error";
+      const detail = typeof ev.detail === "string" && ev.detail
+        ? `: ${ev.detail}`
+        : "";
+      throw new Error(`ModelRelay stream error ${status}: ${message}${detail}`);
     }
   };
 
@@ -64,9 +84,20 @@ export async function streamResponses(
   }
   if (buf) handleLine(buf); // trailing line with no newline
 
+  if (!sawCompletion) {
+    throw new Error(
+      `ModelRelay stream ended without a completion event (connection dropped ` +
+        `mid-generation; ${assembled.length} chars of partial output discarded)`,
+    );
+  }
+
   const text = finalContent ?? assembled;
   const payload: Record<string, unknown> = {
-    output: [{ type: "message", role: "assistant", content: [{ type: "text", text }] }],
+    output: [{
+      type: "message",
+      role: "assistant",
+      content: [{ type: "text", text }],
+    }],
   };
   if (usage) payload.usage = usage; // {input_tokens, output_tokens, total_tokens}
   return JSON.stringify(payload);
