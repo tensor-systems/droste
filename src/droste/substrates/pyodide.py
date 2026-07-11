@@ -37,6 +37,13 @@ _run_code = builtins.exec
 # RawExecutor — matches RestrictedExecutor.execute(code, extra_globals) -> str
 # --------------------------------------------------------------------------- #
 class RawExecutor:
+    # max_output_chars is accepted for factory-signature parity with
+    # RestrictedExecutor but deliberately NOT enforced here (#44): the output
+    # budget has ONE chokepoint — the loop's _enforce_output_budget, which
+    # raises SandboxError so the model gets the over-budget feedback and can
+    # narrow its query. Pre-truncating here made oversized output pass that
+    # check and handed the model silently incomplete data (unlike the native
+    # path, which raises).
     def __init__(self, db: Any, max_output_chars: int = 0) -> None:
         self._db = db
         self._max_output_chars = max_output_chars
@@ -50,10 +57,7 @@ class RawExecutor:
         compiled = compile(code, "<rlm>", "exec")
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
             _run_code(compiled, self._namespace)
-        out = buf.getvalue()
-        if self._max_output_chars and len(out) > self._max_output_chars:
-            out = out[: self._max_output_chars]
-        return out
+        return buf.getvalue()
 
     def close(self) -> None:  # parity with RestrictedExecutor
         pass
