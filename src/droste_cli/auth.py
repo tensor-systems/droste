@@ -40,6 +40,8 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 
+from droste.clients.useragent import USER_AGENT
+
 from .credentials import (
     Credentials,
     credentials_path,
@@ -111,7 +113,7 @@ def _api_request(
     """
     url = base_url.rstrip("/") + path
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
     if token:
         headers["Authorization"] = "Bearer " + token
     if api_key:

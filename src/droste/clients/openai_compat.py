@@ -46,6 +46,7 @@ from ..execution.context import ExecutionContext
 from ..protocols.llm_client import TokenUsage
 from ..protocols.subcall_client import SubcallClient
 from .errors import http_error_excerpt
+from .useragent import USER_AGENT
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS = 2048
@@ -135,7 +136,7 @@ class _ChatCompletionsTransport:
 
     def complete(self, payload: dict[str, Any]) -> dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
         if self._api_key:
             headers["Authorization"] = "Bearer " + self._api_key
         req = urllib.request.Request(self._url, data=body, headers=headers, method="POST")
@@ -185,7 +186,11 @@ class _ChatCompletionsTransport:
 
     def _stream_once(self, payload: dict[str, Any], on_delta: Any) -> dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")
-        headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "User-Agent": USER_AGENT,
+        }
         if self._api_key:
             headers["Authorization"] = "Bearer " + self._api_key
         req = urllib.request.Request(self._url, data=body, headers=headers, method="POST")

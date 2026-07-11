@@ -44,6 +44,7 @@ from .openai_compat import (
     DEFAULT_TIMEOUT_SECONDS,
     MAX_BATCH_PROMPTS,
 )
+from .useragent import USER_AGENT
 
 DEFAULT_MODELRELAY_BASE_URL = "https://api.modelrelay.ai/api/v1"
 _STREAM_ACCEPT = 'application/x-ndjson; profile="responses-stream/v2"'
@@ -112,7 +113,7 @@ class _ResponsesTransport:
 
     def _request(self, payload: dict[str, Any], *, accept: str | None = None) -> Any:
         body = json.dumps(payload).encode("utf-8")
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
         if accept:
             headers["Accept"] = accept
         if self._api_key:

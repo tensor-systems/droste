@@ -45,6 +45,7 @@ from ..execution.context import ExecutionContext
 from ..protocols.llm_client import TokenUsage
 from ..protocols.subcall_client import SubcallClient
 from .errors import http_error_excerpt
+from .useragent import USER_AGENT
 
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -140,6 +141,7 @@ class _MessagesTransport:
         headers = {
             "Content-Type": "application/json",
             "anthropic-version": ANTHROPIC_VERSION,
+            "User-Agent": USER_AGENT,
         }
         if accept:
             headers["Accept"] = accept
