@@ -7,8 +7,9 @@ OpenAI-compatible key.
    (seeded: one failed charge for cus_9982, 66 payments-v2 timeouts).
 2. Create `env.sh` beside the tape (never commit it):
    `export OPENAI_API_KEY=… OPENAI_BASE_URL=… DROSTE_MODEL=… PATH=<venv-bin>:$PATH`
-3. `vhs demo.tape` → raw gif; shrink for the README:
-   `ffmpeg -i demo.gif -vf "setpts=0.75*PTS,fps=10,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=none" d8.gif && gifsicle -O3 --lossy=40 d8.gif -o demo.gif`
+3. `vhs demo.tape` → raw `demo.gif` beside the tape (gitignored); shrink it
+   into the tracked README asset:
+   `ffmpeg -i demo.gif -vf "setpts=0.75*PTS,fps=10,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=none" d8.gif && gifsicle -O3 --lossy=40 d8.gif -o ../demo.gif && rm d8.gif demo.gif`
    The tape Waits for the prompt to return, so run-length variance can't
    cut the recording.
 
