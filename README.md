@@ -211,7 +211,8 @@ flowchart LR
 - `protocol_version`: **required** on every request (currently `1`) — a
   missing or mismatched version gets a structured refusal, so hosts detect
   incompatibility instead of failing on a missing field. See
-  [docs/architecture.md](docs/architecture.md) for the compatibility rules.
+  [docs/architecture.md](docs/architecture.md) for the compatibility rules and
+  [UPGRADING.md](UPGRADING.md) for per-release embedder migration notes.
 - `root_endpoint` + `subcall_endpoint` + `token`: required for HTTP-backed runs.
 - `adapter_module`: optional Python module path to override the runner entirely.
 
