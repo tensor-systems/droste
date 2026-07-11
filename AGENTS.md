@@ -115,6 +115,11 @@ The package ships on public PyPI, released by CI — never by hand:
    publishes to PyPI via **trusted publishing** (OIDC — no token secret),
    and creates the GitHub release with artifacts attached. The job fails
    fast if the tag and `pyproject.toml` version disagree.
+4. Live smoke against production (manual — CI deliberately holds no LLM
+   keys): `uvx droste@X.Y.Z "…" <some file>` with real credentials must
+   return exit 0. The mocked e2e suite cannot see edge/WAF behavior — a
+   Cloudflare rule once blocked every fresh install by User-Agent (#49)
+   while the whole suite stayed green.
 
 The PyPI trusted publisher (project `droste` → Publishing) must name this
 repo and `release.yml`. A local `uv build && uv publish` remains possible

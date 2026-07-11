@@ -21,20 +21,27 @@ uvx droste "which customer had a failed charge, and why?" server.log
 uvx droste "which plan has the highest refund rate vs its MRR?" shop.db
 ```
 
-![droste answering a two-part question over a 435 kB server log, streaming its code as it works](docs/assets/demo.gif)
+![droste answering a two-part question over a 444 kB server log, streaming its code as it works](docs/assets/demo.gif)
 
-The first example, against a 231 KB log with `gemini-3.5-flash`:
+The first example, against a 444 kB log with `gemini-3.5-flash`:
 
 ```
 $ droste "Which customer had a failed charge, for what amount, and why?
   How many timeout errors are there, and which upstream do they blame?" server.log
 
-1. Failed charge: customer cus_9982, amount 1499 ($14.99), reason card_declined
-2. Timeout errors: 66 total; all blame the upstream service payments-v2
+1. **Failed Charge Details**:
+   - **Customer**: `cus_9982`
+   - **Amount**: 1499 (USD, which is $14.99)
+   - **Reason**: The card was declined due to insufficient funds
+     (`reason=card_declined decline_code=insufficient_funds`).
+
+2. **Timeout Errors**:
+   - **Count**: There are exactly 66 timeout errors in the log.
+   - **Upstream blamed**: They blame `payments-v2` (`upstream=payments-v2`).
 ```
 
 The counts are exact because the model *counted them in Python* — it never
-read 4,000 log lines through its attention. In `--db` mode the model
+read 3,400 log lines through its attention. In `--db` mode the model
 introspects your schema, writes read-only SQL, and computes over the rows;
 in the demo above it noticed the free plan makes refund-rate-vs-MRR
 undefined and answered for the paid plans instead.
@@ -118,8 +125,10 @@ Engine knobs mirror `RLMConfig`: `--subcall-model`,
 `--subcall-max-output-tokens` (default 2048), `--reasoning-effort`,
 `--max-iterations`, `--max-subcalls`. `--json` prints a result object for
 scripting; `--verbose` streams one-line progress to stderr (watch it think);
-`--trace` dumps the full loop (generated code, outputs, responses). Exit code 0 means a
-confirmed (or extracted-with-note) answer.
+`--trace` renders the full structured event stream — generated code, execution
+output with per-iteration sub-call counts and answer state, LLM responses,
+execution errors. Exit code 0 means a confirmed (or extracted-with-note)
+answer.
 
 Three worked starting points live in [docs/recipes.md](docs/recipes.md)
 (logs, chat archives, SQLite).
@@ -268,6 +277,8 @@ RLMResult(
     tokens_used=1500,       # Total tokens consumed
     sub_calls_made=12,      # Total llm_query/llm_batch calls
     trajectory=[...],       # Full execution history
+    extracted=False,        # True if the answer came from the post-exhaustion
+                            # extract pass (best-effort, not confirmed)
 )
 ```
 
