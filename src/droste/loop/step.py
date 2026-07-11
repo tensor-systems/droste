@@ -250,9 +250,24 @@ def execute_step(
         # the event channel — the guard gates the event, not just the loop.
         _enforce_output_budget(last_output, cfg.max_output_chars)
         answer = _refresh_answer(env_globals, answer)
-        # The output event carries the post-refresh iteration state the old
-        # verbose prints used to leak on a side channel (#35) — a trace view
-        # is now a pure projection of this event (render_verbose).
+
+        hints = cfg.policy_hints if cfg.enforce_contract else None
+        violations = ready_violations(
+            hints,
+            answer_ready=bool(answer.get("ready")),
+            calls_made=context.stats.calls_made,
+            resolved_output=_resolved_output(answer, last_output),
+        )
+        if violations:
+            # Revoke readiness BEFORE emitting the output event, so the
+            # published answer_ready is the post-gate truth — never a state
+            # the policy gate is about to reject (codex review). The generic
+            # softening in the handler below is then a no-op for this path.
+            answer["ready"] = False
+
+        # The output event carries the post-refresh, post-gate iteration
+        # state the old verbose prints used to leak on a side channel (#35)
+        # — a trace view is now a pure projection of it (render_verbose).
         context.emit_event(
             output_event(
                 iteration,
@@ -261,14 +276,6 @@ def execute_step(
                 answer_ready=bool(answer.get("ready")),
                 answer_content_chars=len(str(answer.get("content") or "")),
             )
-        )
-
-        hints = cfg.policy_hints if cfg.enforce_contract else None
-        violations = ready_violations(
-            hints,
-            answer_ready=bool(answer.get("ready")),
-            calls_made=context.stats.calls_made,
-            resolved_output=_resolved_output(answer, last_output),
         )
         if violations:
             raise PolicyError("Policy violation: " + " | ".join(violations))

@@ -107,3 +107,29 @@ def test_render_verbose_projects_the_trace_view() -> None:
     # Events the trace view does not show project to None.
     assert render_verbose({"type": "startup", "engine_version": "x"}) is None
     assert render_verbose({"type": "reasoning_delta", "text": "t"}) is None
+
+
+def test_output_event_reports_post_gate_readiness() -> None:
+    # A model-set ready answer that the ready-time policy gate rejects must
+    # never be published as ready (codex review): the output event carries
+    # the post-gate state, and the execution_error event follows it.
+    from droste.loop.step import execute_step
+    from droste.policy import PolicyHints
+
+    events: list[dict] = []
+    context = create_execution_context(on_event=events.append)
+    env = MockEnvironment()
+    outcome = execute_step(
+        "answer['content'] = 'x'\nanswer['ready'] = True",
+        iteration=1,
+        environment=env,
+        env_globals=env.globals(),
+        answer=env.globals()["answer"],
+        cfg=RLMConfig(policy_hints=PolicyHints(semantic=True)),
+        context=context,
+        data_accessor_names=set(),
+        namespaced_accessor_pairs=set(),
+    )
+    assert outcome.error is not None and outcome.error.type == "PolicyError"
+    assert [e["type"] for e in events] == ["output", "execution_error"]
+    assert events[0]["answer_ready"] is False
