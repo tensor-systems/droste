@@ -36,6 +36,7 @@ from typing import Any
 
 from droste import DataSourceRegistry, RLMConfig, run_rlm
 from droste.execution.context import create_execution_context
+from droste.execution.progress import emit_event, emit_progress
 from droste.sources.bridge import BridgeDataSource, DataSourceService
 from droste.sources.sql_local import local_sql_source_factory
 from droste.substrates.pyodide import BridgedLLMClient, HostFetch, serialize_error
@@ -115,6 +116,10 @@ def run_for_host_pyodide(
         max_calls=int(request.get("max_calls") or 0),
         max_iterations=int(request.get("max_iterations") or 8),
         max_output_chars=int(request.get("max_output_chars") or 8000),
+        # Stderr NDJSON is how loop events reach the relay's forwarding
+        # filter under Pyodide — attached explicitly (#35: no default sink).
+        on_progress=emit_progress,
+        on_event=emit_event,
     )
     environment = RunnerEnvironment(
         context=None,

@@ -418,7 +418,9 @@ def test_trace_dumps_full_loop(stub_server, tmp_path, capsys):
     exit_code = main(_e2e_argv(stub_server, doc, "q", extra=["--trace"]))
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "droste: Iteration" in captured.err  # trace implies progress
+    # Trace renders progress through render_verbose (#35): banner form,
+    # not the --verbose echo's "droste: " marker.
+    assert "Iteration 1/" in captured.err and "=" * 60 in captured.err
     assert "LLM Response" in captured.err  # dump goes to stderr too
     assert captured.out.strip() == "content"  # stdout stays answer-only
 

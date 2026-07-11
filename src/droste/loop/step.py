@@ -9,7 +9,6 @@ assembly are pure functions, unit-testable without an LLM.
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,6 +20,7 @@ from ..execution.config import (
     DEFAULT_MAX_OUTPUT_CHARS,
 )
 from ..execution.context import ExecutionContext
+from ..execution.progress import execution_error_event, output_event
 from ..policy import PolicyHints, contract_violations, ready_violations
 from ..protocols.environment import ExecutionResult, RLMEnvironment
 from ..protocols.llm_client import LLMClient, total_tokens_from_usage
@@ -249,7 +249,6 @@ def execute_step(
         # must raise here (error path), never stream its full contents to
         # the event channel — the guard gates the event, not just the loop.
         _enforce_output_budget(last_output, cfg.max_output_chars)
-        context.emit_event({"type": "output", "iteration": iteration, "stdout": last_output})
         answer = _refresh_answer(env_globals, answer)
 
         hints = cfg.policy_hints if cfg.enforce_contract else None
@@ -258,6 +257,25 @@ def execute_step(
             answer_ready=bool(answer.get("ready")),
             calls_made=context.stats.calls_made,
             resolved_output=_resolved_output(answer, last_output),
+        )
+        if violations:
+            # Revoke readiness BEFORE emitting the output event, so the
+            # published answer_ready is the post-gate truth — never a state
+            # the policy gate is about to reject (codex review). The generic
+            # softening in the handler below is then a no-op for this path.
+            answer["ready"] = False
+
+        # The output event carries the post-refresh, post-gate iteration
+        # state the old verbose prints used to leak on a side channel (#35)
+        # — a trace view is now a pure projection of it (render_verbose).
+        context.emit_event(
+            output_event(
+                iteration,
+                last_output,
+                calls_made=context.stats.calls_made,
+                answer_ready=bool(answer.get("ready")),
+                answer_content_chars=len(str(answer.get("content") or "")),
+            )
         )
         if violations:
             raise PolicyError("Policy violation: " + " | ".join(violations))
@@ -270,8 +288,9 @@ def execute_step(
             # the accumulated content — the violation is fed back as
             # guidance, not punished with a wiped draft.
             answer["ready"] = False
-        if cfg.verbose:
-            print(f"\nExecution error: {exec_error}", file=sys.stderr)
+        context.emit_event(
+            execution_error_event(iteration, exec_error.__class__.__name__, str(exec_error))
+        )
         return StepOutcome(
             output=f"ERROR: {exec_error}",
             answer=answer,
@@ -284,16 +303,6 @@ def execute_step(
             exception=exec_error,
         )
 
-    if cfg.verbose:
-        if last_output and not last_output.startswith("ERROR:"):
-            print(f"\nOutput:\n{last_output}", file=sys.stderr)
-        print(f"\nSub-calls made: {context.stats.calls_made}", file=sys.stderr)
-        print(f"answer['ready'] = {answer.get('ready')}", file=sys.stderr)
-        if answer.get("content"):
-            print(
-                f"answer['content'] length: {len(str(answer.get('content')))} chars",
-                file=sys.stderr,
-            )
     return StepOutcome(output=last_output, answer=answer)
 
 

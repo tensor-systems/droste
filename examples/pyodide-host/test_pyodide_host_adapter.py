@@ -27,7 +27,15 @@ def _fake_host_fetch_answering(content: str, captured_headers: dict | None = Non
             captured_headers.update(json.loads(headers_json))
         code = f"```python\nanswer['content'] = {content!r}\nanswer['ready'] = True\n```"
         return json.dumps(
-            {"output": [{"type": "message", "role": "assistant", "content": [{"type": "text", "text": code}]}]}
+            {
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": code}],
+                    }
+                ]
+            }
         )
 
     return host_fetch
@@ -63,7 +71,10 @@ class TestPyodideHostAdapter(unittest.TestCase):
 
         request = {"question": "q", "root_model": "test-model"}
         resp = run_for_host_pyodide(
-            request, _fake_host_fetch_answering("bridged answer"), bridge_call=bridge_call, meta=meta
+            request,
+            _fake_host_fetch_answering("bridged answer"),
+            bridge_call=bridge_call,
+            meta=meta,
         )
         self.assertIsNone(resp["error"])
         self.assertEqual(resp["answer"], "bridged answer")

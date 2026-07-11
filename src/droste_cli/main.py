@@ -385,21 +385,38 @@ def run_ask(args: argparse.Namespace) -> int:
 
     # --verbose/--trace stream the root model's output (the generated code)
     # to stderr as it is written, between one-line progress markers — the
-    # "watch it think" view. --trace additionally dumps the full loop.
+    # "watch it think" view. --trace additionally dumps the full loop,
+    # rendered from the structured event stream (#35): the core emits typed
+    # events; render_verbose is the pure projection this sink applies.
     echo = _StreamEcho() if (args.verbose or args.trace) else None
+
+    on_event = None
+    on_progress = echo.progress if echo else None
+    if args.trace:
+        from droste.execution.progress import progress_event, render_verbose
+
+        def _trace_sink(event: dict) -> None:
+            line = render_verbose(event)
+            if line is not None:
+                print(line, file=sys.stderr)
+
+        def _trace_progress(status: str) -> None:
+            # Progress travels on its own channel; re-wrap it as the event
+            # it is so the trace view (banners included) stays a single
+            # render_verbose projection instead of a second format.
+            _trace_sink(progress_event(status))
+
+        on_event = _trace_sink
+        on_progress = _trace_progress
 
     exec_context = create_execution_context(
         max_calls=args.max_subcalls,
         max_iterations=args.max_iterations,
         max_output_chars=DEFAULT_MAX_OUTPUT_CHARS,
-        # Progress lines only stream with --verbose/--trace; the default
-        # emitter would print JSON progress events to stderr unconditionally.
-        on_progress=echo.progress if echo else (lambda status: None),
-        # The CLI renders "watch it think" via the --verbose/--trace echo above,
-        # not the structured NDJSON events (those feed programmatic hosts through
-        # the relay's stderr forwarder). Swallow them here so a plain `droste ask`
-        # never dumps raw code/iteration/output JSON to stderr.
-        on_event=lambda event: None,
+        # Progress lines only stream with --verbose/--trace; None means no
+        # emission (#35) — a plain `droste ask` writes nothing to stderr.
+        on_progress=on_progress,
+        on_event=on_event,
     )
 
     if provider == "modelrelay":
@@ -472,9 +489,9 @@ def run_ask(args: argparse.Namespace) -> int:
         max_iterations=args.max_iterations,
         max_calls=args.max_subcalls,
         root_model=args.model,
-        # config.verbose is the FULL loop dump (code, outputs, responses) —
-        # that's --trace. --verbose alone is the clean one-line stream.
-        verbose=args.trace,
+        # The full loop dump (code, outputs, responses) is --trace, rendered
+        # by the _trace_sink above from structured events; the core no longer
+        # reads config.verbose (#35).
     )
 
     result = run_rlm(
