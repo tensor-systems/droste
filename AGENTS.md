@@ -101,6 +101,12 @@ embedders; CI still scans for committed key material.
 
 The package ships on public PyPI, released by CI — never by hand:
 
+0. Update `UPGRADING.md`: retitle the "Unreleased" section to the new version
+   and start a fresh empty one. Every embedder-facing change (new required
+   field, changed default, moved import, anything that degrades silently if a
+   host skips a step) must have an entry — the loud contract signals
+   (protocol refusals, the relay's startup handshake) don't cover silent
+   degradations, and PR bodies don't reach public users.
 1. Bump `version` in `pyproject.toml`, run `uv lock` (the lockfile pins the
    project's own version — `uv sync --locked` in the release job aborts on a
    stale one), and merge both to main.
