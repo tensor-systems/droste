@@ -391,15 +391,23 @@ def run_ask(args: argparse.Namespace) -> int:
     echo = _StreamEcho() if (args.verbose or args.trace) else None
 
     on_event = None
+    on_progress = echo.progress if echo else None
     if args.trace:
-        from droste.execution.progress import render_verbose
+        from droste.execution.progress import progress_event, render_verbose
 
         def _trace_sink(event: dict) -> None:
             line = render_verbose(event)
             if line is not None:
                 print(line, file=sys.stderr)
 
+        def _trace_progress(status: str) -> None:
+            # Progress travels on its own channel; re-wrap it as the event
+            # it is so the trace view (banners included) stays a single
+            # render_verbose projection instead of a second format.
+            _trace_sink(progress_event(status))
+
         on_event = _trace_sink
+        on_progress = _trace_progress
 
     exec_context = create_execution_context(
         max_calls=args.max_subcalls,
@@ -407,7 +415,7 @@ def run_ask(args: argparse.Namespace) -> int:
         max_output_chars=DEFAULT_MAX_OUTPUT_CHARS,
         # Progress lines only stream with --verbose/--trace; None means no
         # emission (#35) — a plain `droste ask` writes nothing to stderr.
-        on_progress=echo.progress if echo else None,
+        on_progress=on_progress,
         on_event=on_event,
     )
 
