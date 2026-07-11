@@ -90,19 +90,6 @@ Deno.test("real wire shape: completion carries usage only, text from deltas", as
   assert.deepEqual(deltas, ["Hello", " there"]);
 });
 
-Deno.test("falls back to accumulated deltas when completion is missing", async () => {
-  const out = await streamResponses(
-    ndjson([
-      { type: "update", delta: "abc" },
-      { type: "update", delta: "def" },
-    ]),
-    () => {},
-  );
-  const payload = JSON.parse(out);
-  assert.equal(payload.output[0].content[0].text, "abcdef");
-  assert.equal("usage" in payload, false); // no usage when no completion event
-});
-
 Deno.test("tolerates the content_delta/{delta:{content}} shape", async () => {
   const deltas: string[] = [];
   const out = await streamResponses(
@@ -135,4 +122,43 @@ Deno.test("ignores keepalive/non-JSON lines and unknown event types", async () =
   });
   const out = await streamResponses(r, () => {});
   assert.equal(JSON.parse(out).output[0].content[0].text, "ok");
+});
+
+Deno.test("a stream that ends without a terminal event throws (droste#43)", async () => {
+  // A dropped connection / proxy timeout must never surface accumulated
+  // deltas as a clean answer — the loop would execute truncated code.
+  const deltas: string[] = [];
+  await assert.rejects(
+    () =>
+      streamResponses(
+        ndjson([
+          { type: "start", stream_mode: "text-delta", model: "m" },
+          { type: "update", delta: "partial answ" },
+        ]),
+        (c) => deltas.push(c),
+      ),
+    /ended without a completion event/,
+  );
+  // Deltas were still forwarded live before the drop was detected.
+  assert.deepEqual(deltas, ["partial answ"]);
+});
+
+Deno.test("a mid-stream error event throws with the provider detail (droste#43)", async () => {
+  await assert.rejects(
+    () =>
+      streamResponses(
+        ndjson([
+          { type: "update", delta: "some prefix" },
+          {
+            type: "error",
+            code: "PROVIDER_UNAVAILABLE",
+            message: "upstream provider failed",
+            detail: "backend 502",
+            status: 502,
+          },
+        ]),
+        () => {},
+      ),
+    /ModelRelay stream error 502: upstream provider failed: backend 502/,
+  );
 });
