@@ -112,7 +112,10 @@ def test_render_verbose_projects_the_trace_view() -> None:
 def test_output_event_reports_post_gate_readiness() -> None:
     # A model-set ready answer that the ready-time policy gate rejects must
     # never be published as ready (codex review): the output event carries
-    # the post-gate state, and the execution_error event follows it.
+    # the post-gate state, and the execution_error event follows it. The
+    # violation must be a READY-TIME one (numeric_output over non-numeric
+    # content) — a semantic hint would trip the pre-exec contract check
+    # before any output event exists (codex review on the first cut).
     from droste.loop.step import execute_step
     from droste.policy import PolicyHints
 
@@ -120,12 +123,12 @@ def test_output_event_reports_post_gate_readiness() -> None:
     context = create_execution_context(on_event=events.append)
     env = MockEnvironment()
     outcome = execute_step(
-        "answer['content'] = 'x'\nanswer['ready'] = True",
+        "answer['content'] = 'not a number'\nanswer['ready'] = True",
         iteration=1,
         environment=env,
         env_globals=env.globals(),
         answer=env.globals()["answer"],
-        cfg=RLMConfig(policy_hints=PolicyHints(semantic=True)),
+        cfg=RLMConfig(policy_hints=PolicyHints(numeric_output=True)),
         context=context,
         data_accessor_names=set(),
         namespaced_accessor_pairs=set(),

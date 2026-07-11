@@ -190,8 +190,10 @@ def run_rlm(
     user_prompt_template: str | None = None,
     refinement_prompt_template: str | None = None,
     on_progress: ProgressCallback | None = None,
-    on_event: EventCallback | None = None,
     context: ExecutionContext | None = None,
+    # All params after * are keyword-only, so placement is API-neutral;
+    # appended last anyway to keep the signature append-only.
+    on_event: EventCallback | None = None,
 ) -> RLMResult:
     cfg = config or RLMConfig()
     if context is None:
