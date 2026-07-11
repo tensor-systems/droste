@@ -10,7 +10,7 @@ from .config import (
     DEFAULT_MAX_OUTPUT_CHARS,
     ExecutionConfig,
 )
-from .progress import EventCallback, ProgressCallback, emit_event, emit_progress
+from .progress import EVENT_TYPES, EventCallback, ProgressCallback
 from .stats import ExecutionStats
 
 
@@ -22,18 +22,30 @@ class ExecutionContext:
     stats: ExecutionStats = field(default_factory=ExecutionStats)
 
     def emit_progress(self, status: str) -> None:
-        """Emit progress via callback if provided, otherwise use default emitter."""
+        """Deliver a progress line to the attached sink; silent when none.
+
+        No default emitter (#35): a bare engine call performs no I/O. Entry
+        points attach sinks explicitly (droste_runner and the relay: the
+        stderr NDJSON sinks; the CLI: its --verbose echo)."""
         if self.config.on_progress is not None:
             self.config.on_progress(status)
-        else:
-            emit_progress(status)
 
     def emit_event(self, event: dict[str, Any]) -> None:
-        """Emit a structured loop event (#1) via callback if provided, else stderr."""
+        """Deliver a structured loop event (#1) to the attached sink.
+
+        The type is validated against the shared vocabulary even when no
+        sink is attached, so an off-vocabulary emitter fails the first test
+        that exercises it instead of shipping an event the relay's
+        forwarding filter silently drops (#35)."""
+        event_type = event.get("type")
+        if event_type not in EVENT_TYPES:
+            raise ValueError(
+                f"unknown RLM event type {event_type!r}: add it to "
+                "droste.execution.progress.EVENT_TYPES and the relay's events.ts "
+                "vocabulary (kept in lockstep by tests/test_event_vocabulary.py)"
+            )
         if self.config.on_event is not None:
             self.config.on_event(event)
-        else:
-            emit_event(event)
 
     @property
     def depth(self) -> int:

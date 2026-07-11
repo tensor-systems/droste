@@ -941,6 +941,7 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
     session_index = int(request.get("session_index") or 0)
 
     from droste.execution.context import create_execution_context  # type: ignore
+    from droste.execution.progress import emit_event, emit_progress  # type: ignore
 
     exec_context = create_execution_context(
         max_depth=max_depth,
@@ -948,6 +949,11 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
         max_iterations=max_iterations,
         max_output_chars=max_output_chars,
         verbose=False,
+        # NDJSON on stderr is the runner's event contract — the relay's
+        # forwarding filter and native hosts read it there. Attached
+        # explicitly now that a bare engine call emits nothing (#35).
+        on_progress=emit_progress,
+        on_event=emit_event,
     )
 
     model = str(request.get("model") or "")

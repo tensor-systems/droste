@@ -60,8 +60,10 @@ Deno.test("vocabulary matches the engine's emitters", () => {
     [
       "code",
       "done",
+      "execution_error",
       "extract_error",
       "iteration_start",
+      "llm_response",
       "output",
       "progress",
       "reasoning_delta",

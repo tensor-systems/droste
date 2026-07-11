@@ -25,7 +25,9 @@ from droste.sources.bridge import DataSourceService
 LARGE_INT = 9223372036854775807
 
 
-def build_db_service(db_path: str, contacts_db_path: str | None = None) -> tuple[DataSourceService, dict[str, Any]]:
+def build_db_service(
+    db_path: str, contacts_db_path: str | None = None
+) -> tuple[DataSourceService, dict[str, Any]]:
     source = _sql_source(db_path)
     service = DataSourceService(source)
     return service, {"large_id": LARGE_INT}
@@ -37,6 +39,8 @@ def run_for_host_pyodide(
     bridge_call: Any = None,
     meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    resp = pyodide_host_adapter.run_for_host_pyodide(request, host_fetch, bridge_call=bridge_call, meta=meta)
+    resp = pyodide_host_adapter.run_for_host_pyodide(
+        request, host_fetch, bridge_call=bridge_call, meta=meta
+    )
     resp["received_meta_large_id"] = (meta or {}).get("large_id")
     return resp

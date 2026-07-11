@@ -1,10 +1,18 @@
 from __future__ import annotations
 
-import sys
 from typing import Any
 
 from ..exceptions import BatchLLMError, RLMError
 from ..execution.context import ExecutionContext, create_execution_context
+from ..execution.progress import (
+    EventCallback,
+    extract_error_event,
+    iteration_start_event,
+    llm_response_event,
+)
+from ..execution.progress import (
+    code_event as build_code_event,
+)
 from ..prompts.builder import SystemPromptBuilder
 from ..protocols.environment import RLMEnvironment
 from ..protocols.llm_client import LLMClient, total_tokens_from_usage
@@ -182,6 +190,7 @@ def run_rlm(
     user_prompt_template: str | None = None,
     refinement_prompt_template: str | None = None,
     on_progress: ProgressCallback | None = None,
+    on_event: EventCallback | None = None,
     context: ExecutionContext | None = None,
 ) -> RLMResult:
     cfg = config or RLMConfig()
@@ -193,6 +202,9 @@ def run_rlm(
             max_output_chars=cfg.max_output_chars,
             verbose=cfg.verbose,
             on_progress=on_progress or cfg.on_progress,
+            # None -> NO emission (#35). Embedders that want the NDJSON
+            # stderr stream attach droste.execution.progress.emit_event.
+            on_event=on_event,
         )
 
     env_globals = environment.globals()
@@ -265,13 +277,7 @@ def run_rlm(
     try:
         while not answer.get("ready") and iterations < cfg.max_iterations:
             iterations += 1
-            context.emit_event(
-                {
-                    "type": "iteration_start",
-                    "iteration": iterations,
-                    "max_iterations": cfg.max_iterations,
-                }
-            )
+            context.emit_event(iteration_start_event(iterations, cfg.max_iterations))
 
             if iterations == 1:
                 messages = build_initial_messages(system_prompt, user_content)
@@ -287,13 +293,6 @@ def run_rlm(
             context.emit_progress(
                 f"Iteration {iterations}/{cfg.max_iterations}: Generating code..."
             )
-            if cfg.verbose:
-                print(f"\n{'=' * 60}", file=sys.stderr)
-                print(
-                    f"Iteration {iterations}/{cfg.max_iterations}: Generating code...",
-                    file=sys.stderr,
-                )
-                print(f"{'=' * 60}", file=sys.stderr)
 
             response, usage, root_error = call_root(
                 root_llm, messages, model=cfg.root_model or "", context=context
@@ -301,17 +300,12 @@ def run_rlm(
             if root_error is not None:
                 return early_result(root_error)
             last_response = response
-            if cfg.verbose:
-                print(f"\nLLM Response:\n{response}", file=sys.stderr)
+            context.emit_event(llm_response_event(iterations, response))
 
             code = extract_code_block(response, "python")
             if not code:
                 if cfg.enforce_contract:
-                    if cfg.verbose:
-                        print(
-                            "\nNo code block found, retrying with contract enforcement",
-                            file=sys.stderr,
-                        )
+                    context.emit_progress("No code block found, retrying with contract enforcement")
                     repair_messages = build_missing_code_repair_messages(messages, response)
                     repair_response, repair_usage, root_error = call_root(
                         root_llm, repair_messages, model=cfg.root_model or "", context=context
@@ -319,6 +313,7 @@ def run_rlm(
                     if root_error is not None:
                         return early_result(root_error)
                     last_response = repair_response
+                    context.emit_event(llm_response_event(iterations, repair_response))
 
                     code = extract_code_block(repair_response, "python")
                     if not code:
@@ -332,10 +327,7 @@ def run_rlm(
                     messages = repair_messages
                     usage = repair_usage
                 else:
-                    if cfg.verbose:
-                        print(
-                            "\nNo code block found, returning response as answer", file=sys.stderr
-                        )
+                    context.emit_progress("No code block found, returning response as answer")
                     final_answer = _best_answer(answer, last_output, last_response) or response
                     return finalize(
                         answer_text=final_answer,
@@ -347,9 +339,7 @@ def run_rlm(
                     )
 
             context.emit_progress(f"Iteration {iterations}/{cfg.max_iterations}: Executing...")
-            context.emit_event({"type": "code", "iteration": iterations, "code": code})
-            if cfg.verbose:
-                print(f"\nExecuting code:\n{code}", file=sys.stderr)
+            context.emit_event(build_code_event(iterations, code))
 
             outcome = execute_step(code, **step_kwargs())
             answer = outcome.answer
@@ -371,8 +361,6 @@ def run_rlm(
             context.emit_progress(
                 f"Iteration {iterations}/{cfg.max_iterations}: Retrying with error feedback..."
             )
-            if cfg.verbose:
-                print("\nRetrying with error feedback...", file=sys.stderr)
             assert outcome.exception is not None
             repair_messages = build_error_repair_messages(messages, code, outcome.exception)
             repair_response, repair_usage, root_error = call_root(
@@ -381,6 +369,7 @@ def run_rlm(
             if root_error is not None:
                 return early_result(root_error)
             last_response = repair_response
+            context.emit_event(llm_response_event(iterations, repair_response))
 
             repaired_code = extract_code_block(repair_response, "python")
             if repaired_code:
@@ -390,7 +379,7 @@ def run_rlm(
                 # The repaired code is what actually runs this iteration — emit
                 # it too, or event consumers see only the failed first attempt
                 # and miss the code/output that produced the answer.
-                context.emit_event({"type": "code", "iteration": iterations, "code": repaired_code})
+                context.emit_event(build_code_event(iterations, repaired_code))
                 outcome = execute_step(repaired_code, **step_kwargs())
                 answer = outcome.answer
                 last_output = outcome.output
@@ -445,28 +434,13 @@ def run_rlm(
                 # _best_answer above, but the failure is now visible to hosts
                 # via RLMResult.extract_error, not indistinguishable from a
                 # clean extraction.
-                context.emit_event(
-                    {
-                        "type": "extract_error",
-                        "error_type": extract_error.type,
-                        "message": extract_error.message,
-                    }
-                )
-                if cfg.verbose:
-                    print(
-                        f"\nExtract fallback failed: {extract_error.type}: {extract_error.message}",
-                        file=sys.stderr,
-                    )
+                context.emit_event(extract_error_event(extract_error.type, extract_error.message))
 
         if not final_answer:
             if error:
                 final_answer = f"Error: {error.message}"
             else:
                 final_answer = "No output produced."
-
-        if cfg.verbose:
-            print(f"\nFinal iterations: {iterations}", file=sys.stderr)
-            print(f"answer['ready']: {answer.get('ready')}", file=sys.stderr)
 
         return finalize(
             answer_text=final_answer,
