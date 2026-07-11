@@ -20,6 +20,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from droste.clients.errors import http_error_excerpt, redact_secrets  # type: ignore
+from droste.clients.useragent import USER_AGENT  # type: ignore
 from droste.execution.config import DEFAULT_MAX_CALLS, DEFAULT_MAX_ITERATIONS  # type: ignore
 from droste.loop.rlm import RLMConfig, run_rlm  # type: ignore
 from droste.protocols.environment import (  # type: ignore
@@ -347,7 +348,11 @@ class DataSourceWrapper:
         req = urllib.request.Request(
             url,
             data=body,
-            headers={"Authorization": "Bearer " + str(token), "Content-Type": "application/json"},
+            headers={
+                "Authorization": "Bearer " + str(token),
+                "Content-Type": "application/json",
+                "User-Agent": USER_AGENT,
+            },
             method="POST",
         )
         timeout = self._timeout_seconds()
@@ -664,7 +669,11 @@ class HTTPSubcallClient(SubcallClient):
         req = urllib.request.Request(
             self._endpoint,
             data=body,
-            headers={"Authorization": "Bearer " + self._token, "Content-Type": "application/json"},
+            headers={
+                "Authorization": "Bearer " + self._token,
+                "Content-Type": "application/json",
+                "User-Agent": USER_AGENT,
+            },
             method="POST",
         )
         try:
@@ -826,7 +835,11 @@ class RootLLMClient:
         req = urllib.request.Request(
             self._endpoint,
             data=body,
-            headers={"Authorization": "Bearer " + self._token, "Content-Type": "application/json"},
+            headers={
+                "Authorization": "Bearer " + self._token,
+                "Content-Type": "application/json",
+                "User-Agent": USER_AGENT,
+            },
             method="POST",
         )
         try:
