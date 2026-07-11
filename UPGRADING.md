@@ -16,9 +16,8 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 ### Event emission is now opt-in — attach sinks or loop events go silent
 
 `run_rlm` no longer prints NDJSON events to stderr by default (#35). If you
-call `run_rlm` (or build an `ExecutionContext`) directly and relied on the
-default stderr stream — for example to feed the relay's event forwarder or a
-"watch it think" UI — attach the sinks explicitly:
+relied on the default stderr stream — for example to feed the relay's event
+forwarder or a "watch it think" UI — attach the sinks explicitly:
 
 ```python
 from droste.execution.progress import emit_event, emit_progress
@@ -26,9 +25,22 @@ from droste.execution.progress import emit_event, emit_progress
 run_rlm(..., on_progress=emit_progress, on_event=emit_event)
 ```
 
-`droste_runner.run()` attaches them itself — hosts driving the runner (or the
-relay, which wraps it) need no change. **This is a silent degradation if
-missed**: the run still succeeds; the event stream is just empty.
+If you build your own `ExecutionContext` and pass it as `context=`, attach the
+sinks THERE — `run_rlm`'s `on_progress`/`on_event` arguments apply only when
+it creates the context for you:
+
+```python
+context = create_execution_context(..., on_progress=emit_progress, on_event=emit_event)
+run_rlm(..., context=context)
+```
+
+`droste_runner.run()`'s built-in HTTP path attaches them itself. An
+`adapter_module` does NOT inherit that: the runner delegates to the adapter
+before any sink-configured context exists, and the Deno relay likewise calls
+your adapter directly — an adapter that calls `run_rlm` must attach the sinks
+itself (as `examples/pyodide-host/pyodide_host_adapter.py` now does). **This
+is a silent degradation if missed**: the run still succeeds; the event stream
+is just empty.
 
 Related changes in the same release:
 
