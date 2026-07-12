@@ -13,6 +13,12 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.10.2)
 
+### Failed-only trajectories are not extraction evidence
+
+Failed-only trajectories with no retained draft are not extraction evidence;
+their terminal error remains fatal. Because no extract call is attempted,
+`extract_error` remains `None` on this path.
+
 ## 0.10.2 (from 0.10.1)
 
 ### Terminal failures can recover a typed best-effort answer

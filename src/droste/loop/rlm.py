@@ -130,6 +130,19 @@ def _trajectory_summary(
     return summary
 
 
+def _has_extractable_work(answer: dict[str, Any], has_successful_step: bool) -> bool:
+    """Whether partial work contains evidence worth a terminal extract call.
+
+    Failed attempts are retained for provenance, but a trajectory made only of
+    errors is not evidence. Extraction may recover a retained draft or inspect
+    any successfully executed step (including one with empty stdout whose code
+    accumulated useful intermediate state).
+    """
+    if str(answer.get("content") or "").strip():
+        return True
+    return has_successful_step
+
+
 def _extract_final_answer(
     question: str,
     draft: str,
@@ -256,6 +269,7 @@ def run_rlm(
         user_content = f"{user_content}\n\nConversation Context:\n{conversation_context}"
 
     trajectory: list[IterationRecord] = []
+    has_successful_step = False
     iterations = 0
     last_output = ""
     last_response = ""
@@ -358,6 +372,7 @@ def run_rlm(
             last_output = outcome.output
             error = outcome.error
             if outcome.error is None:
+                has_successful_step = True
                 trajectory.append(
                     record_iteration(
                         iteration=iterations,
@@ -408,6 +423,7 @@ def run_rlm(
                 error = outcome.error
                 if outcome.error is None:
                     code = repaired_code
+                    has_successful_step = True
                 else:
                     # Keep the attempt that produced the retained draft as
                     # well as the failed repair that ended the iteration.
@@ -446,7 +462,12 @@ def run_rlm(
         was_extracted = False
         extract_error: RLMError | None = None
         recovered_error: RLMError | None = None
-        if not answer.get("ready") and iterations >= cfg.max_iterations and trajectory:
+        if (
+            not answer.get("ready")
+            and iterations >= cfg.max_iterations
+            and trajectory
+            and _has_extractable_work(answer, has_successful_step)
+        ):
             context.emit_progress("Loop ended unconfirmed: extracting best final answer...")
             draft = str(answer.get("content") or "")
             extracted, extract_error = _extract_final_answer(

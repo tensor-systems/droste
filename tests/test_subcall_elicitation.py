@@ -428,6 +428,60 @@ def test_terminal_execution_error_extracts_partial_answer() -> None:
     assert "still bad" in llm.calls[-1][1]["content"]
 
 
+def test_failed_only_trajectory_without_draft_skips_extraction() -> None:
+    llm = RecordingLLMClient(
+        _responses(
+            """```python\nraise PermissionError('access denied')\n```""",
+            """```python\nraise PermissionError('still denied')\n```""",
+        )
+    )
+    result = run_rlm(
+        question="q",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=1),
+    )
+
+    assert result.extracted is False
+    assert result.error is not None
+    assert result.error.type == "PermissionError"
+    assert result.error.message == "still denied"
+    assert len(llm.calls) == 2
+    assert len(result.trajectory) == 2
+
+
+def test_successful_error_prefixed_stdout_is_extractable_evidence() -> None:
+    class ErrorStdoutEnvironment(MockEnvironment):
+        def execute(self, code: str) -> ExecutionResult:
+            super().execute(code)
+            return ExecutionResult(
+                stdout="ERROR: line from analyzed log",
+                stderr="",
+                timed_out=False,
+                exit_code=0,
+                files_written=[],
+            )
+
+    llm = RecordingLLMClient(
+        _responses(
+            """```python\npass\n```""",
+            "Recovered analysis from the successful step.",
+        )
+    )
+    result = run_rlm(
+        question="q",
+        environment=ErrorStdoutEnvironment(),
+        root_llm=llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=1),
+    )
+
+    assert result.extracted is True
+    assert result.answer == "Recovered analysis from the successful step."
+    assert len(llm.calls) == 2
+
+
 def test_failed_attempt_is_retained_when_repair_root_call_fails() -> None:
     llm = RecordingLLMClient(
         _responses("""```python\nanswer['content'] = 'partial'\nraise ValueError('boom')\n```""")
