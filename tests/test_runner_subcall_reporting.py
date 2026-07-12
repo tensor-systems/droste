@@ -76,6 +76,7 @@ def test_run_reports_actual_subcall_count() -> None:
     assert response["answer"] == "label: spam"
     assert response["subcalls"] == 1
     assert response["extracted"] is False
+    assert response["recovered_error"] is None
 
 
 def _client(max_calls: int) -> tuple[HTTPSubcallClient, Any]:

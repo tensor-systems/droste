@@ -15,6 +15,31 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## 0.10.1 (from 0.10.0)
 
+### Terminal failures can recover a typed best-effort answer
+
+When a terminal execution error, exhausted subcall budget, or unresolved
+ready-policy hint leaves usable partial work, `run_rlm` now gives the existing
+extract fallback one bounded chance to synthesize an answer. On success,
+`RLMResult.extracted` is `True`, fatal `error` is `None`, and the superseded
+step error is preserved as `recovered_error`. The runner and CLI JSON surfaces
+include the same additive `recovered_error` object. Hosts should present these
+answers as unconfirmed and may use `recovered_error.type` for telemetry.
+
+Any failed execution whose repair also fails (or returns no code) is now
+retained in `trajectory`, including on mid-run iterations that later recover.
+Consumers must tolerate duplicate iteration numbers and `execution_result`
+values beginning with `ERROR:` even when the final run is ready.
+
+The exact extract response `unable to determine from the work so far` is not a
+successful recovery: it produces `extract_error.type == "InsufficientEvidence"`
+and retains the fatal terminal error.
+
+Any failed sandbox execution now revokes `answer["ready"]`, including when the
+block set readiness or rebound the answer dict before raising. Such a run may
+consume another root iteration instead of returning `ready=True` alongside a
+fatal execution error; retained `answer["content"]` remains available to repair
+or extraction.
+
 ### Event emission is now opt-in — attach sinks or loop events go silent
 
 `run_rlm` no longer prints NDJSON events to stderr by default (#35). If you

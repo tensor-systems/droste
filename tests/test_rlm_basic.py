@@ -115,3 +115,41 @@ def test_run_rlm_rebound_answer_in_repaired_code_registers_ready():
     assert result.ready
     assert result.answer == "fixed"
     assert result.iterations == 1  # repair happened within iteration 1
+
+
+def test_failed_rebound_answer_cannot_confirm_through_noop_repair():
+    """A failed block may rebind answer before raising. The exception path
+    must adopt that content but revoke its readiness, so a successful no-op
+    repair cannot make the failed block look confirmed."""
+    mock_llm = MockLLMClient(
+        responses=[
+            MockResponse(
+                text=(
+                    "```python\n"
+                    "answer = {'content': 'draft from failed block', 'ready': True}\n"
+                    "raise ValueError('boom')\n"
+                    "```"
+                ),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            ),
+            MockResponse(
+                text="""```python\npass\n```""",
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            ),
+            MockResponse(
+                text="""```python\nanswer['ready'] = True\n```""",
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            ),
+        ]
+    )
+    result = run_rlm(
+        question="test",
+        environment=MockEnvironment(),
+        root_llm=mock_llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=3),
+    )
+
+    assert result.ready is True
+    assert result.answer == "draft from failed block"
+    assert result.iterations == 2

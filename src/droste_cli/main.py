@@ -515,6 +515,7 @@ def run_ask(args: argparse.Namespace) -> int:
             "files": len(loaded.context["files"]) if loaded.context else 0,
             "db": loaded.db_path,
             "error": None,
+            "recovered_error": None,
         }
         if result.error:
             payload["error"] = {
@@ -526,6 +527,11 @@ def run_ask(args: argparse.Namespace) -> int:
                 "type": result.extract_error.type,
                 "message": result.extract_error.message,
             }
+        if result.recovered_error:
+            payload["recovered_error"] = {
+                "type": result.recovered_error.type,
+                "message": result.recovered_error.message,
+            }
         print(json.dumps(payload, ensure_ascii=True))
     else:
         print(result.answer)
@@ -535,7 +541,7 @@ def run_ask(args: argparse.Namespace) -> int:
     if result.extracted:
         # Usable answer, honest provenance.
         print(
-            "droste: note: max iterations reached; answer extracted from partial work (unconfirmed)",
+            "droste: note: answer extracted from partial work after an unconfirmed run",
             file=sys.stderr,
         )
         return 0

@@ -276,6 +276,7 @@ def test_ask_json_shape(stub_server, tmp_path, capsys):
     assert payload["files"] == 1
     assert payload["db"] is None
     assert payload["error"] is None
+    assert payload["recovered_error"] is None
 
 
 def test_ask_extracted_answer_exits_zero_with_note(stub_server, tmp_path, capsys):

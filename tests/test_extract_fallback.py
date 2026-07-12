@@ -63,6 +63,86 @@ def test_extract_fallback_empty_response_surfaces_as_error():
     assert result.extract_error.type == "EmptyExtraction"
 
 
+def test_extract_fallback_unable_sentinel_is_not_success():
+    responses = _non_ready_responses(1) + [
+        MockResponse(
+            text="unable to determine from the work so far",
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+    ]
+    result = run_rlm(
+        question="test",
+        environment=MockEnvironment(),
+        root_llm=MockLLMClient(responses=responses),
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=1),
+    )
+
+    assert result.extracted is False
+    assert result.extract_error is not None
+    assert result.extract_error.type == "InsufficientEvidence"
+
+
+def test_extract_fallback_decorated_unable_sentinel_is_not_success():
+    responses = _non_ready_responses(1) + [
+        MockResponse(
+            text='"Unable to determine from the work so far."',
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+    ]
+    result = run_rlm(
+        question="test",
+        environment=MockEnvironment(),
+        root_llm=MockLLMClient(responses=responses),
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=1),
+    )
+
+    assert result.extracted is False
+    assert result.extract_error is not None
+    assert result.extract_error.type == "InsufficientEvidence"
+
+
+def test_extract_fallback_markdown_unable_sentinel_is_not_success():
+    responses = _non_ready_responses(1) + [
+        MockResponse(
+            text="**Unable to determine from the work so far.**",
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+    ]
+    result = run_rlm(
+        question="test",
+        environment=MockEnvironment(),
+        root_llm=MockLLMClient(responses=responses),
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=1),
+    )
+
+    assert result.extracted is False
+    assert result.extract_error is not None
+    assert result.extract_error.type == "InsufficientEvidence"
+
+
+def test_extract_fallback_unicode_ellipsis_unable_sentinel_is_not_success():
+    responses = _non_ready_responses(1) + [
+        MockResponse(
+            text="Unable to determine from the work so far…",
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+    ]
+    result = run_rlm(
+        question="test",
+        environment=MockEnvironment(),
+        root_llm=MockLLMClient(responses=responses),
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=1),
+    )
+
+    assert result.extracted is False
+    assert result.extract_error is not None
+    assert result.extract_error.type == "InsufficientEvidence"
+
+
 def test_extract_fallback_success_has_no_error():
     """The success path must be unaffected by this fix: extract_error stays
     None, extracted is True, and the synthesized text (not raw stdout) wins."""

@@ -67,6 +67,11 @@ class RLMResult:
     # printed stdout), NOT prose a host should present verbatim as an answer.
     # None whenever extraction wasn't attempted or succeeded (extracted=True).
     extract_error: RLMError | None = None
+    # The terminal step error superseded by a successful extract fallback.
+    # This is diagnostic provenance, not a fatal run error: hosts should
+    # present the answer as best-effort using `extracted`, while telemetry and
+    # benchmarks can still distinguish policy, budget, and execution recovery.
+    recovered_error: RLMError | None = None
 
 
 @dataclass
@@ -283,11 +288,13 @@ def execute_step(
         details = None
         if isinstance(exec_error, BatchLLMError):
             details = {"errors": exec_error.errors}
-        if isinstance(exec_error, PolicyError):
-            # Softened: revoke readiness so the gate still gates, but keep
-            # the accumulated content — the violation is fed back as
-            # guidance, not punished with a wiped draft.
-            answer["ready"] = False
+        # Failed code cannot submit a confirmed answer, even if it set ready
+        # before raising or rebound the answer dict entirely. Keep accumulated
+        # content for repair/extraction, but always revoke readiness. Policy
+        # errors use the same state rule and receive specialized feedback from
+        # `_error_feedback`.
+        answer = _refresh_answer(env_globals, answer)
+        answer["ready"] = False
         context.emit_event(
             execution_error_event(iteration, exec_error.__class__.__name__, str(exec_error))
         )
@@ -338,6 +345,7 @@ def finalize(
     error: RLMError | None = None,
     extracted: bool = False,
     extract_error: RLMError | None = None,
+    recovered_error: RLMError | None = None,
 ) -> RLMResult:
     """The one RLMResult construction site."""
     return RLMResult(
@@ -350,4 +358,5 @@ def finalize(
         error=error,
         extracted=extracted,
         extract_error=extract_error,
+        recovered_error=recovered_error,
     )
