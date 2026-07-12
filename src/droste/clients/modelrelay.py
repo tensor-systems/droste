@@ -28,16 +28,14 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from ..execution.context import ExecutionContext
 from ..protocols.llm_client import TokenUsage
 from ..protocols.subcall_client import SubcallClient
-from .errors import http_error_excerpt
+from .errors import http_error_excerpt, redact_secrets
 from .openai_compat import (
     DEFAULT_MAX_PARALLEL,
     DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS,
@@ -102,6 +100,7 @@ class _ResponsesTransport:
 
     def __init__(self, *, base_url: str | None, api_key: str, timeout: float, label: str) -> None:
         base = str(base_url or DEFAULT_MODELRELAY_BASE_URL).rstrip("/")
+        self._base_url = base
         self._url = base + "/responses"
         self._api_key = str(api_key or "")
         self._timeout = float(timeout)
@@ -111,7 +110,13 @@ class _ResponsesTransport:
     def url(self) -> str:
         return self._url
 
-    def _request(self, payload: dict[str, Any], *, accept: str | None = None) -> Any:
+    def _request(
+        self,
+        payload: dict[str, Any],
+        *,
+        accept: str | None = None,
+        url: str | None = None,
+    ) -> Any:
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
         if accept:
@@ -121,10 +126,17 @@ class _ResponsesTransport:
             # keys go in X-ModelRelay-Api-Key; Authorization: Bearer
             # mr_sk_... is rejected outright.
             headers["X-ModelRelay-Api-Key"] = self._api_key
-        return urllib.request.Request(self._url, data=body, headers=headers, method="POST")
+        return urllib.request.Request(url or self._url, data=body, headers=headers, method="POST")
 
-    def complete(self, payload: dict[str, Any]) -> dict[str, Any]:
-        req = self._request(payload)
+    def complete(
+        self,
+        payload: dict[str, Any],
+        *,
+        path: str = "/responses",
+        label: str | None = None,
+    ) -> dict[str, Any]:
+        request_label = label or self._label
+        req = self._request(payload, url=self._base_url + path)
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                 raw = resp.read().decode("utf-8")
@@ -132,15 +144,15 @@ class _ResponsesTransport:
             status = getattr(exc, "code", 0)
             excerpt = http_error_excerpt(exc)
             detail = f": {excerpt}" if excerpt else f": {exc}"
-            raise RuntimeError(f"{self._label} failed with HTTP {status}{detail}") from exc
+            raise RuntimeError(f"{request_label} failed with HTTP {status}{detail}") from exc
         except Exception as exc:
-            raise RuntimeError(f"{self._label} failed: {exc}") from exc
+            raise RuntimeError(f"{request_label} failed: {exc}") from exc
         try:
             data = json.loads(raw)
         except Exception as exc:
-            raise RuntimeError(f"{self._label} returned non-JSON response") from exc
+            raise RuntimeError(f"{request_label} returned non-JSON response") from exc
         if not isinstance(data, dict):
-            raise RuntimeError(f"{self._label} returned a non-object JSON response")
+            raise RuntimeError(f"{request_label} returned a non-object JSON response")
         return data
 
     def stream(self, payload: dict[str, Any], on_delta: Any) -> dict[str, Any]:
@@ -370,11 +382,13 @@ class ModelRelaySubcallClient(SubcallClient):
     def _depth_set(self, value: int) -> None:
         self._depth.value = value
 
-    def _increment_calls(self) -> None:
+    def _increment_calls(self, count: int = 1) -> None:
         with self._lock:
-            if self._max_calls >= 0 and self._context.stats.calls_made >= self._max_calls:
+            if count < 0:
+                raise ValueError("subcall count must be non-negative")
+            if self._max_calls >= 0 and self._context.stats.calls_made + count > self._max_calls:
                 raise RuntimeError("max subcalls exceeded")
-            self._context.stats.calls_made += 1
+            self._context.stats.calls_made += count
 
     def _account_usage(self, usage: TokenUsage) -> None:
         with self._lock:
@@ -438,20 +452,77 @@ class ModelRelaySubcallClient(SubcallClient):
         if len(prompts) > MAX_BATCH_PROMPTS:
             raise ValueError(f"llm_batch prompt count exceeds max {MAX_BATCH_PROMPTS}")
 
-        def _run_one(idx: int, prompt: str, ctx: str) -> str:
-            if idx > 0:
-                time.sleep(0.05)
-            return self.llm_query(prompt, ctx)
+        depth = self._depth_get() + 1
+        self._depth_set(depth)
+        try:
+            if self._max_depth >= 0 and depth > self._max_depth:
+                raise RuntimeError("max depth exceeded")
 
-        with ThreadPoolExecutor(max_workers=self._max_parallel) as executor:
-            futures = {
-                executor.submit(_run_one, idx, prompt, ctx): idx
-                for idx, (prompt, ctx) in enumerate(zip(prompts, contexts))
-            }
-            for future in as_completed(futures):
-                idx = futures[future]
+            # Reserve the whole batch atomically before the one wire call. A
+            # rejected batch consumes nothing; a dispatched batch counts every
+            # attempted item exactly like N individual llm_query calls.
+            self._increment_calls(len(prompts))
+            requests: list[dict[str, Any]] = []
+            for idx, (prompt, ctx) in enumerate(zip(prompts, contexts)):
+                if ctx:
+                    prompt = f"{ctx}\n\n{prompt}"
+                item: dict[str, Any] = {
+                    "id": str(idx),
+                    "model": self._model,
+                    "input": _input_items([{"role": "user", "content": prompt}]),
+                }
+                if self._max_output_tokens > 0:
+                    item["max_output_tokens"] = self._max_output_tokens
+                if self._temperature is not None:
+                    item["temperature"] = self._temperature
+                if self._reasoning_effort:
+                    item["reasoning_effort"] = self._reasoning_effort
+                requests.append(item)
+
+            data = self._transport.complete(
+                {
+                    "requests": requests,
+                    "options": {"max_concurrent": self._max_parallel, "fail_fast": False},
+                },
+                path="/responses/batch",
+                label="llm_batch",
+            )
+            raw_results = data.get("results")
+            if not isinstance(raw_results, list):
+                raise RuntimeError("llm_batch response missing results")
+
+            seen: set[int] = set()
+            for raw in raw_results:
+                if not isinstance(raw, dict):
+                    raise RuntimeError("llm_batch returned a non-object result")
                 try:
-                    results[idx] = future.result()
-                except Exception as exc:
-                    errors[idx] = exc
-        return results, errors
+                    idx = int(raw.get("id"))
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError("llm_batch returned an invalid result id") from exc
+                if idx < 0 or idx >= len(prompts) or idx in seen:
+                    raise RuntimeError(f"llm_batch returned unexpected result id {idx}")
+                seen.add(idx)
+                status = str(raw.get("status") or "")
+                if status == "success":
+                    response = raw.get("response")
+                    if not isinstance(response, dict):
+                        raise RuntimeError(f"llm_batch item {idx} missing response")
+                    results[idx] = _output_text(response)
+                    self._account_usage(_usage_from(response))
+                elif status == "error":
+                    error = raw.get("error")
+                    if not isinstance(error, dict):
+                        raise RuntimeError(f"llm_batch item {idx} missing error")
+                    code = str(error.get("code") or "")
+                    message = redact_secrets(str(error.get("message") or "batch item failed"))[:500]
+                    detail = f" ({code})" if code else ""
+                    errors[idx] = RuntimeError(f"llm_batch item {idx} failed{detail}: {message}")
+                else:
+                    raise RuntimeError(f"llm_batch item {idx} has invalid status {status!r}")
+
+            if len(seen) != len(prompts):
+                missing = sorted(set(range(len(prompts))) - seen)
+                raise RuntimeError(f"llm_batch response missing result ids {missing}")
+            return results, errors
+        finally:
+            self._depth_set(depth - 1)

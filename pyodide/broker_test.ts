@@ -5,8 +5,10 @@ import {
   authHeader,
   type Credentials,
   isModelRelayResponsesCall,
+  isRunnerCallback,
   splitCredentials,
   stripAndInjectAuth,
+  stripAndInjectBearer,
 } from "../src/droste/substrates/_relay/broker.ts";
 
 Deno.test("isModelRelayResponsesCall: only POST https://api.modelrelay.ai/api/v1/responses qualifies", () => {
@@ -126,6 +128,7 @@ Deno.test("splitCredentials removes secrets and preserves normalized auth type",
     customer_token: "ct_secret",
     auth_type: "customer_token",
     root_model: "gemini-3.5-flash",
+    token: "runner_secret",
   };
   const { creds, sandboxRequest } = splitCredentials(req);
   // The sandbox request keeps the real work and NONE of the credentials.
@@ -146,6 +149,7 @@ Deno.test("splitCredentials removes secrets and preserves normalized auth type",
     authType: "customer_token",
     apiKey: "mr_sk_secret",
     customerToken: "ct_secret",
+    runnerToken: "runner_secret",
   });
 });
 
@@ -156,6 +160,7 @@ Deno.test("splitCredentials tolerates a request with no credentials", () => {
     authType: "api_key",
     apiKey: undefined,
     customerToken: undefined,
+    runnerToken: undefined,
   });
 });
 
@@ -218,4 +223,20 @@ Deno.test("stripAndInjectAuth: no credential means no auth header leaks through"
   };
   const out = stripAndInjectAuth(headers, { authType: "api_key" });
   assertEquals(out, {});
+});
+
+Deno.test("runner callback token is stripped and scoped to exact endpoints", () => {
+  const endpoint = "https://internal.example/api/v1/rlm/subcall/batch";
+  assert(isRunnerCallback("POST", endpoint, [endpoint]));
+  assert(!isRunnerCallback("GET", endpoint, [endpoint]));
+  assert(!isRunnerCallback("POST", endpoint + "/extra", [endpoint]));
+
+  const headers = stripAndInjectBearer(
+    { authorization: "Bearer sandbox", "Content-Type": "application/json" },
+    "runner_real",
+  );
+  assertEquals(headers, {
+    Authorization: "Bearer runner_real",
+    "Content-Type": "application/json",
+  });
 });
