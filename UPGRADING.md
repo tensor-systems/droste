@@ -11,9 +11,9 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.10.1)
+## Unreleased (post-0.10.2)
 
-## 0.10.1 (from 0.10.0)
+## 0.10.2 (from 0.10.1)
 
 ### Terminal failures can recover a typed best-effort answer
 
@@ -39,6 +39,8 @@ block set readiness or rebound the answer dict before raising. Such a run may
 consume another root iteration instead of returning `ready=True` alongside a
 fatal execution error; retained `answer["content"]` remains available to repair
 or extraction.
+
+## 0.10.1 (from 0.10.0)
 
 ### Event emission is now opt-in — attach sinks or loop events go silent
 
