@@ -28,6 +28,7 @@ class StubResponsesServer:
 
     def __init__(self) -> None:
         self.requests: list[dict] = []
+        self.paths: list[str] = []
         self.headers: list[dict[str, str]] = []
         self.root_responses: list[str] = []
         self.fail_status: int | None = None
@@ -35,6 +36,7 @@ class StubResponsesServer:
         self.stream_error_midway = False
         self.stream_truncate = False  # drop the connection before completion
         self.usage = {"input_tokens": 7, "output_tokens": 3, "total_tokens": 10}
+        self.batch_error_message = "provider exploded"
         stub = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -43,12 +45,69 @@ class StubResponsesServer:
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
                 with threading.Lock():
                     stub.requests.append(payload)
+                    stub.paths.append(self.path)
                     stub.headers.append({k.lower(): v for k, v in self.headers.items()})
                 if stub.fail_status is not None:
                     self.send_response(stub.fail_status)
                     self.send_header("Content-Length", str(len(stub.fail_body)))
                     self.end_headers()
                     self.wfile.write(stub.fail_body)
+                    return
+                if self.path.endswith("/responses/batch"):
+                    results = []
+                    for item in payload["requests"]:
+                        prompt = item["input"][-1]["content"][0]["text"]
+                        if prompt == "fail":
+                            results.append(
+                                {
+                                    "id": item["id"],
+                                    "status": "error",
+                                    "error": {
+                                        "status": 502,
+                                        "message": stub.batch_error_message,
+                                        "code": "PROVIDER_ERROR",
+                                    },
+                                }
+                            )
+                            continue
+                        results.append(
+                            {
+                                "id": item["id"],
+                                "status": "success",
+                                "response": {
+                                    "output": [
+                                        {
+                                            "type": "message",
+                                            "role": "assistant",
+                                            "content": [
+                                                {"type": "text", "text": f"echo: {prompt}"}
+                                            ],
+                                        }
+                                    ],
+                                    "usage": dict(stub.usage),
+                                },
+                            }
+                        )
+                    successful = sum(item["status"] == "success" for item in results)
+                    body = json.dumps(
+                        {
+                            "id": "batch-stub-1",
+                            # Reverse wire order to prove ids restore caller order.
+                            "results": list(reversed(results)),
+                            "usage": {
+                                "total_input_tokens": successful * stub.usage["input_tokens"],
+                                "total_output_tokens": successful * stub.usage["output_tokens"],
+                                "total_requests": len(results),
+                                "successful_requests": successful,
+                                "failed_requests": len(results) - successful,
+                            },
+                        }
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
                     return
                 if payload.get("model") == "sub-model":
                     prompt = payload["input"][-1]["content"][0]["text"]
@@ -231,6 +290,10 @@ def test_subcall_accounting_and_cost_defaults(stub_native):
 
     assert client.llm_batch(["a", "b"]) == ["echo: a", "echo: b"]
     assert context.stats.calls_made == 3
+    assert context.stats.total_tokens == 30
+    assert stub_native.paths == ["/api/v1/responses", "/api/v1/responses/batch"]
+    assert len(stub_native.requests) == 2
+    assert stub_native.requests[1]["options"] == {"max_concurrent": 5, "fail_fast": False}
 
     with pytest.raises(RuntimeError, match="max subcalls exceeded"):
         client.llm_query("over budget")
@@ -241,3 +304,61 @@ def test_subcall_requires_api_key():
     context = create_execution_context(max_calls=1, max_iterations=1)
     with pytest.raises(ValueError, match="api_key"):
         ModelRelaySubcallClient(model="m", context=context, api_key="")
+
+
+def test_subcall_batch_reports_ordered_item_errors_without_retry(stub_native):
+    context = create_execution_context(max_calls=3, max_iterations=5)
+    client = ModelRelaySubcallClient(
+        model="sub-model",
+        context=context,
+        base_url=stub_native.base_url,
+        api_key="mr_sk_t",
+    )
+
+    results, errors = client.llm_batch_with_errors(["a", "fail", "c"])
+
+    assert results == ["echo: a", "", "echo: c"]
+    assert errors == [
+        {
+            "index": 1,
+            "error": "llm_batch item 1 failed (PROVIDER_ERROR): provider exploded",
+        }
+    ]
+    assert context.stats.calls_made == 3
+    assert context.stats.total_tokens == 20
+    assert stub_native.paths == ["/api/v1/responses/batch"]
+    assert len(stub_native.requests) == 1
+
+
+def test_subcall_batch_budget_rejection_is_atomic(stub_native):
+    context = create_execution_context(max_calls=2, max_iterations=5)
+    client = ModelRelaySubcallClient(
+        model="sub-model",
+        context=context,
+        base_url=stub_native.base_url,
+        api_key="mr_sk_t",
+    )
+
+    with pytest.raises(RuntimeError, match="max subcalls exceeded"):
+        client.llm_batch(["a", "b", "c"])
+
+    assert context.stats.calls_made == 0
+    assert stub_native.requests == []
+
+
+def test_subcall_batch_item_error_is_bounded_and_redacted(stub_native):
+    context = create_execution_context(max_calls=1, max_iterations=5)
+    client = ModelRelaySubcallClient(
+        model="sub-model",
+        context=context,
+        base_url=stub_native.base_url,
+        api_key="mr_sk_t",
+    )
+    stub_native.batch_error_message = "token=supersecret " + ("x" * 1000)
+
+    _, errors = client.llm_batch_with_errors(["fail"])
+
+    message = str(errors[0]["error"])
+    assert "supersecret" not in message
+    assert "[redacted]" in message
+    assert len(message) < 600

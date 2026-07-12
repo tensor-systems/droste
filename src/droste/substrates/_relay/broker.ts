@@ -17,6 +17,7 @@ export interface Credentials {
   authType: string; // "customer_token" | "api_key"
   apiKey?: string;
   customerToken?: string;
+  runnerToken?: string;
 }
 
 // Header names the sandbox is not allowed to control. Compared case-insensitively.
@@ -61,6 +62,18 @@ export function isModelRelayResponsesCall(
   );
 }
 
+/** Exact-match short-lived hosted-runner callback endpoints. */
+export function isRunnerCallback(
+  method: string,
+  url: string,
+  endpoints: readonly unknown[],
+): boolean {
+  if (method.toUpperCase() !== "POST") return false;
+  return endpoints.some((endpoint) =>
+    typeof endpoint === "string" && endpoint.length > 0 && endpoint === url
+  );
+}
+
 /**
  * Pull secret credentials out of the request so they never become a sandbox
  * global. The normalized auth type is nonsecret routing metadata, so preserve
@@ -70,7 +83,7 @@ export function isModelRelayResponsesCall(
 export function splitCredentials(
   request: Record<string, unknown>,
 ): { creds: Credentials; sandboxRequest: Record<string, unknown> } {
-  const { api_key, customer_token, auth_type, ...rest } = request;
+  const { api_key, customer_token, token, auth_type, ...rest } = request;
   const normalizedAuthType = auth_type === "customer_token"
     ? "customer_token"
     : "api_key";
@@ -81,9 +94,22 @@ export function splitCredentials(
       customerToken: typeof customer_token === "string"
         ? customer_token
         : undefined,
+      runnerToken: typeof token === "string" ? token : undefined,
     },
     sandboxRequest: { ...rest, auth_type: normalizedAuthType },
   };
+}
+
+/** Make a short-lived bearer credential authoritative on an outbound call. */
+export function stripAndInjectBearer(
+  headers: Record<string, string>,
+  token: string | undefined,
+): Record<string, string> {
+  for (const key of Object.keys(headers)) {
+    if (AUTH_HEADER_NAMES.includes(key.toLowerCase())) delete headers[key];
+  }
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
 }
 
 /**

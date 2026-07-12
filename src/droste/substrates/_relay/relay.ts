@@ -20,8 +20,10 @@ import { basename, dirname } from "node:path";
 import { streamResponses } from "./stream.ts";
 import {
   isModelRelayResponsesCall,
+  isRunnerCallback,
   splitCredentials,
   stripAndInjectAuth,
+  stripAndInjectBearer,
 } from "./broker.ts";
 import { isRlmEvent } from "./events.ts";
 
@@ -90,7 +92,9 @@ async function writeHostResponse(resp: unknown): Promise<void> {
 // payload the sandbox sees, whether host_fetch strips/injects auth); this one
 // governs DB locality. All four combinations of the two flags are coherent and
 // each is a useful debugging bisect.
-const DB_SERVICE = Deno.env.get("RLM_DB_SERVICE") !== "0";
+const hasDbPath = typeof request.db_path === "string" &&
+  request.db_path.length > 0 && request.db_path !== "nil";
+const DB_SERVICE = hasDbPath && Deno.env.get("RLM_DB_SERVICE") !== "0";
 
 // Resolve symlinks before mounting. Pyodide's NODEFS mounts a host directory
 // into its own VFS; if the DB file is a symlink to an absolute host path
@@ -101,8 +105,8 @@ const DB_SERVICE = Deno.env.get("RLM_DB_SERVICE") !== "0";
 // Falls back to the original path if it cannot be resolved (e.g. not yet on
 // disk). The resolved directory must be in Deno's --allow-read (the code that
 // spawns this relay grants it when building the deno invocation).
-const realDbPath = realPathOr(request.db_path);
-const dbDir = dirname(realDbPath);
+const realDbPath = hasDbPath ? realPathOr(request.db_path) : null;
+const dbDir = realDbPath ? dirname(realDbPath) : null;
 const hasContactsField = request.contacts_db_path &&
   request.contacts_db_path !== "nil";
 const realContactsPath = hasContactsField
@@ -134,8 +138,8 @@ if (DB_SERVICE) {
     });
     await mountSources(dbsvc);
 
-    dbsvc.mountNodeFS("/data", dbDir);
-    const svcDbPath = "/data/" + basename(realDbPath);
+    dbsvc.mountNodeFS("/data", dbDir!);
+    const svcDbPath = "/data/" + basename(realDbPath!);
     let svcContactsPath: string | null = null;
     if (realContactsPath) {
       const contactsDir = dirname(realContactsPath);
@@ -251,7 +255,7 @@ if (DB_SERVICE) {
   // DB directory at all, mounted or otherwise.
   delete request.db_path;
   delete request.contacts_db_path;
-} else {
+} else if (realDbPath && dbDir) {
   // DELIBERATE (#7, decided 2026-07-10): legacy mode mounts the DB's whole
   // parent directory READ-WRITE into the untrusted interpreter — mountNodeFS
   // has no read-only or per-file option, so any sibling file in that
@@ -275,6 +279,11 @@ if (DB_SERVICE) {
   } else {
     delete request.contacts_db_path;
   }
+} else {
+  // A contacts DB has no coherent meaning without the primary DB/service.
+  // More importantly, never pass an unmapped host filesystem path into the
+  // untrusted interpreter on a context-only hosted request.
+  delete request.contacts_db_path;
 }
 
 // Emit a structured event line to the relay's own stderr — the same one-way
@@ -322,6 +331,15 @@ py.globals.set(
     // Legacy mode leaves the sandbox-assembled header untouched.
     if (!BRIDGE_LEGACY && isModelRelayResponsesCall(m, u)) {
       stripAndInjectAuth(headers, creds);
+    } else if (
+      !BRIDGE_LEGACY &&
+      isRunnerCallback(m, u, [
+        request.root_endpoint,
+        request.subcall_endpoint,
+        request.subcall_batch_endpoint,
+      ])
+    ) {
+      stripAndInjectBearer(headers, creds.runnerToken);
     }
     // Ask ModelRelay to stream /responses so reasoning tokens reach the host live.
     // Pyodide still receives one complete response (see streamResponses), so the

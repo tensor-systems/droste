@@ -11,7 +11,24 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.10.3)
+## Unreleased (post-0.10.4)
+
+## 0.10.4 (from 0.10.3)
+
+### ModelRelay batches use the synchronous batch endpoint
+
+`ModelRelaySubcallClient.llm_batch` now sends one `POST /responses/batch`
+request instead of spawning per-item worker threads. Hosts that mock ModelRelay
+must implement the typed batch response envelope (`results[].id/status/response/error`).
+There is deliberately no runtime fallback to individual requests.
+
+### Pyodide relay supports hosted runners without a database
+
+The Deno relay no longer assumes every host request has `db_path`. Hosts may
+stage a pure context/inference adapter with no DB service. A short-lived
+`token` in the request is stripped before the sandbox starts and is injected
+only for exact `root_endpoint`, `subcall_endpoint`, and
+`subcall_batch_endpoint` callback URLs.
 
 ## 0.10.3 (from 0.10.2)
 
