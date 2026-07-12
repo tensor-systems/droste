@@ -11,7 +11,9 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.10.0)
+## Unreleased (post-0.10.1)
+
+## 0.10.1 (from 0.10.0)
 
 ### Event emission is now opt-in — attach sinks or loop events go silent
 
@@ -58,6 +60,10 @@ Related changes in the same release:
 - A streamed LLM response that ends without the protocol's terminal event, or
   carries a mid-stream `error` record, now **fails the call** instead of
   returning accumulated partial text as a clean answer (#43).
+- Hosted `droste_runner` subcalls now request and consume ModelRelay's
+  `responses-stream/v2` NDJSON contract. Callback servers should honor that
+  Accept header so slow generations keep bytes moving through reverse proxies;
+  plain JSON remains supported for local callback handlers.
 - The Pyodide `RawExecutor` no longer silently truncates oversized sandbox
   output; over-budget prints raise the same `SandboxError` on every substrate,
   giving the model its narrow-your-query feedback (#44).

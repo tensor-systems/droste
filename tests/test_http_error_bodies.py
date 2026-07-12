@@ -8,6 +8,7 @@ indistinguishable from an upstream provider error).
 from __future__ import annotations
 
 import io
+import json
 import threading
 import urllib.error
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -69,6 +70,140 @@ def test_llm_query_error_includes_server_body():
             context=create_execution_context(max_calls=5, max_depth=5),
         )
         with pytest.raises(RuntimeError, match=r"HTTP 503: no healthy provider offers model"):
+            client.llm_query("hi")
+    finally:
+        server.shutdown()
+
+
+def test_llm_query_streams_and_reassembles_ndjson():
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            assert self.headers.get("Accept") == (
+                'application/x-ndjson; profile="responses-stream/v2"'
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            events = [
+                {"type": "start"},
+                {"type": "keepalive"},
+                {"type": "reasoning_delta", "reasoning_delta": "thinking"},
+                {"type": "update", "delta": "slow "},
+                {"type": "update", "delta": "model"},
+                {"type": "completion"},
+            ]
+            for event in events:
+                self.wfile.write(json.dumps(event).encode() + b"\n")
+                self.wfile.flush()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        client = HTTPSubcallClient(
+            endpoint=f"http://127.0.0.1:{server.server_address[1]}/subcall",
+            token="t",
+            session="",
+            session_index=0,
+            max_calls=5,
+            max_depth=5,
+            context=create_execution_context(max_calls=5, max_depth=5),
+        )
+        assert client.llm_query("hi") == "slow model"
+    finally:
+        server.shutdown()
+
+
+def test_llm_query_rejects_truncated_ndjson_stream():
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write(b'{"type":"update","delta":"partial"}\n')
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        client = HTTPSubcallClient(
+            endpoint=f"http://127.0.0.1:{server.server_address[1]}/subcall",
+            token="t",
+            session="",
+            session_index=0,
+            max_calls=5,
+            max_depth=5,
+            context=create_execution_context(max_calls=5, max_depth=5),
+        )
+        with pytest.raises(RuntimeError, match="without a completion event"):
+            client.llm_query("hi")
+    finally:
+        server.shutdown()
+
+
+def test_llm_query_preserves_explicitly_empty_completion_content():
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write(b'{"type":"update","delta":"superseded"}\n')
+            self.wfile.write(b'{"type":"completion","content":""}\n')
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        client = HTTPSubcallClient(
+            endpoint=f"http://127.0.0.1:{server.server_address[1]}/subcall",
+            token="t",
+            session="",
+            session_index=0,
+            max_calls=5,
+            max_depth=5,
+            context=create_execution_context(max_calls=5, max_depth=5),
+        )
+        assert client.llm_query("hi") == ""
+    finally:
+        server.shutdown()
+
+
+def test_llm_query_surfaces_ndjson_error_event():
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write(
+                b'{"type":"error","code":"UPSTREAM_TIMEOUT","message":"provider stalled"}\n'
+            )
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        client = HTTPSubcallClient(
+            endpoint=f"http://127.0.0.1:{server.server_address[1]}/subcall",
+            token="t",
+            session="",
+            session_index=0,
+            max_calls=5,
+            max_depth=5,
+            context=create_execution_context(max_calls=5, max_depth=5),
+        )
+        with pytest.raises(RuntimeError, match=r"UPSTREAM_TIMEOUT.*provider stalled"):
             client.llm_query("hi")
     finally:
         server.shutdown()
