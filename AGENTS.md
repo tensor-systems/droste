@@ -23,6 +23,8 @@ superseded typed failure in `recovered_error`; hosts must treat it as
 unconfirmed, while benchmarks may inspect the recovered error provenance.
 Failed attempts are retained in the trajectory when their repair also fails,
 including on mid-run iterations that later recover successfully.
+A failed-only trajectory with no retained `answer["content"]` must stay fatal;
+only a retained draft or at least one successful step is extraction evidence.
 
 ## LLM Client Protocol
 
