@@ -11,7 +11,14 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.10.4)
+## Unreleased (post-0.10.5)
+
+## 0.10.5 (from 0.10.4)
+
+The Pyodide credential broker now recognizes an optional exact
+`data_source_endpoint` as a short-lived runner callback. The held runner token
+is injected only for that exact URL, matching the root/subcall callback rules;
+data-source bearer credentials remain in the trusted host.
 
 ## 0.10.4 (from 0.10.3)
 

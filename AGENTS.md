@@ -101,6 +101,9 @@ uv pip install --no-index --find-links wheelhouse droste
   sandbox request and injects it only for exact root/subcall callback URLs from
   the trusted envelope. Requests without `db_path` skip the DB-service setup
   entirely, allowing context-only hosted adapters.
+- `data_source_endpoint` is part of that same exact-match runner callback set;
+  it lets a host proxy source calls without putting the source credential in
+  the sandbox request.
 
 ## Repo Hygiene (manual, before pushing docs/comments)
 
