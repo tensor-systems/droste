@@ -611,6 +611,8 @@ def build_data_sources(request: dict[str, Any], ctx: Any = None) -> tuple[list[A
 _redact_secrets = redact_secrets
 _http_error_excerpt = http_error_excerpt
 
+_SUBCALL_STREAM_ACCEPT = 'application/x-ndjson; profile="responses-stream/v2"'
+
 
 class HTTPSubcallClient(SubcallClient):
     def __init__(
@@ -671,6 +673,7 @@ class HTTPSubcallClient(SubcallClient):
             data=body,
             headers={
                 "Authorization": "Bearer " + self._token,
+                "Accept": _SUBCALL_STREAM_ACCEPT,
                 "Content-Type": "application/json",
                 "User-Agent": USER_AGENT,
             },
@@ -678,19 +681,56 @@ class HTTPSubcallClient(SubcallClient):
         )
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
-                raw = resp.read().decode("utf-8")
+                content_type = str(resp.headers.get("Content-Type") or "")
+                if "application/x-ndjson" not in content_type.lower():
+                    raw = resp.read().decode("utf-8")
+                    data = json.loads(raw)
+                    result = data.get("result")
+                    if not isinstance(result, str):
+                        raise RuntimeError("missing subcall result")
+                    return result
+
+                parts: list[str] = []
+                completed = False
+                completion_has_content = False
+                completion_content = ""
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        raise RuntimeError("llm_query returned malformed stream data") from exc
+                    if not isinstance(event, dict):
+                        raise RuntimeError("llm_query returned a non-object stream event")
+                    event_type = event.get("type")
+                    if event_type == "error":
+                        message = str(event.get("message") or "stream error")
+                        code = str(event.get("code") or "")
+                        detail = f" ({code})" if code else ""
+                        raise RuntimeError(f"llm_query streamed an error{detail}: {message[:500]}")
+                    if event_type == "update":
+                        delta = event.get("delta")
+                        if delta is not None:
+                            parts.append(str(delta))
+                    elif event_type == "completion":
+                        completed = True
+                        if isinstance(event.get("content"), str):
+                            completion_has_content = True
+                            completion_content = event["content"]
+                if not completed:
+                    raise RuntimeError("llm_query stream ended without a completion event")
+                return completion_content if completion_has_content else "".join(parts)
         except urllib.error.HTTPError as exc:
             status = getattr(exc, "code", 0)
             excerpt = _http_error_excerpt(exc)
             detail = f": {excerpt}" if excerpt else f": {exc}"
             raise RuntimeError(f"llm_query failed with HTTP {status}{detail}") from exc
+        except RuntimeError:
+            raise
         except Exception as exc:
             raise RuntimeError(f"llm_query failed: {exc}") from exc
-        data = json.loads(raw)
-        result = data.get("result")
-        if not isinstance(result, str):
-            raise RuntimeError("missing subcall result")
-        return result
 
     def llm_query(self, prompt: str, context: str = "") -> str:
         if context:

@@ -66,6 +66,8 @@ def test_runner_subcall_request_carries_the_user_agent(monkeypatch) -> None:
     captured = {}
 
     class _Resp:
+        headers = {"Content-Type": "application/json"}
+
         def read(self):
             return b'{"result": "ok"}'
 
@@ -77,6 +79,7 @@ def test_runner_subcall_request_carries_the_user_agent(monkeypatch) -> None:
 
     def _fake_urlopen(req, timeout=0):
         captured["ua"] = req.get_header("User-agent")
+        captured["accept"] = req.get_header("Accept")
         return _Resp()
 
     monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
@@ -90,4 +93,5 @@ def test_runner_subcall_request_carries_the_user_agent(monkeypatch) -> None:
         context=create_execution_context(max_calls=5, max_depth=2),
     )
     assert client.llm_query("p") == "ok"
+    assert captured["accept"] == 'application/x-ndjson; profile="responses-stream/v2"'
     assert captured["ua"] == USER_AGENT
