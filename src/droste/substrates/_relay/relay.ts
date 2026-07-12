@@ -337,6 +337,7 @@ py.globals.set(
         request.root_endpoint,
         request.subcall_endpoint,
         request.subcall_batch_endpoint,
+        request.data_source_endpoint,
       ])
     ) {
       stripAndInjectBearer(headers, creds.runnerToken);
