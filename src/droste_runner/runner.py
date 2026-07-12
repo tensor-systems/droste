@@ -491,6 +491,7 @@ def _protocol_error_response(requested: object, error_type: str) -> dict[str, An
         "subcalls": 0,
         "extracted": False,
         "extract_error": None,
+        "recovered_error": None,
         "trajectory": [],
         "protocol_version": RUNNER_PROTOCOL_VERSION,
         "error": {
@@ -1102,6 +1103,7 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
         "subcalls": result.sub_calls_made,
         "extracted": bool(getattr(result, "extracted", False)),
         "extract_error": None,
+        "recovered_error": None,
         "trajectory": [
             {
                 "iteration": entry.iteration,
@@ -1140,6 +1142,14 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
             "message": extract_error.message,
             "code": extract_error.code,
             "details": extract_error.details,
+        }
+    recovered_error = getattr(result, "recovered_error", None)
+    if recovered_error:
+        response["recovered_error"] = {
+            "type": recovered_error.type,
+            "message": recovered_error.message,
+            "code": recovered_error.code,
+            "details": recovered_error.details,
         }
     return response
 

@@ -17,6 +17,13 @@ or require SQL aggregates + numeric-only output for counts), the caller must
 pass explicit policy hints. Benchmarks should supply these hints; general use
 can omit them to keep behavior purely prompt-driven.
 
+Terminal step failures with usable partial work go through the bounded extract
+fallback. A successful recovery is `extracted=True`, `error=None`, with the
+superseded typed failure in `recovered_error`; hosts must treat it as
+unconfirmed, while benchmarks may inspect the recovered error provenance.
+Failed attempts are retained in the trajectory when their repair also fails,
+including on mid-run iterations that later recover successfully.
+
 ## LLM Client Protocol
 
 - `LLMClient` now exposes `responses_create(...)` (message-based) to avoid chat/completions terminology.

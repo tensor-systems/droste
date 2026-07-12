@@ -60,15 +60,15 @@ _EXTRACT_SUMMARY_CHARS = 60000
 # Sentinel used in extract summaries for iterations that printed nothing; the
 # conversational nudge shown to the in-loop model must not read as real output.
 _EXTRACT_EMPTY_OUTPUT = "<empty stdout>"
+_EXTRACT_UNABLE = "unable to determine from the work so far"
 
 EXTRACT_FALLBACK_SYSTEM_PROMPT = (
-    "An iterative Python-REPL session ran out of turns before submitting a final "
+    "An iterative Python-REPL session ended without submitting a confirmed final "
     "answer. Below are the question, the draft answer so far, and a compact "
     "trajectory of the code executed and its output. Produce the final answer "
     "using ONLY what the trajectory supports - do not guess, extrapolate, or "
     "fabricate. Reply with the answer text only - no code, no preamble. If the "
-    "answer cannot be determined from the trajectory, reply exactly: "
-    "unable to determine from the work so far"
+    "answer cannot be determined from the trajectory, reply exactly: " + _EXTRACT_UNABLE
 )
 
 
@@ -94,6 +94,14 @@ def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + f"... (truncated, {len(text):,} chars total)"
+
+
+def _is_unable_extraction(text: str) -> bool:
+    """Recognize the model's no-evidence sentinel with harmless decoration."""
+    decoration = "\"'`“”‘’*_"
+    normalized = text.casefold().strip().strip(decoration)
+    normalized = normalized.rstrip(".!?…").rstrip().strip(decoration)
+    return normalized == _EXTRACT_UNABLE
 
 
 def _trajectory_summary(
@@ -155,6 +163,8 @@ def _extract_final_answer(
         text = str(response).strip()
         if not text:
             return "", RLMError(type="EmptyExtraction", message="extract call returned empty text")
+        if _is_unable_extraction(text):
+            return "", RLMError(type="InsufficientEvidence", message=text)
         return text, None
     except Exception as exc:
         return "", RLMError(type=exc.__class__.__name__, message=str(exc))
@@ -360,6 +370,15 @@ def run_rlm(
                 )
                 continue
 
+            failed_record = record_iteration(
+                iteration=iterations,
+                messages=messages,
+                response=response,
+                code=code,
+                output=last_output,
+                usage=usage,
+            )
+
             context.emit_progress(
                 f"Iteration {iterations}/{cfg.max_iterations}: Retrying with error feedback..."
             )
@@ -369,6 +388,7 @@ def run_rlm(
                 root_llm, repair_messages, model=cfg.root_model or "", context=context
             )
             if root_error is not None:
+                trajectory.append(failed_record)
                 return early_result(root_error)
             last_response = repair_response
             context.emit_event(llm_response_event(iterations, repair_response))
@@ -388,28 +408,31 @@ def run_rlm(
                 error = outcome.error
                 if outcome.error is None:
                     code = repaired_code
-                    trajectory.append(
-                        record_iteration(
-                            iteration=iterations,
-                            messages=repair_messages,
-                            response=repair_response,
-                            code=repaired_code,
-                            output=last_output,
-                            usage=repair_usage,
-                        )
+                else:
+                    # Keep the attempt that produced the retained draft as
+                    # well as the failed repair that ended the iteration.
+                    trajectory.append(failed_record)
+                trajectory.append(
+                    record_iteration(
+                        iteration=iterations,
+                        messages=repair_messages,
+                        response=repair_response,
+                        code=repaired_code,
+                        output=last_output,
+                        usage=repair_usage,
                     )
+                )
+            else:
+                trajectory.append(failed_record)
 
-        # A run that ends with a PolicyError outstanding must not present the
-        # gated content as its answer. The draft stays intact in-loop (the
-        # model keeps it across repair attempts), but the final result
-        # withholds it, surfacing it under error.details for debugging.
+        # If extraction cannot recover an outstanding PolicyError, do not
+        # present the gated draft as a normal answer. A successful extraction
+        # below may use it as evidence, but remains explicitly unconfirmed and
+        # preserves the violation in `recovered_error`.
         policy_outstanding = error is not None and error.type == "PolicyError"
+        withheld_content = ""
         if policy_outstanding:
-            withheld = str(answer.get("content") or "")
-            if withheld:
-                details = dict(error.details or {})
-                details["withheld_content"] = withheld
-                error.details = details
+            withheld_content = str(answer.get("content") or "")
             final_answer = ""
         else:
             final_answer = _best_answer(answer, last_output, last_response)
@@ -417,19 +440,29 @@ def run_rlm(
         # Extract fallback: the loop exhausted its iteration budget
         # without answer['ready']. Reaching here means the root client survived
         # every prior call (root failures return early above), so one more
-        # extract call is affordable; a trajectory must exist or there is
-        # nothing to extract from.
+        # extract call is affordable. Failed terminal attempts are trajectory
+        # evidence too: they can mutate answer['content'] before raising, and
+        # their code/error explain how trustworthy that draft is.
         was_extracted = False
         extract_error: RLMError | None = None
+        recovered_error: RLMError | None = None
         if not answer.get("ready") and iterations >= cfg.max_iterations and trajectory:
-            context.emit_progress("Max iterations reached: extracting best final answer...")
-            draft = "" if policy_outstanding else str(answer.get("content") or "")
+            context.emit_progress("Loop ended unconfirmed: extracting best final answer...")
+            draft = str(answer.get("content") or "")
             extracted, extract_error = _extract_final_answer(
                 question, draft, trajectory, root_llm, cfg, context
             )
             if extracted:
                 final_answer = extracted
                 was_extracted = True
+                # The extract pass is the bounded terminal recovery for the
+                # failed step. Hosts treat result.error as fatal, so leaving
+                # the superseded execution/policy error set would still make
+                # them discard the recovered answer. The failed attempt stays
+                # available in the trajectory and recovered_error for typed
+                # diagnostics.
+                recovered_error = error
+                error = None
             elif extract_error is not None:
                 # Don't swallow this silently (the bug being fixed here):
                 # final_answer stays the raw-loop-output fallback from
@@ -437,6 +470,11 @@ def run_rlm(
                 # via RLMResult.extract_error, not indistinguishable from a
                 # clean extraction.
                 context.emit_event(extract_error_event(extract_error.type, extract_error.message))
+
+        if policy_outstanding and not was_extracted and error is not None and withheld_content:
+            details = dict(error.details or {})
+            details["withheld_content"] = withheld_content
+            error.details = details
 
         if not final_answer:
             if error:
@@ -453,6 +491,7 @@ def run_rlm(
             error=error,
             extracted=was_extracted,
             extract_error=extract_error,
+            recovered_error=recovered_error,
         )
     finally:
         environment.close()

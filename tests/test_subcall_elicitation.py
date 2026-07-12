@@ -362,7 +362,7 @@ def test_extract_fallback_fires_when_iterations_exhausted() -> None:
     # not to fabricate, and empty iterations show a neutral sentinel rather
     # than the conversational nudge.
     extract_messages = llm.calls[-1]
-    assert "ran out of turns" in extract_messages[0]["content"]
+    assert "ended without submitting" in extract_messages[0]["content"]
     assert "do not guess, extrapolate, or fabricate" in extract_messages[0]["content"]
     assert "unable to determine from the work so far" in extract_messages[0]["content"]
     assert "what is the total?" in extract_messages[1]["content"]
@@ -401,17 +401,116 @@ def test_extract_fallback_failure_falls_back_to_best_answer() -> None:
     assert result.ready is False
 
 
-# --- policy violation keeps content in-loop, withholds it from result ----
+def test_terminal_execution_error_extracts_partial_answer() -> None:
+    llm = RecordingLLMClient(
+        _responses(
+            """```python\nanswer['content'] = 'usable draft'\nanswer['ready'] = True\nraise TypeError('bad kwarg')\n```""",
+            """```python\nraise TypeError('still bad')\n```""",
+            "Recovered answer from the usable draft.",
+        )
+    )
+    result = run_rlm(
+        question="q",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=1),
+    )
+
+    assert result.answer == "Recovered answer from the usable draft."
+    assert result.ready is False
+    assert result.extracted is True
+    assert result.error is None
+    assert result.recovered_error is not None
+    assert result.recovered_error.type == "TypeError"
+    assert "usable draft" in llm.calls[-1][1]["content"]
+    assert "bad kwarg" in llm.calls[-1][1]["content"]
+    assert "still bad" in llm.calls[-1][1]["content"]
 
 
-def test_semantic_policy_violation_keeps_content_in_loop_but_withholds_from_result() -> None:
+def test_failed_attempt_is_retained_when_repair_root_call_fails() -> None:
+    llm = RecordingLLMClient(
+        _responses("""```python\nanswer['content'] = 'partial'\nraise ValueError('boom')\n```""")
+    )
+    result = run_rlm(
+        question="q",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=2),
+    )
+
+    assert result.error is not None
+    assert result.error.type == "RuntimeError"
+    assert len(result.trajectory) == 1
+    assert "boom" in result.trajectory[0].execution_result
+
+
+def test_mid_run_failed_attempts_remain_in_ready_trajectory() -> None:
+    llm = RecordingLLMClient(
+        _responses(
+            """```python\nraise ValueError('first failure')\n```""",
+            """```python\nraise ValueError('repair failure')\n```""",
+            """```python\nanswer['content'] = 'recovered normally'\nanswer['ready'] = True\n```""",
+        )
+    )
+    result = run_rlm(
+        question="q",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=2),
+    )
+
+    assert result.ready is True
+    assert result.answer == "recovered normally"
+    assert result.error is None
+    assert [entry.iteration for entry in result.trajectory] == [1, 1, 2]
+    assert result.trajectory[0].execution_result.startswith("ERROR:")
+    assert result.trajectory[1].execution_result.startswith("ERROR:")
+
+
+def test_terminal_subcall_budget_error_extracts_partial_answer() -> None:
+    class ExhaustedSubcalls(MockSubcallClient):
+        def llm_query(self, prompt: str, context: str = "") -> str:
+            raise RuntimeError("max subcalls exceeded")
+
+    llm = RecordingLLMClient(
+        _responses(
+            """```python\nanswer['content'] = 'already assembled'\nllm_query('one more')\n```""",
+            """```python\nllm_query('retry')\n```""",
+            "Recovered answer within the exhausted budget.",
+        )
+    )
+    result = run_rlm(
+        question="q",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=ExhaustedSubcalls(),
+        config=RLMConfig(max_iterations=1),
+    )
+
+    assert result.answer == "Recovered answer within the exhausted budget."
+    assert result.ready is False
+    assert result.extracted is True
+    assert result.error is None
+    assert result.recovered_error is not None
+    assert result.recovered_error.type == "RuntimeError"
+    assert "already assembled" in llm.calls[-1][1]["content"]
+    assert "max subcalls exceeded" in llm.calls[-1][1]["content"]
+
+
+# --- policy violation stays corrective and falls back to extraction -------
+
+
+def test_terminal_semantic_policy_violation_extracts_kept_content() -> None:
     # Turn 1 passes the static llm_query check (mention in comment) but makes
     # zero subcalls before flipping ready -> semantic PolicyError. The old
     # behavior wiped answer['content']; now the draft survives in-loop for the
     # model's next attempt (only readiness is revoked, violation fed back as
-    # guidance), but a run that ENDS with the violation outstanding must not
-    # present the gated content as its answer — it is surfaced via
-    # error.details instead.
+    # guidance). If the one repair still violates the hint, the bounded
+    # extract pass presents that draft as explicitly best-effort instead of
+    # converting a steering rule into a terminal run failure.
     violating = (
         """```python\n# plan: llm_query(chunk) later\n"""
         """answer['content'] = 'draft findings'\nanswer['ready'] = True\n```"""
@@ -420,7 +519,7 @@ def test_semantic_policy_violation_keeps_content_in_loop_but_withholds_from_resu
         """```python\nprint(llm_query('still zero real subcalls'))\n"""
         """answer['ready'] = True\n```"""
     )
-    llm = RecordingLLMClient(_responses(violating, repair))
+    llm = RecordingLLMClient(_responses(violating, repair, "Best-effort draft findings."))
     result = run_rlm(
         question="q",
         environment=MockEnvironment(),
@@ -429,17 +528,47 @@ def test_semantic_policy_violation_keeps_content_in_loop_but_withholds_from_resu
         config=RLMConfig(max_iterations=1, policy_hints=PolicyHints(semantic=True)),
     )
     assert result.ready is False  # readiness gate still gates
-    assert result.error is not None and result.error.type == "PolicyError"
-    # Gated content is withheld from the answer but preserved for debugging.
-    assert "draft findings" not in result.answer
-    assert result.answer.startswith("Error: Policy violation")
-    assert result.error.details is not None
-    assert result.error.details["withheld_content"] == "draft findings"
+    assert result.answer == "Best-effort draft findings."
+    assert result.extracted is True
+    assert result.error is None
+    assert result.recovered_error is not None
+    assert result.recovered_error.type == "PolicyError"
     # In-loop, the repair prompt carries guidance and the kept draft, not a
     # destructive reset.
     repair_prompt = llm.calls[1][-1]["content"]
     assert "answer['content'] was kept" in repair_prompt
     assert "Policy violation" in repair_prompt
+    extract_prompt = llm.calls[2][-1]["content"]
+    assert "Draft answer so far:\ndraft findings" in extract_prompt
+    assert "Policy violation" in extract_prompt
+
+
+def test_terminal_semantic_policy_violation_withholds_content_when_extract_fails() -> None:
+    violating = (
+        """```python\n# plan: llm_query(chunk) later\n"""
+        """answer['content'] = 'gated draft'\nanswer['ready'] = True\n```"""
+    )
+    repair = """```python\nanswer['ready'] = True\n# llm_query planned but not called\n```"""
+    llm = RecordingLLMClient(
+        _responses(violating, repair, "Unable to determine from the work so far.")
+    )
+    result = run_rlm(
+        question="q",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=1, policy_hints=PolicyHints(semantic=True)),
+    )
+
+    assert result.extracted is False
+    assert result.extract_error is not None
+    assert result.extract_error.type == "InsufficientEvidence"
+    assert result.error is not None
+    assert result.error.type == "PolicyError"
+    assert "gated draft" not in result.answer
+    assert result.answer.startswith("Error: Policy violation")
+    assert result.error.details is not None
+    assert result.error.details["withheld_content"] == "gated draft"
 
 
 def test_policy_violation_resolved_in_loop_returns_answer_normally() -> None:
