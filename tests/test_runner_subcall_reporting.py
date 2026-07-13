@@ -25,6 +25,7 @@ ROOT_REPLY = (
     "```python\n"
     "hint = llm_query('classify: is this spam?')\n"
     "answer['content'] = 'label: ' + hint\n"
+    "answer['metadata'] = {'evidence_ids': ['classification-1']}\n"
     "answer['ready'] = True\n"
     "```\n"
 )
@@ -79,6 +80,7 @@ def test_run_reports_actual_subcall_count() -> None:
     assert response["successful_subcalls"] == 1
     assert response["extracted"] is False
     assert response["recovered_error"] is None
+    assert response["answer_metadata"] == {"evidence_ids": ["classification-1"]}
 
 
 def _client(max_calls: int) -> tuple[HTTPSubcallClient, Any]:

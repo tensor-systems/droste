@@ -141,6 +141,7 @@ def test_finalize_reads_stats_and_readiness() -> None:
         iterations=2,
         context=context,
         trajectory=[],
+        answer_metadata={"source": "result-1"},
     )
     assert result.answer == "42"
     assert result.ready is True
@@ -148,3 +149,4 @@ def test_finalize_reads_stats_and_readiness() -> None:
     assert result.sub_calls_made == 3
     assert result.sub_calls_succeeded == 2
     assert result.error is None and result.extracted is False
+    assert result.answer_metadata == {"source": "result-1"}

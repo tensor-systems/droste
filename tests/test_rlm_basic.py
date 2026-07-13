@@ -1,4 +1,9 @@
+import math
+
+import pytest
+
 from droste import RLMConfig, run_rlm
+from droste.loop.step import copy_answer_metadata
 from droste.protocols.llm_client import TokenUsage
 from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
 
@@ -26,6 +31,119 @@ def test_run_rlm_basic():
     assert result.ready
     assert result.answer == "ok"
     assert result.extracted is False
+    assert result.answer_metadata == {}
+
+
+def test_run_rlm_preserves_confirmed_json_answer_metadata():
+    mock_llm = MockLLMClient(
+        responses=[
+            MockResponse(
+                text=(
+                    "```python\n"
+                    "answer['content'] = 'ok'\n"
+                    "answer['metadata'] = {\n"
+                    "    'evidence_ids': ['result-1'],\n"
+                    "    'artifact': {'kind': 'table', 'rows': 3},\n"
+                    "    'confidence': 0.9,\n"
+                    "}\n"
+                    "answer['ready'] = True\n"
+                    "```"
+                ),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+        ]
+    )
+    result = run_rlm(
+        question="test",
+        environment=MockEnvironment(),
+        root_llm=mock_llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=1),
+    )
+
+    assert result.ready
+    assert result.answer_metadata == {
+        "evidence_ids": ["result-1"],
+        "artifact": {"kind": "table", "rows": 3},
+        "confidence": 0.9,
+    }
+
+
+def test_run_rlm_repairs_non_json_answer_metadata():
+    mock_llm = MockLLMClient(
+        responses=[
+            MockResponse(
+                text=(
+                    "```python\nanswer['content'] = 'draft'\n"
+                    "answer['metadata'] = {'bad': {1}}\nanswer['ready'] = True\n```"
+                ),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            ),
+            MockResponse(
+                text=(
+                    "```python\nanswer['metadata'] = {'fixed': True}\nanswer['ready'] = True\n```"
+                ),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            ),
+        ]
+    )
+    result = run_rlm(
+        question="test",
+        environment=MockEnvironment(),
+        root_llm=mock_llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=2),
+    )
+
+    assert result.ready
+    assert result.answer_metadata == {"fixed": True}
+    assert result.iterations == 1
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        ["not", "an", "object"],
+        {"value": math.inf},
+        {"value": 1 << 54},
+    ],
+)
+def test_copy_answer_metadata_rejects_nonportable_values(metadata):
+    with pytest.raises(ValueError):
+        copy_answer_metadata({"metadata": metadata})
+
+
+def test_copy_answer_metadata_rejects_cycles():
+    cycle = []
+    cycle.append(cycle)
+    with pytest.raises(ValueError, match="reference cycle"):
+        copy_answer_metadata({"metadata": {"cycle": cycle}})
+
+
+def test_copy_answer_metadata_rejects_non_string_object_keys():
+    with pytest.raises(ValueError, match="non-string object key"):
+        copy_answer_metadata({"metadata": {1: "value"}})
+
+
+def test_copy_answer_metadata_rejects_excessive_depth():
+    nested = []
+    for _ in range(101):
+        nested = [nested]
+    with pytest.raises(ValueError, match="depth limit"):
+        copy_answer_metadata({"metadata": {"nested": nested}})
+
+
+def test_copy_answer_metadata_rejects_oversized_values():
+    with pytest.raises(ValueError, match="65536-byte limit"):
+        copy_answer_metadata({"metadata": {"value": "x" * 65_536}})
+
+
+def test_copy_answer_metadata_bounds_shared_subtree_traversal():
+    shared = [0]
+    for _ in range(40):
+        shared = [shared, shared]
+    with pytest.raises(ValueError, match="node limit"):
+        copy_answer_metadata({"metadata": {"shared": shared}})
 
 
 def test_run_rlm_rebound_answer_dict_registers_ready():

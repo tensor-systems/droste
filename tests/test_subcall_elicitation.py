@@ -343,7 +343,7 @@ def test_runner_explicit_zero_subcalls_is_honored() -> None:
 def test_extract_fallback_fires_when_iterations_exhausted() -> None:
     llm = RecordingLLMClient(
         _responses(
-            """```python\nnotes = 'the total is 42'\n```""",  # never sets ready
+            """```python\nnotes = 'the total is 42'\nanswer['metadata'] = {'draft': True}\n```""",  # never sets ready
             "The answer is 42.",  # extract pass (plain text, no code block)
         )
     )
@@ -357,6 +357,7 @@ def test_extract_fallback_fires_when_iterations_exhausted() -> None:
     assert result.answer == "The answer is 42."
     assert result.ready is False  # the loop itself never confirmed readiness
     assert result.extracted is True  # hosts surface it as best-effort, not confirmed
+    assert result.answer_metadata == {}
     assert result.iterations == 1
     # The extract call saw the question and the compact trajectory, is told
     # not to fabricate, and empty iterations show a neutral sentinel rather

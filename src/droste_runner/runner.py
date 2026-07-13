@@ -1116,6 +1116,7 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
 
     response: dict[str, Any] = {
         "answer": result.answer,
+        "answer_metadata": getattr(result, "answer_metadata", {}),
         "ready": result.ready,
         "iterations": result.iterations,
         "tokens_used": result.tokens_used,

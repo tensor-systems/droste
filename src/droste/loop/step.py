@@ -9,7 +9,9 @@ assembly are pure functions, unit-testable without an LLM.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+import math
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..exceptions import BatchLLMError, PolicyError, RLMError, SandboxError
@@ -29,6 +31,12 @@ from .trajectory import IterationRecord
 # Fed back instead of an empty string when executed code prints nothing, so the
 # model learns that only stdout is visible.
 EMPTY_OUTPUT_NUDGE = "(no output - did you forget to print?)"
+
+# Structured answer metadata crosses process and language boundaries as JSON.
+MAX_ANSWER_METADATA_BYTES = 64 * 1024
+MAX_ANSWER_METADATA_NODES = 10_000
+MAX_ANSWER_METADATA_DEPTH = 100
+MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
 
 
 @dataclass
@@ -75,6 +83,11 @@ class RLMResult:
     # Append-only result surface: keep positional construction of every older
     # field stable while exposing successful semantic evidence separately.
     sub_calls_succeeded: int = 0
+    # Domain-neutral structured output submitted alongside a confirmed answer.
+    # The loop validates and defensively copies this JSON object. Unconfirmed
+    # and extracted answers carry no metadata because the text-only extraction
+    # pass cannot verify that a partial metadata draft still supports its output.
+    answer_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -87,6 +100,7 @@ class StepOutcome:
     # The original exception behind ``error`` — repair-message building needs
     # its type (PolicyError feedback differs from plain execution errors).
     exception: Exception | None = None
+    answer_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def _execution_output(result: ExecutionResult | str) -> str:
@@ -127,6 +141,150 @@ def _best_answer(answer: dict[str, Any], last_output: str, last_response: str) -
     if last_response:
         return last_response
     return ""
+
+
+def _validate_json_value(
+    value: Any,
+    *,
+    path: str,
+    ancestors: set[int],
+    nodes: list[int],
+    bytes_seen: list[int],
+    depth: int,
+) -> None:
+    """Validate the strict JSON value subset accepted on public result surfaces."""
+    nodes[0] += 1
+    if nodes[0] > MAX_ANSWER_METADATA_NODES:
+        raise ValueError(f"answer['metadata'] exceeds the {MAX_ANSWER_METADATA_NODES}-node limit")
+    if depth > MAX_ANSWER_METADATA_DEPTH:
+        raise ValueError(
+            f"answer['metadata'] exceeds the {MAX_ANSWER_METADATA_DEPTH}-level depth limit"
+        )
+
+    def add_bytes(count: int) -> None:
+        bytes_seen[0] += count
+        if bytes_seen[0] > MAX_ANSWER_METADATA_BYTES:
+            raise ValueError(
+                f"answer['metadata'] exceeds the {MAX_ANSWER_METADATA_BYTES}-byte limit"
+            )
+
+    def add_json_string(value: str) -> None:
+        # Every character occupies at least one UTF-8 byte. Reject huge strings
+        # in O(1) before the exact escape-aware scan below.
+        if len(value) + 2 > MAX_ANSWER_METADATA_BYTES - bytes_seen[0]:
+            add_bytes(MAX_ANSWER_METADATA_BYTES + 1)
+        add_bytes(_json_string_byte_size(value))
+
+    if value is None:
+        add_bytes(4)
+        return
+    if type(value) is bool:
+        add_bytes(4 if value else 5)
+        return
+    if type(value) is str:
+        add_json_string(value)
+        return
+    if type(value) is int:
+        if abs(value) > MAX_SAFE_JSON_INTEGER:
+            raise ValueError(f"{path} contains an integer outside the JSON safe range")
+        add_bytes(len(str(value)))
+        return
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError(f"{path} contains a non-finite number")
+        add_bytes(len(json.dumps(value)))
+        return
+    if type(value) not in (dict, list):
+        raise ValueError(f"{path} contains unsupported type {type(value).__name__}")
+
+    identity = id(value)
+    if identity in ancestors:
+        raise ValueError(f"{path} contains a reference cycle")
+    add_bytes(2 + max(0, len(value) - 1) + (len(value) if type(value) is dict else 0))
+    ancestors.add(identity)
+    try:
+        if type(value) is list:
+            for index, item in enumerate(value):
+                _validate_json_value(
+                    item,
+                    path=f"{path}[{index}]",
+                    ancestors=ancestors,
+                    nodes=nodes,
+                    bytes_seen=bytes_seen,
+                    depth=depth + 1,
+                )
+            return
+        for key, item in value.items():
+            if type(key) is not str:
+                raise ValueError(f"{path} contains a non-string object key")
+            add_json_string(key)
+            _validate_json_value(
+                item,
+                path=f"{path}.{key}",
+                ancestors=ancestors,
+                nodes=nodes,
+                bytes_seen=bytes_seen,
+                depth=depth + 1,
+            )
+    finally:
+        ancestors.remove(identity)
+
+
+def _json_string_byte_size(value: str) -> int:
+    """Exact UTF-8 byte size of ``json.dumps(value, ensure_ascii=False)``.
+
+    Counting without materializing an encoded copy lets validation reject a
+    huge sandbox string before whole-object serialization begins.
+    """
+    size = 2  # surrounding quotes
+    short_escapes = {8, 9, 10, 12, 13}
+    for char in value:
+        codepoint = ord(char)
+        if char in ('"', "\\") or codepoint in short_escapes:
+            size += 2
+        elif codepoint < 0x20:
+            size += 6
+        elif 0xD800 <= codepoint <= 0xDFFF:
+            raise ValueError("answer['metadata'] contains an unpaired Unicode surrogate")
+        elif codepoint <= 0x7F:
+            size += 1
+        elif codepoint <= 0x7FF:
+            size += 2
+        elif codepoint <= 0xFFFF:
+            size += 3
+        else:
+            size += 4
+    return size
+
+
+def copy_answer_metadata(answer: dict[str, Any]) -> dict[str, Any]:
+    """Return a validated, detached copy of ``answer['metadata']``.
+
+    A reserved object prevents arbitrary sandbox working state from leaking
+    into host responses, while the byte limit bounds runner envelopes.
+    """
+    raw = answer.get("metadata")
+    if raw is None:
+        return {}
+    if type(raw) is not dict:
+        raise ValueError("answer['metadata'] must be a JSON object")
+    try:
+        _validate_json_value(
+            raw,
+            path="answer['metadata']",
+            ancestors=set(),
+            nodes=[0],
+            bytes_seen=[0],
+            depth=0,
+        )
+        encoded = json.dumps(raw, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    except (RecursionError, TypeError, ValueError) as exc:
+        if isinstance(exc, ValueError) and str(exc).startswith("answer['metadata']"):
+            raise
+        raise ValueError(f"answer['metadata'] is not valid JSON: {exc}") from exc
+    if len(encoded.encode("utf-8")) > MAX_ANSWER_METADATA_BYTES:
+        raise ValueError(f"answer['metadata'] exceeds the {MAX_ANSWER_METADATA_BYTES}-byte limit")
+    return json.loads(encoded)
 
 
 def _enforce_output_budget(output: str, max_chars: int) -> None:
@@ -269,6 +427,12 @@ def execute_step(
             successful_calls=context.stats.successful_calls,
             resolved_output=_resolved_output(answer, last_output),
         )
+        answer_metadata: dict[str, Any] = {}
+        if answer.get("ready"):
+            try:
+                answer_metadata = copy_answer_metadata(answer)
+            except ValueError as exc:
+                violations.append(str(exc))
         if violations:
             # Revoke readiness BEFORE emitting the output event, so the
             # published answer_ready is the post-gate truth — never a state
@@ -316,7 +480,11 @@ def execute_step(
             exception=exec_error,
         )
 
-    return StepOutcome(output=last_output, answer=answer)
+    return StepOutcome(
+        output=last_output,
+        answer=answer,
+        answer_metadata=answer_metadata,
+    )
 
 
 def record_iteration(
@@ -352,6 +520,7 @@ def finalize(
     extracted: bool = False,
     extract_error: RLMError | None = None,
     recovered_error: RLMError | None = None,
+    answer_metadata: dict[str, Any] | None = None,
 ) -> RLMResult:
     """The one RLMResult construction site."""
     return RLMResult(
@@ -366,4 +535,5 @@ def finalize(
         extracted=extracted,
         extract_error=extract_error,
         recovered_error=recovered_error,
+        answer_metadata=answer_metadata if answer.get("ready") and answer_metadata else {},
     )
