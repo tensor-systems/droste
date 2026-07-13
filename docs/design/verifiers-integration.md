@@ -58,9 +58,9 @@ transport for verifiers runs, not just change a base URL.
 
 Things to watch (record findings on #63):
 
-- **Sampling-param interception vs. our policy layer.** Verifiers rewrites
-  sampling params in-flight; droste's policy layer also has opinions. Decide
-  who wins and make it explicit.
+- **Sampling-param precedence.** Verifiers rewrites sampling params
+  in-flight; droste's sampling comes from client configuration
+  (`LLMClient.responses_create`). Decide which wins and make it explicit.
 - **Budget interaction.** Droste's budget object and verifiers' per-rollout
   limits are parallel mechanisms; the harness adapter should map one onto the
   other rather than running both blind.
@@ -81,9 +81,10 @@ Two prerequisites keep this honest:
 
 - **Today's sub-calls are flat.** `llm_query` and its batch variants are
   plain LLM calls; a true recursive `rlm_query` (a child RLM loop) is
-  designed but not implemented (#2). Branch mapping starts with what exists —
-  `llm_query` sub-calls and compaction — and recursion deepens the tree when
-  #2 lands, it doesn't gate the first version.
+  designed but not implemented (#2), and droste has no conversation-compaction
+  mechanism. Branch mapping starts with what exists — `llm_query` sub-calls —
+  and recursion deepens the tree when #2 lands, it doesn't gate the first
+  version.
 - **Branch identity.** Whether sub-calls made through the interception server
   are recorded as branches of the parent trace (vs. unrelated flat traces)
   likely hinges on how the adapter threads parent/session identity through
