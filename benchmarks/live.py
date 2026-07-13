@@ -6,6 +6,7 @@ import signal
 import subprocess
 import time
 import urllib.request
+from collections.abc import Collection
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -25,10 +26,62 @@ from .runner import (
     _write_json_exclusive,
     load_tasks,
     task_tolerance,
+    validate_task_ids,
 )
 from .scoring import score
 
 _PRICING_URL = "https://api.modelrelay.ai/api/v1/pricing"
+
+_OOLONG_SEMANTIC_GUIDANCE = (
+    "For this OOLONG aggregation task, labels are latent semantic classes: records do not "
+    "contain literal labels. Parse the record lines deterministically and, when the question "
+    "specifies a User subset, filter those records in Python before classification. Classify "
+    "each remaining Instance with exactly one single-character code: A for an abbreviation or "
+    "its expansion; D for a description or abstract concept such as a definition, manner, or "
+    "reason; E for a thing such as an animal, product, event, language, disease, or term; H for "
+    "a person, group, or human title; L for a place; and N for a count, date, measure, code, "
+    "order, or other number. Preserve record order. Compute "
+    "chunk_size = max(1, math.ceil(len(records) / 20)) and slice the records into "
+    "non-overlapping chunks of that size, producing at most 20 chunks. Use llm_batch_json "
+    "with this strict object schema, which requires labels to be a string and allows no "
+    "additional properties:\n"
+    "schema = {'type': 'object', 'required': ['labels'], 'properties': "
+    "{'labels': {'type': 'string'}}, 'additionalProperties': False}\n"
+    "Each prompt must include its records and the rubric and request only strict JSON whose "
+    "labels string contains exactly one ordered A/D/E/H/L/N character per input record, for "
+    'example {"labels":"ADEHLN"}. This compact string avoids unreliable JSON array element '
+    "counting and stays well within the 2048-token subcall output bound. Do not switch back to "
+    "a JSON array, multi-character codes, or a larger chunk count. Use this exact validator "
+    "and call:\n"
+    "def validate_labels(value, index):\n"
+    "    if (\n"
+    "        len(value['labels']) != len(chunks[index])\n"
+    "        or any(code not in 'ADEHLN' for code in value['labels'])\n"
+    "    ):\n"
+    "        raise ValueError('expected one allowed label per record')\n"
+    "    return value\n\n"
+    "result = llm_batch_json(prompts, schema, max_repair_attempts=1, "
+    "validator=validate_labels)\n"
+    "if result['errors']:\n"
+    "    raise RuntimeError('classification failed')\n"
+    "The index argument is the original prompt index, so chunks[index] is the matching input "
+    "chunk. With at most 20 chunks, the initial calls plus a worst-case repair use at most 40 "
+    "of the 50 available calls. Refuse any result with errors; never aggregate partial values. "
+    "In Python, flatten and verify the ordered label strings deterministically:\n"
+    "flat_labels = ''.join(value['labels'] for value in result['values'])\n"
+    "if len(flat_labels) != len(records):\n"
+    "    raise RuntimeError('classification length mismatch')\n"
+    "Then use this fixed deterministic count mapping:\n"
+    "code_to_label = {'A': 'abbreviation', 'D': 'description and abstract concept', "
+    "'E': 'entity', 'H': 'human being', 'L': 'location', 'N': 'numeric value'}\n"
+    "code_counts = {code: flat_labels.count(code) for code in code_to_label}\n"
+    "label_counts = {label: code_counts[code] for code, label in code_to_label.items()}\n"
+    "Derive the final requested label, comparison, or number from those local counts. Do not "
+    "ask subcalls for aggregate counts or the final "
+    "answer. Ordered per-record labels make classification auditable and avoid silent "
+    "aggregate-count mistakes. The semantic ready gate requires at least one successful "
+    "subcall."
+)
 
 
 @dataclass(frozen=True)
@@ -69,9 +122,7 @@ class _LiveRunFailure(RuntimeError):
 
 
 def _fetch_pricing(model_ids: set[str]) -> PricingSnapshot:
-    request = urllib.request.Request(
-        _PRICING_URL, headers={"User-Agent": "droste-benchmarks/1"}
-    )
+    request = urllib.request.Request(_PRICING_URL, headers={"User-Agent": "droste-benchmarks/1"})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             raw = response.read()
@@ -80,12 +131,7 @@ def _fetch_pricing(model_ids: set[str]) -> PricingSnapshot:
         raise BenchmarkRunError(f"cannot load ModelRelay pricing: {exc}") from exc
     models = data.get("models") if isinstance(data, dict) else None
     fee = data.get("platform_fee_percent") if isinstance(data, dict) else None
-    if (
-        not isinstance(models, list)
-        or not isinstance(fee, int)
-        or isinstance(fee, bool)
-        or fee < 0
-    ):
+    if not isinstance(models, list) or not isinstance(fee, int) or isinstance(fee, bool) or fee < 0:
         raise BenchmarkRunError("ModelRelay pricing response has an invalid shape")
     selected: list[dict[str, Any]] = []
     prices: dict[str, ModelPrice] = {}
@@ -148,6 +194,29 @@ def _cost_microusd(usage: Usage, arm: ArmSpec, pricing: PricingSnapshot) -> int:
     return int(total_cost.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def _budget_stop_reason(
+    cumulative_cost: int,
+    max_cost_microusd: int | None,
+    estimated_next_cost: int | None,
+) -> str | None:
+    if max_cost_microusd is None:
+        return None
+    if cumulative_cost >= max_cost_microusd:
+        return (
+            f"cost budget reached ({cumulative_cost}/{max_cost_microusd} micro-USD); "
+            "stopping before the next arm"
+        )
+    if (
+        estimated_next_cost is not None
+        and cumulative_cost + estimated_next_cost > max_cost_microusd
+    ):
+        return (
+            f"estimated next-arm cost {estimated_next_cost} micro-USD exceeds the "
+            f"remaining budget {max_cost_microusd - cumulative_cost}; stopping"
+        )
+    return None
+
+
 def _worktree_identity() -> str:
     try:
         commit = subprocess.run(
@@ -179,9 +248,7 @@ def _worktree_identity() -> str:
     return f"{commit}+worktree.{digest.hexdigest()[:16]}"
 
 
-def _context_path(
-    manifest: SuiteManifest, benchmark: BenchmarkSpec, task: dict[str, Any]
-) -> Path:
+def _context_path(manifest: SuiteManifest, benchmark: BenchmarkSpec, task: dict[str, Any]) -> Path:
     raw = task.get("context_path")
     if not isinstance(raw, str) or not raw:
         raise BenchmarkRunError(f"task {task.get('id')} has no context_path")
@@ -246,22 +313,31 @@ def _direct_run(
         reasoning_effort=arm.model.root_reasoning_effort or "",
         timeout=arm.limits.timeout_seconds,
     )
-    prediction = client.responses_create(
-        [
-            {
-                "role": "system",
-                "content": (
-                    "Answer the question exactly from the supplied benchmark data. "
-                    "Do not estimate. End with the answer format requested by the question."
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"{context_text}\n\nQuestion: {task['question']}",
-            },
-        ],
-        model=arm.model.root_model,
-    )
+    try:
+        prediction = client.responses_create(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Answer the question exactly from the supplied benchmark data. "
+                        "Do not estimate. End with the answer format requested by the question."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"{context_text}\n\nQuestion: {task['question']}",
+                },
+            ],
+            model=arm.model.root_model,
+        )
+    except Exception as exc:
+        root = client.total_usage
+        raise _LiveRunFailure(
+            str(exc),
+            usage=Usage(root.prompt_tokens, root.completion_tokens, 0, 0),
+            iterations=1,
+            status=_status_for_exception(exc),
+        ) from exc
     root = client.total_usage
     return (
         str(prediction),
@@ -327,21 +403,7 @@ def _droste_run(
     )
     semantic = task.get("answer_type") != "ANSWER_TYPE.USER"
     if semantic:
-        benchmark_guidance = (
-            "For this OOLONG aggregation task, the requested labels are latent semantic "
-            "classes: records do not contain literal label fields. Classify every record "
-            "by the expected answer type of its Instance question. Divide record lines into "
-            "multiple non-overlapping chunks of roughly 100 records, and use "
-            "llm_query_batched. Each subcall must receive the records, the question, and "
-            "allowed labels; request a JSON count for every allowed label and require the "
-            "counts to sum to the chunk size. Validate each response before aggregating "
-            "counts in Python. Retry malformed responses only while the call budget permits. "
-            "Do not send the entire "
-            "dataset to one subcall, use 250+ record chunks, or ask one subcall for the final "
-            "aggregate. The semantic policy requires at least one real llm_query call before "
-            "the answer is confirmed; inspection and local aggregation blocks may run without "
-            "a subcall."
-        )
+        benchmark_guidance = _OOLONG_SEMANTIC_GUIDANCE
     else:
         benchmark_guidance = (
             "This OOLONG task asks for an exact statistic over explicit Date, User, and "
@@ -378,6 +440,8 @@ def _droste_run(
                 "answer": result.answer,
                 "ready": result.ready,
                 "extracted": result.extracted,
+                "subcalls": result.sub_calls_made,
+                "successful_subcalls": result.sub_calls_succeeded,
                 "error": asdict(result.error) if result.error is not None else None,
                 "extract_error": asdict(result.extract_error)
                 if result.extract_error is not None
@@ -425,9 +489,7 @@ def _droste_run(
     return result.answer, usage, result.iterations, result.sub_calls_made
 
 
-def _combined_usage(
-    root: ModelRelayClient, subcalls: ModelRelaySubcallClient
-) -> Usage:
+def _combined_usage(root: ModelRelayClient, subcalls: ModelRelaySubcallClient) -> Usage:
     root_usage = root.total_usage
     subcall_usage = subcalls.total_usage
     return Usage(
@@ -444,10 +506,17 @@ def run_modelrelay_suite(
     *,
     benchmark_id: str,
     arm_ids: set[str],
-    task_ids: set[str] | None = None,
+    task_ids: Collection[str] | None = None,
     limit: int = 0,
+    max_cost_microusd: int | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> tuple[RunArtifact, ...]:
+    if max_cost_microusd is not None and (
+        not isinstance(max_cost_microusd, int)
+        or isinstance(max_cost_microusd, bool)
+        or max_cost_microusd < 1
+    ):
+        raise BenchmarkRunError("max_cost_microusd must be a positive integer")
     if not manifest.live_run.enabled:
         raise BenchmarkRunError("manifest live runs are disabled")
     benchmark = next(
@@ -469,12 +538,9 @@ def run_modelrelay_suite(
         raise BenchmarkRunError("ModelRelay credentials required; run `droste login`")
 
     tasks = list(load_tasks(manifest, benchmark))
-    if task_ids is not None:
-        available = {str(task["id"]) for task in tasks}
-        missing_tasks = sorted(task_ids - available)
-        if missing_tasks:
-            raise BenchmarkRunError(f"unknown task ids: {', '.join(missing_tasks)}")
-        tasks = [task for task in tasks if task["id"] in task_ids]
+    selected_task_ids = validate_task_ids(task_ids, {str(task["id"]) for task in tasks})
+    if selected_task_ids is not None:
+        tasks = [task for task in tasks if task["id"] in selected_task_ids]
     if limit > 0:
         tasks = tasks[:limit]
     if not tasks:
@@ -517,12 +583,36 @@ def run_modelrelay_suite(
         )
     commit = _worktree_identity()
     artifacts: list[RunArtifact] = []
+    cumulative_cost = 0
+    for artifact_path in output_dir.glob("*.json"):
+        try:
+            existing_payload = json.loads(artifact_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise BenchmarkRunError(f"invalid existing artifact {artifact_path}: {exc}") from exc
+        existing_cost = existing_payload.get("cost_microusd")
+        if (
+            not isinstance(existing_cost, int)
+            or isinstance(existing_cost, bool)
+            or existing_cost < 0
+        ):
+            raise BenchmarkRunError(f"existing artifact {artifact_path} has invalid cost_microusd")
+        cumulative_cost += existing_cost
+    estimated_arm_cost: dict[str, int] = {}
 
     for task in tasks:
         context_path = _context_path(manifest, benchmark, task)
         context_text = context_path.read_text(encoding="utf-8")
         for arm in arms:
             assert arm.model is not None and arm.limits is not None
+            budget_stop = _budget_stop_reason(
+                cumulative_cost,
+                max_cost_microusd,
+                estimated_arm_cost.get(arm.arm_id),
+            )
+            if budget_stop is not None:
+                if progress:
+                    progress(budget_stop)
+                return tuple(artifacts)
             if progress:
                 progress(f"starting {benchmark_id}/{task['id']} arm={arm.arm_id}")
             started = datetime.now(UTC)
@@ -603,6 +693,11 @@ def run_modelrelay_suite(
             path = output_dir / f"{artifact.artifact_id}.json"
             _write_json_exclusive(path, artifact.to_dict())
             artifacts.append(artifact)
+            cumulative_cost += artifact.cost_microusd
+            estimated_arm_cost[arm.arm_id] = max(
+                artifact.cost_microusd,
+                estimated_arm_cost.get(arm.arm_id, 0),
+            )
             if progress:
                 dollars = artifact.cost_microusd / 1_000_000
                 progress(

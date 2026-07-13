@@ -511,6 +511,7 @@ def run_ask(args: argparse.Namespace) -> int:
             "iterations": result.iterations,
             "tokens_used": result.tokens_used,
             "subcalls": result.sub_calls_made,
+            "successful_subcalls": result.sub_calls_succeeded,
             "model": args.model,
             "files": len(loaded.context["files"]) if loaded.context else 0,
             "db": loaded.db_path,

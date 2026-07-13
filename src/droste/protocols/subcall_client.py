@@ -4,7 +4,12 @@ from typing import Protocol
 
 
 class SubcallClient(Protocol):
-    """Interface for recursive sub-LLM calls."""
+    """Interface for recursive sub-LLM calls.
+
+    Implementations attached to an :class:`ExecutionContext` reserve
+    ``calls_made`` before dispatch and increment ``successful_calls`` only
+    after an item returns a usable text response.
+    """
 
     def llm_query(self, prompt: str, context: str = "") -> str:
         """Single sub-LLM call."""

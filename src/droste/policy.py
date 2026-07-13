@@ -6,7 +6,9 @@ from typing import Iterable
 
 AGGREGATE_REGEX = re.compile(r"\b(COUNT|SUM|AVG|MIN|MAX|ROUND)\s*\(", re.IGNORECASE)
 LLM_CALL_REGEX = re.compile(
-    r"\b(llm_query_batched|llm_query|batch_llm_query|llm_batch)\s*\(", re.IGNORECASE
+    r"\b(llm_query_batched_json|llm_batch_json|llm_query_batched|llm_query|"
+    r"batch_llm_query|llm_batch)\s*\(",
+    re.IGNORECASE,
 )
 LEN_SEARCH_REGEX = re.compile(r"\blen\s*\(\s*(search|get_recent)\s*\(", re.IGNORECASE)
 NUMERIC_OUTPUT_REGEX = re.compile(r"^\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)(%)?\s*$")
@@ -79,7 +81,7 @@ def ready_violations(
     hints: PolicyHints | None,
     *,
     answer_ready: bool,
-    calls_made: int,
+    successful_calls: int,
     resolved_output: str,
 ) -> list[str]:
     """Ready-time contract checks — the answer-gate siblings of the pre-exec
@@ -90,8 +92,11 @@ def ready_violations(
 
     violations: list[str] = []
 
-    if hints.semantic and calls_made == 0:
-        violations.append("semantic question must call llm_query/batch_llm_query at least once.")
+    if hints.semantic and successful_calls == 0:
+        violations.append(
+            "semantic question must complete at least one successful "
+            "llm_query/batch_llm_query subcall."
+        )
 
     if hints.numeric_output and not is_numeric_output(resolved_output):
         violations.append("output must be a single number (optionally with %).")

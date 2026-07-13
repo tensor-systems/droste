@@ -41,6 +41,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+from ..exceptions import SubcallBudgetExceeded
 from ..execution.context import ExecutionContext
 from ..protocols.llm_client import TokenUsage
 from ..protocols.subcall_client import SubcallClient
@@ -397,12 +398,16 @@ class AnthropicSubcallClient(SubcallClient):
     def _increment_calls(self) -> None:
         with self._lock:
             if self._max_calls >= 0 and self._context.stats.calls_made >= self._max_calls:
-                raise RuntimeError("max subcalls exceeded")
+                raise SubcallBudgetExceeded("max subcalls exceeded")
             self._context.stats.calls_made += 1
 
     def _account_usage(self, usage: TokenUsage) -> None:
         with self._lock:
             self._context.stats.total_tokens += usage.total_tokens
+
+    def _increment_successful_calls(self) -> None:
+        with self._lock:
+            self._context.stats.successful_calls += 1
 
     def llm_query(self, prompt: str, context: str = "") -> str:
         if context:
@@ -424,6 +429,8 @@ class AnthropicSubcallClient(SubcallClient):
             data = self._transport.complete(payload)
             result = _text_from_content(data, label="llm_query")
             self._account_usage(_usage_from(data))
+            if result.strip():
+                self._increment_successful_calls()
             return result
         finally:
             self._depth_set(depth - 1)
@@ -442,7 +449,13 @@ class AnthropicSubcallClient(SubcallClient):
     ) -> tuple[list[str], list[dict[str, object]]]:
         results, errors = self._run_batch(prompts, contexts)
         structured = [
-            {"index": idx, "error": str(err)} for idx, err in enumerate(errors) if err is not None
+            {
+                "index": idx,
+                "error": str(err),
+                **({"type": "budget_exhausted"} if isinstance(err, SubcallBudgetExceeded) else {}),
+            }
+            for idx, err in enumerate(errors)
+            if err is not None
         ]
         return results, structured
 

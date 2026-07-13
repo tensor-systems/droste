@@ -21,6 +21,7 @@ if REPO_ROOT not in sys.path:
 
 from droste.clients.errors import http_error_excerpt, redact_secrets  # type: ignore
 from droste.clients.useragent import USER_AGENT  # type: ignore
+from droste.exceptions import SubcallBudgetExceeded  # type: ignore
 from droste.execution.config import DEFAULT_MAX_CALLS, DEFAULT_MAX_ITERATIONS  # type: ignore
 from droste.loop.rlm import RLMConfig, run_rlm  # type: ignore
 from droste.protocols.environment import (  # type: ignore
@@ -43,6 +44,7 @@ from droste.sources.registration import (
 from droste.sources.registration import (  # type: ignore
     _reset_source_types as _registration_reset_source_types,
 )
+from droste.structured import aggregate_json_counts, bind_structured_batch  # type: ignore
 
 
 class OutputBuffer(io.StringIO):
@@ -160,6 +162,10 @@ class RunnerEnvironment(RLMEnvironment):
             "batch_llm_query": subcalls.llm_batch,
             "llm_query_batched": subcalls.llm_batch,
         }
+        structured_batch = bind_structured_batch(subcalls)
+        self._globals["llm_batch_json"] = structured_batch
+        self._globals["llm_query_batched_json"] = structured_batch
+        self._globals["aggregate_json_counts"] = aggregate_json_counts
         if registry is not None:
             # Namespaced (e.g. db.query / vault.search) + default-flattened globals.
             self._globals.update(registry.globals())
@@ -664,8 +670,12 @@ class HTTPSubcallClient(SubcallClient):
         # and concurrent llm_batch threads must not race the check.
         with self._seq_lock:
             if self._max_calls >= 0 and self._context.stats.calls_made >= self._max_calls:
-                raise RuntimeError("max subcalls exceeded")
+                raise SubcallBudgetExceeded("max subcalls exceeded")
             self._context.stats.calls_made += 1
+
+    def _increment_successful_calls(self) -> None:
+        with self._seq_lock:
+            self._context.stats.successful_calls += 1
 
     def _request(self, payload: dict[str, Any]) -> str:
         body = json.dumps(payload).encode("utf-8")
@@ -757,7 +767,10 @@ class HTTPSubcallClient(SubcallClient):
                 payload["model"] = self._model
             if self._reasoning_effort:
                 payload["reasoning_effort"] = self._reasoning_effort
-            return self._request(payload)
+            result = self._request(payload)
+            if result.strip():
+                self._increment_successful_calls()
+            return result
         finally:
             if auto_depth:
                 self._depth_set(depth - 1)
@@ -776,7 +789,13 @@ class HTTPSubcallClient(SubcallClient):
     ) -> tuple[list[str], list[dict[str, object]]]:
         results, errors = self._run_batch(prompts, contexts)
         structured = [
-            {"index": idx, "error": str(err)} for idx, err in enumerate(errors) if err is not None
+            {
+                "index": idx,
+                "error": str(err),
+                **({"type": "budget_exhausted"} if isinstance(err, SubcallBudgetExceeded) else {}),
+            }
+            for idx, err in enumerate(errors)
+            if err is not None
         ]
         return results, structured
 
@@ -1101,6 +1120,7 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
         "iterations": result.iterations,
         "tokens_used": result.tokens_used,
         "subcalls": result.sub_calls_made,
+        "successful_subcalls": int(getattr(result, "sub_calls_succeeded", 0)),
         "extracted": bool(getattr(result, "extracted", False)),
         "extract_error": None,
         "recovered_error": None,

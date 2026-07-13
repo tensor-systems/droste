@@ -13,11 +13,38 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.10.5)
 
+### Successful semantic evidence and structured subcalls
+
+`ExecutionStats` now distinguishes attempted `calls_made` from
+`successful_calls`. Subcall clients must reserve attempted calls before
+dispatch as before, and increment successful calls only for items that return
+usable text. Semantic policy hints now require successful evidence; an
+all-failed batch no longer satisfies the ready gate. `RLMResult`, CLI JSON, and
+runner protocol responses expose the successful count as
+`sub_calls_succeeded` / `successful_subcalls` while preserving existing
+attempted-call fields.
+
+Sandboxes now expose `llm_batch_json` (also `llm_query_batched_json`) for
+opt-in, locally validated structured output. It supports a documented
+deterministic JSON-schema subset, caller validators, ordered per-item errors,
+and malformed-only bounded repair. Provider errors are attributable and are
+never converted into parse retries. ModelRelay clients continue to use one
+native batch request for each initial or repair batch.
+
+Subcall call-budget rejection now raises `SubcallBudgetExceeded`, a dedicated
+`RuntimeError` subclass. Existing `except RuntimeError` handlers remain
+compatible, while structured callers can distinguish budget exhaustion from
+provider failures without matching error text. For third-party clients from
+before this type existed, `structured_batch` recognizes only the exact legacy
+`RuntimeError("max subcalls exceeded")` form. Structured batch `errors` is
+authoritative for item failure: a valid JSON `null` and a failed value slot are
+both represented as JSON-serializable `None` in `values`.
+
 ### Semantic policy is enforced when confirming an answer
 
 With `PolicyHints(semantic=True)`, inspection and local aggregation blocks may
 now execute before a semantic subcall. The ready-time gate still refuses to
-confirm an answer until at least one `llm_query` or batched equivalent has run.
+confirm an answer until at least one `llm_query` or batched equivalent succeeds.
 Hosts get the same final-answer contract without forcing harmless preparation
 steps through policy-repair iterations.
 

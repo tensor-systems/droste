@@ -18,6 +18,7 @@ from ..protocols.environment import RLMEnvironment
 from ..protocols.llm_client import LLMClient, total_tokens_from_usage
 from ..protocols.subcall_client import SubcallClient
 from ..protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest
+from ..structured import aggregate_json_counts, bind_structured_batch
 from .code_extractor import extract_code_block
 from .step import (
     EMPTY_OUTPUT_NUDGE,
@@ -231,6 +232,9 @@ def run_rlm(
             # stderr stream attach droste.execution.progress.emit_event.
             on_event=on_event,
         )
+    bind_context = getattr(subcalls, "bind_context", None)
+    if callable(bind_context):
+        bind_context(context)
 
     env_globals = environment.globals()
     answer = env_globals.get("answer")
@@ -244,6 +248,10 @@ def run_rlm(
     # llm_query_batched is the name models primed on RLM conventions reach
     # for first, so the sandbox must answer to it.
     env_globals.setdefault("llm_query_batched", subcalls.llm_batch)
+    structured_batch = bind_structured_batch(subcalls)
+    env_globals.setdefault("llm_batch_json", structured_batch)
+    env_globals.setdefault("llm_query_batched_json", structured_batch)
+    env_globals.setdefault("aggregate_json_counts", aggregate_json_counts)
     _apply_batch_error_guard(subcalls, env_globals)
 
     manifest = _accessor_manifest(environment)

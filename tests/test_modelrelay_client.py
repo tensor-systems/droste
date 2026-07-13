@@ -15,7 +15,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from droste.clients.modelrelay import ModelRelayClient, ModelRelaySubcallClient
+from droste.exceptions import SubcallBudgetExceeded
 from droste.execution.context import create_execution_context
+from droste.structured import structured_batch
 
 
 class StubResponsesServer:
@@ -38,6 +40,15 @@ class StubResponsesServer:
         self.usage = {"input_tokens": 7, "output_tokens": 3, "total_tokens": 10}
         self.batch_error_message = "provider exploded"
         stub = self
+
+        def subcall_content(prompt: str) -> str:
+            if prompt == "structured-valid":
+                return '{"count":2}'
+            if prompt == "structured-malformed":
+                return "not json"
+            if "Original task:\nstructured-malformed" in prompt:
+                return '{"count":3}'
+            return f"echo: {prompt}"
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
@@ -80,7 +91,7 @@ class StubResponsesServer:
                                             "type": "message",
                                             "role": "assistant",
                                             "content": [
-                                                {"type": "text", "text": f"echo: {prompt}"}
+                                                {"type": "text", "text": subcall_content(prompt)}
                                             ],
                                         }
                                     ],
@@ -111,7 +122,7 @@ class StubResponsesServer:
                     return
                 if payload.get("model") == "sub-model":
                     prompt = payload["input"][-1]["content"][0]["text"]
-                    content = f"echo: {prompt}"
+                    content = subcall_content(prompt)
                 else:
                     content = stub.root_responses.pop(0) if stub.root_responses else "hi"
                 accept = str(self.headers.get("Accept") or "")
@@ -300,6 +311,7 @@ def test_subcall_accounting_and_cost_defaults(stub_native):
     )
     assert client.llm_query("first") == "echo: first"
     assert context.stats.calls_made == 1
+    assert context.stats.successful_calls == 1
     assert context.stats.total_tokens == 10
     request = stub_native.requests[0]
     # ModelRelay's server-side subcall defaults, applied client-side too.
@@ -308,6 +320,7 @@ def test_subcall_accounting_and_cost_defaults(stub_native):
 
     assert client.llm_batch(["a", "b"]) == ["echo: a", "echo: b"]
     assert context.stats.calls_made == 3
+    assert context.stats.successful_calls == 3
     assert context.stats.total_tokens == 30
     assert client.total_usage.prompt_tokens == 21
     assert client.total_usage.completion_tokens == 9
@@ -316,7 +329,7 @@ def test_subcall_accounting_and_cost_defaults(stub_native):
     assert len(stub_native.requests) == 2
     assert stub_native.requests[1]["options"] == {"max_concurrent": 5, "fail_fast": False}
 
-    with pytest.raises(RuntimeError, match="max subcalls exceeded"):
+    with pytest.raises(SubcallBudgetExceeded, match="max subcalls exceeded"):
         client.llm_query("over budget")
     assert context.stats.calls_made == 3  # rejected attempt not counted
 
@@ -341,6 +354,7 @@ def test_subcall_accounts_usage_before_output_validation(monkeypatch):
 
     assert context.stats.calls_made == 1
     assert context.stats.total_tokens == 10
+    assert context.stats.successful_calls == 0
     assert client.total_usage.total_tokens == 10
 
 
@@ -363,10 +377,29 @@ def test_subcall_batch_reports_ordered_item_errors_without_retry(stub_native):
         }
     ]
     assert context.stats.calls_made == 3
+    assert context.stats.successful_calls == 2
     assert context.stats.total_tokens == 20
     assert client.total_usage.total_tokens == 20
     assert stub_native.paths == ["/api/v1/responses/batch"]
     assert len(stub_native.requests) == 1
+
+
+def test_all_failed_native_batch_has_attempts_but_no_success_evidence(stub_native):
+    context = create_execution_context(max_calls=2, max_iterations=5)
+    client = ModelRelaySubcallClient(
+        model="sub-model",
+        context=context,
+        base_url=stub_native.base_url,
+        api_key="mr_sk_t",
+    )
+
+    results, errors = client.llm_batch_with_errors(["fail", "fail"])
+
+    assert results == ["", ""]
+    assert [item["index"] for item in errors] == [0, 1]
+    assert context.stats.calls_made == 2
+    assert context.stats.successful_calls == 0
+    assert context.stats.total_tokens == 0
 
 
 def test_subcall_batch_budget_rejection_is_atomic(stub_native):
@@ -378,7 +411,7 @@ def test_subcall_batch_budget_rejection_is_atomic(stub_native):
         api_key="mr_sk_t",
     )
 
-    with pytest.raises(RuntimeError, match="max subcalls exceeded"):
+    with pytest.raises(SubcallBudgetExceeded, match="max subcalls exceeded"):
         client.llm_batch(["a", "b", "c"])
 
     assert context.stats.calls_made == 0
@@ -401,3 +434,34 @@ def test_subcall_batch_item_error_is_bounded_and_redacted(stub_native):
     assert "supersecret" not in message
     assert "[redacted]" in message
     assert len(message) < 600
+
+
+def test_native_batch_structured_repair_keeps_one_wire_request_per_attempt(stub_native):
+    context = create_execution_context(max_calls=3, max_iterations=5)
+    client = ModelRelaySubcallClient(
+        model="sub-model",
+        context=context,
+        base_url=stub_native.base_url,
+        api_key="mr_sk_t",
+    )
+    schema = {
+        "type": "object",
+        "required": ["count"],
+        "properties": {"count": {"type": "integer"}},
+        "additionalProperties": False,
+    }
+
+    result = structured_batch(
+        client,
+        ["structured-valid", "structured-malformed"],
+        schema,
+        max_repair_attempts=1,
+    )
+
+    assert result["values"] == [{"count": 2}, {"count": 3}]
+    assert result["attempts"] == [1, 2]
+    assert result["repairs_made"] == 1
+    assert context.stats.calls_made == 3
+    assert context.stats.successful_calls == 3
+    assert context.stats.total_tokens == 30
+    assert stub_native.paths == ["/api/v1/responses/batch", "/api/v1/responses/batch"]

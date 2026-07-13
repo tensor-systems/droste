@@ -637,10 +637,11 @@ def test_policy_violation_resolved_in_loop_returns_answer_normally() -> None:
         """llm_query that registers as a real subcall for the semantic gate."""
 
         def __init__(self, context) -> None:
-            self._context = context
+            super().__init__(context=context)
 
         def llm_query(self, prompt: str, context: str = "") -> str:
             self._context.stats.calls_made += 1
+            self._context.stats.successful_calls += 1
             return "sub-answer"
 
     from droste import create_execution_context

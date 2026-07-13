@@ -35,11 +35,17 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--arm", action="append", required=True, dest="arms")
     run.add_argument("--task-id", action="append", dest="task_ids")
     run.add_argument("--limit", type=int, default=0)
+    run.add_argument(
+        "--max-cost-microusd",
+        type=int,
+        help="stop cleanly before another arm when cumulative artifact cost reaches this cap",
+    )
     run.add_argument("--output", type=Path, required=True)
 
     report = commands.add_parser("report", help="render a report from run artifacts")
     report.add_argument("manifest", type=Path)
     report.add_argument("artifacts", type=Path)
+    report.add_argument("--task-id", action="append", dest="task_ids")
     report.add_argument("--json", dest="json_output", type=Path)
     report.add_argument("--markdown", type=Path)
     return parser
@@ -70,14 +76,15 @@ def main(argv: list[str] | None = None) -> int:
             args.output,
             benchmark_id=args.benchmark,
             arm_ids=set(args.arms),
-            task_ids=set(args.task_ids) if args.task_ids else None,
+            task_ids=args.task_ids,
             limit=args.limit,
+            max_cost_microusd=args.max_cost_microusd,
             progress=lambda message: print(message, flush=True),
         )
         print(f"wrote {len(artifacts)} immutable run artifacts")
         return 0
     manifest = load_manifest(args.manifest)
-    rows = aggregate(load_artifacts(args.artifacts, manifest))
+    rows = aggregate(load_artifacts(args.artifacts, manifest, task_ids=args.task_ids))
     markdown = render_markdown(manifest, rows)
     if args.markdown:
         args.markdown.write_text(markdown)

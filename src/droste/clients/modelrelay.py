@@ -32,6 +32,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from ..exceptions import SubcallBudgetExceeded
 from ..execution.context import ExecutionContext
 from ..protocols.llm_client import TokenUsage
 from ..protocols.subcall_client import SubcallClient
@@ -170,9 +171,7 @@ class _ResponsesTransport:
                     raw = resp.read().decode("utf-8")
                     data = json.loads(raw)
                     if not isinstance(data, dict):
-                        raise RuntimeError(
-                            f"{self._label} returned a non-object JSON response"
-                        )
+                        raise RuntimeError(f"{self._label} returned a non-object JSON response")
                     try:
                         text = _output_text(data)
                     except RuntimeError:
@@ -429,7 +428,7 @@ class ModelRelaySubcallClient(SubcallClient):
             if count < 0:
                 raise ValueError("subcall count must be non-negative")
             if self._max_calls >= 0 and self._context.stats.calls_made + count > self._max_calls:
-                raise RuntimeError("max subcalls exceeded")
+                raise SubcallBudgetExceeded("max subcalls exceeded")
             self._context.stats.calls_made += count
 
     def _account_usage(self, usage: TokenUsage) -> None:
@@ -440,6 +439,10 @@ class ModelRelaySubcallClient(SubcallClient):
                 self._total_usage.completion_tokens + usage.completion_tokens,
                 self._total_usage.total_tokens + usage.total_tokens,
             )
+
+    def _increment_successful_calls(self, count: int = 1) -> None:
+        with self._lock:
+            self._context.stats.successful_calls += count
 
     def llm_query(self, prompt: str, context: str = "") -> str:
         if context:
@@ -463,6 +466,8 @@ class ModelRelaySubcallClient(SubcallClient):
             data = self._transport.complete(payload)
             self._account_usage(_usage_from(data))
             result = _output_text(data)
+            if result.strip():
+                self._increment_successful_calls()
             return result
         finally:
             self._depth_set(depth - 1)
@@ -481,7 +486,13 @@ class ModelRelaySubcallClient(SubcallClient):
     ) -> tuple[list[str], list[dict[str, object]]]:
         results, errors = self._run_batch(prompts, contexts)
         structured = [
-            {"index": idx, "error": str(err)} for idx, err in enumerate(errors) if err is not None
+            {
+                "index": idx,
+                "error": str(err),
+                **({"type": "budget_exhausted"} if isinstance(err, SubcallBudgetExceeded) else {}),
+            }
+            for idx, err in enumerate(errors)
+            if err is not None
         ]
         return results, structured
 
@@ -556,6 +567,8 @@ class ModelRelaySubcallClient(SubcallClient):
                         raise RuntimeError(f"llm_batch item {idx} missing response")
                     self._account_usage(_usage_from(response))
                     results[idx] = _output_text(response)
+                    if results[idx].strip():
+                        self._increment_successful_calls()
                 elif status == "error":
                     error = raw.get("error")
                     if not isinstance(error, dict):

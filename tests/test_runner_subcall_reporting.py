@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from droste.exceptions import SubcallBudgetExceeded
 from droste.execution.context import create_execution_context
 from droste_runner.runner import HTTPSubcallClient, run
 
@@ -75,6 +76,7 @@ def test_run_reports_actual_subcall_count() -> None:
     assert response["ready"] is True
     assert response["answer"] == "label: spam"
     assert response["subcalls"] == 1
+    assert response["successful_subcalls"] == 1
     assert response["extracted"] is False
     assert response["recovered_error"] is None
 
@@ -97,9 +99,10 @@ def _client(max_calls: int) -> tuple[HTTPSubcallClient, Any]:
 def test_rejected_over_limit_attempt_is_not_counted() -> None:
     client, context = _client(max_calls=1)
     assert client.llm_query("a") == "ok"
-    with pytest.raises(RuntimeError, match="max subcalls exceeded"):
+    with pytest.raises(SubcallBudgetExceeded, match="max subcalls exceeded"):
         client.llm_query("b")
     assert context.stats.calls_made == 1
+    assert context.stats.successful_calls == 1
 
 
 def test_concurrent_batch_counts_each_issued_call() -> None:
@@ -107,6 +110,7 @@ def test_concurrent_batch_counts_each_issued_call() -> None:
     results = client.llm_batch([f"p{i}" for i in range(20)])
     assert results == ["ok"] * 20
     assert context.stats.calls_made == 20
+    assert context.stats.successful_calls == 20
 
 
 # --- llm_batch / llm_batch_with_errors share one bounded fan-out (#34).

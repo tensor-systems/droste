@@ -7,11 +7,15 @@ from pathlib import Path
 
 import pytest
 
+from benchmarks.cli import main as benchmark_main
 from benchmarks.live import (
+    _OOLONG_SEMANTIC_GUIDANCE,
     ModelPrice,
     PricingSnapshot,
+    _budget_stop_reason,
     _context_path,
     _cost_microusd,
+    _direct_run,
     _LiveRunFailure,
     _status_for_exception,
 )
@@ -20,6 +24,7 @@ from benchmarks.oolong import materialize_oolong
 from benchmarks.report import ReportError, aggregate, load_artifacts, render_markdown
 from benchmarks.runner import BenchmarkRunError, run_fixture_suite
 from benchmarks.scoring import exact_match, numeric_score, oolong_official, token_f1
+from droste.protocols.llm_client import TokenUsage
 
 ROOT = Path(__file__).resolve().parents[1]
 SMOKE_MANIFEST = ROOT / "benchmarks" / "manifests" / "smoke-v1.json"
@@ -161,6 +166,104 @@ def test_live_cost_uses_integer_microusd_and_snapshotted_fee() -> None:
     assert _cost_microusd(usage, arm, pricing) == 63
 
 
+def test_live_cost_budget_stops_on_actual_cap_or_projected_next_arm() -> None:
+    assert _budget_stop_reason(100, None, 50) is None
+    assert "budget reached" in str(_budget_stop_reason(100, 100, None))
+    assert "estimated next-arm cost" in str(_budget_stop_reason(80, 100, 21))
+    assert _budget_stop_reason(80, 100, 20) is None
+
+
+def test_oolong_semantic_guidance_bounds_auditable_per_record_classification() -> None:
+    guidance = _OOLONG_SEMANTIC_GUIDANCE
+
+    assert "math.ceil(len(records) / 20)" in guidance
+    assert "non-overlapping chunks" in guidance
+    assert "at most 20 chunks" in guidance
+    assert "exactly one single-character code" in guidance
+    assert "stays well within the 2048-token subcall output bound" in guidance
+    assert "avoids unreliable JSON array element counting" in guidance
+    assert (
+        "Do not switch back to a JSON array, multi-character codes, or a larger chunk count"
+        in guidance
+    )
+    for old_code in ("DESC", "ENTY", "HUM", "NUM", "LOC", "ABBR"):
+        assert old_code not in guidance
+    assert (
+        "schema = {'type': 'object', 'required': ['labels'], 'properties': "
+        "{'labels': {'type': 'string'}}, 'additionalProperties': False}"
+    ) in guidance
+    assert "labels string contains exactly one ordered A/D/E/H/L/N character" in guidance
+    assert '{"labels":"ADEHLN"}' in guidance
+    assert (
+        "def validate_labels(value, index):\n"
+        "    if (\n"
+        "        len(value['labels']) != len(chunks[index])\n"
+        "        or any(code not in 'ADEHLN' for code in value['labels'])\n"
+        "    ):\n"
+        "        raise ValueError('expected one allowed label per record')\n"
+        "    return value"
+    ) in guidance
+    assert (
+        "llm_batch_json(prompts, schema, max_repair_attempts=1, validator=validate_labels)"
+    ) in guidance
+    assert "at most 40 of the 50 available calls" in guidance
+    assert ("if result['errors']:\n    raise RuntimeError('classification failed')") in guidance
+    assert "Refuse any result with errors" in guidance
+    assert "flat_labels = ''.join(value['labels'] for value in result['values'])" in guidance
+    assert (
+        "if len(flat_labels) != len(records):\n"
+        "    raise RuntimeError('classification length mismatch')"
+    ) in guidance
+    assert (
+        "code_to_label = {'A': 'abbreviation', 'D': 'description and abstract concept', "
+        "'E': 'entity', 'H': 'human being', 'L': 'location', 'N': 'numeric value'}"
+    ) in guidance
+    assert "code_counts = {code: flat_labels.count(code) for code in code_to_label}" in guidance
+    assert (
+        "label_counts = {label: code_counts[code] for code, label in code_to_label.items()}"
+    ) in guidance
+    assert "Derive the final requested" in guidance
+    assert "make classification auditable" in guidance
+    assert "avoid silent aggregate-count mistakes" in guidance
+    assert "aggregate_json_counts" not in guidance
+    assert "required counts object" not in guidance
+
+
+def test_direct_late_failure_preserves_accounted_usage_and_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import benchmarks.live as live
+
+    manifest = load_manifest(PAPER_MANIFEST)
+    arm = next(item for item in manifest.arms if item.method == "direct-model")
+
+    class LateFailureClient:
+        def __init__(self, **kwargs: object) -> None:
+            self.total_usage = TokenUsage(120, 30, 150)
+
+        def responses_create(self, *args: object, **kwargs: object) -> str:
+            raise RuntimeError("response output was malformed")
+
+    monkeypatch.setattr(live, "ModelRelayClient", LateFailureClient)
+
+    with pytest.raises(_LiveRunFailure) as caught:
+        _direct_run(
+            {"question": "question"},
+            "context",
+            arm,
+            "opaque-test-key",
+            "https://example.invalid",
+        )
+
+    failure = caught.value
+    assert failure.usage == Usage(root_input_tokens=120, root_output_tokens=30)
+    assert failure.iterations == 1
+    assert arm.model is not None
+    price = ModelPrice(arm.model.root_model, "stub", 100, 600)
+    pricing = PricingSnapshot("test", 0, {price.model_id: price}, {})
+    assert _cost_microusd(failure.usage, arm, pricing) > 0
+
+
 def test_paid_failure_preserves_typed_timeout_status() -> None:
     failure = _LiveRunFailure(
         "benchmark task exceeded 10s",
@@ -268,6 +371,69 @@ def test_smoke_suite_writes_artifacts_and_deterministic_report(tmp_path: Path) -
     assert "| smoke-exact | fixture-droste | exact_match | 1.0000 | 2/2 |" in report
     assert "| smoke-exact | fixture-direct | exact_match | 0.5000 | 2/2 |" in report
     assert report == render_markdown(manifest, aggregate(tuple(reversed(loaded))))
+
+
+def test_report_cli_aggregates_an_exact_paired_task_subset(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    manifest = load_manifest(SMOKE_MANIFEST)
+    output = tmp_path / "artifacts"
+    run_fixture_suite(manifest, output)
+    for path in output.glob("*.json"):
+        if not path.name.endswith("--normalization.json"):
+            path.unlink()
+
+    assert (
+        benchmark_main(
+            [
+                "report",
+                str(SMOKE_MANIFEST),
+                str(output),
+                "--task-id",
+                "normalization",
+            ]
+        )
+        == 0
+    )
+
+    report = capsys.readouterr().out
+    assert "| smoke-exact | fixture-droste | exact_match | 1.0000 | 1/1 |" in report
+    assert "| smoke-exact | fixture-direct | exact_match | 1.0000 | 1/1 |" in report
+    assert "smoke-numeric" not in report
+    assert "smoke-f1" not in report
+    with pytest.raises(ReportError, match="artifact set is incomplete"):
+        load_artifacts(output, manifest)
+
+
+def test_report_selected_subset_still_requires_every_selected_arm(tmp_path: Path) -> None:
+    manifest = load_manifest(SMOKE_MANIFEST)
+    output = tmp_path / "artifacts"
+    run_fixture_suite(manifest, output)
+    for path in output.glob("*.json"):
+        if not path.name.endswith("--normalization.json"):
+            path.unlink()
+    (output / "smoke-exact--fixture-direct--normalization.json").unlink()
+
+    with pytest.raises(
+        ReportError,
+        match="artifact set is incomplete; missing: smoke-exact--fixture-direct--normalization",
+    ):
+        load_artifacts(output, manifest, task_ids=["normalization"])
+
+
+@pytest.mark.parametrize(
+    ("task_ids", "message"),
+    [(["unknown"], "unknown task ids: unknown"), (["integer", "integer"], "duplicate task ids")],
+)
+def test_report_task_selection_rejects_unknown_and_duplicate_ids(
+    tmp_path: Path, task_ids: list[str], message: str
+) -> None:
+    manifest = load_manifest(SMOKE_MANIFEST)
+    output = tmp_path / "artifacts"
+    run_fixture_suite(manifest, output)
+
+    with pytest.raises(ReportError, match=message):
+        load_artifacts(output, manifest, task_ids=task_ids)
 
 
 def test_smoke_suite_refuses_to_overwrite_artifacts(tmp_path: Path) -> None:

@@ -28,6 +28,10 @@ uv run python -m benchmarks report \
   --json /tmp/droste-smoke.json
 ```
 
+Repeat `--task-id <id>` to report a selected gate. The artifact directory must
+then contain exactly every runnable arm for the selected tasks and no other run
+artifacts. Without `--task-id`, reporting retains strict full-suite coverage.
+
 Validate a manifest without executing it:
 
 ```bash
@@ -84,12 +88,17 @@ uv run python -m benchmarks run benchmarks/manifests/rlm-paper-v1.json \
   --arm droste-openai-none \
   --arm direct-openai-none \
   --task-id 17000208 \
+  --max-cost-microusd 4000000 \
   --output benchmark-results/oolong-pilot-1
 ```
 
 Use another new output directory when expanding the task set. The runner
 refuses to overwrite artifacts, snapshots the current public price table, and
 rejects additions if that output directory's price snapshot has changed.
+The optional integer micro-USD cap includes existing artifacts in the output
+directory. Once actual cumulative cost reaches the cap, or an observed
+same-arm cost projects the next run past it, execution stops before another
+arm without inventing a skipped artifact (artifact v1 has no skipped status).
 ModelRelay's platform fee is currently 0%; model input and output tokens still
 incur the snapshotted provider prices.
 
