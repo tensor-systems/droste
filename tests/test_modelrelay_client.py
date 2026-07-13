@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -217,6 +218,7 @@ def test_root_returns_text_usage_and_sends_api_key_header(stub_native):
     assert client.total_usage.prompt_tokens == 7
     assert client.total_usage.completion_tokens == 3
     assert client.total_usage.total_tokens == 10
+    assert client.root_requests_issued == 1
     assert client.last_provider == "stub"
     assert client.last_stop_reason == "stop"
 
@@ -249,6 +251,7 @@ def test_root_streaming_delivers_deltas(stub_native):
     assert len(deltas) > 1
     assert usage.total_tokens == 10
     assert client.total_usage.total_tokens == 10
+    assert client.root_requests_issued == 1
 
 
 def test_root_stream_error_fails_loudly(stub_native):
@@ -262,6 +265,7 @@ def test_root_stream_error_fails_loudly(stub_native):
     stub_native.stream_error_midway = True
     with pytest.raises(RuntimeError, match="streamed an error"):
         client.responses_create([{"role": "user", "content": "q"}], model="")
+    assert client.root_requests_issued == 1
 
 
 def test_root_stream_truncation_fails_loudly(stub_native):
@@ -285,6 +289,58 @@ def test_root_http_error_is_bounded(stub_native):
     stub_native.fail_body = b'{"error":"insufficient account balance - please add funds"}'
     with pytest.raises(RuntimeError, match="HTTP 402"):
         client.responses_create([{"role": "user", "content": "q"}], model="")
+    assert client.root_requests_issued == 1
+
+
+def test_root_transport_failure_counts_dispatched_request(monkeypatch):
+    client = ModelRelayClient(model="root-model", api_key="mr_sk_t")
+
+    def fail_transport(*args, **kwargs):
+        raise OSError("network unavailable")
+
+    monkeypatch.setattr("urllib.request.urlopen", fail_transport)
+
+    with pytest.raises(RuntimeError, match="network unavailable"):
+        client.responses_create([{"role": "user", "content": "q"}], model="")
+
+    assert client.root_requests_issued == 1
+
+
+def test_root_validation_failure_before_dispatch_is_not_counted(stub_native):
+    client = ModelRelayClient(base_url=stub_native.base_url, api_key="mr_sk_t")
+
+    with pytest.raises(ValueError, match="model is required"):
+        client.responses_create([{"role": "user", "content": "q"}], model="")
+    with pytest.raises(TypeError, match="not JSON serializable"):
+        client.responses_create(
+            [{"role": "user", "content": [{"type": "text", "text": object()}]}],
+            model="root-model",
+        )
+
+    assert client.root_requests_issued == 0
+    assert stub_native.requests == []
+
+
+def test_root_request_count_accumulates_across_calls(stub_native):
+    client = ModelRelayClient(model="root-model", base_url=stub_native.base_url, api_key="mr_sk_t")
+
+    assert client.root_requests_issued == 0
+    for _ in range(3):
+        client.responses_create([{"role": "user", "content": "q"}], model="")
+
+    assert client.root_requests_issued == 3
+
+
+def test_root_request_count_is_thread_safe(stub_native):
+    client = ModelRelayClient(model="root-model", base_url=stub_native.base_url, api_key="mr_sk_t")
+
+    def call_root(_: int) -> str:
+        return client.responses_create([{"role": "user", "content": "q"}], model="")
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        assert list(executor.map(call_root, range(32))) == ["hi"] * 32
+
+    assert client.root_requests_issued == 32
 
 
 def test_root_accounts_usage_before_output_validation(monkeypatch):

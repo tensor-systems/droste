@@ -30,6 +30,7 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 from ..exceptions import SubcallBudgetExceeded
@@ -99,13 +100,22 @@ def _usage_from(data: Any) -> TokenUsage:
 class _ResponsesTransport:
     """POST {base}/responses with bounded, redacted error surfacing."""
 
-    def __init__(self, *, base_url: str | None, api_key: str, timeout: float, label: str) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str | None,
+        api_key: str,
+        timeout: float,
+        label: str,
+        on_dispatch: Callable[[], None] | None = None,
+    ) -> None:
         base = str(base_url or DEFAULT_MODELRELAY_BASE_URL).rstrip("/")
         self._base_url = base
         self._url = base + "/responses"
         self._api_key = str(api_key or "")
         self._timeout = float(timeout)
         self._label = label
+        self._on_dispatch = on_dispatch
 
     @property
     def url(self) -> str:
@@ -138,6 +148,8 @@ class _ResponsesTransport:
     ) -> dict[str, Any]:
         request_label = label or self._label
         req = self._request(payload, url=self._base_url + path)
+        if self._on_dispatch is not None:
+            self._on_dispatch()
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                 raw = resp.read().decode("utf-8")
@@ -161,6 +173,8 @@ class _ResponsesTransport:
         NDJSON events into the same response shape ``complete`` returns,
         invoking ``on_delta(text)`` per text delta as it arrives."""
         req = self._request(payload, accept=_STREAM_ACCEPT)
+        if self._on_dispatch is not None:
+            self._on_dispatch()
         parts: list[str] = []
         completion: dict[str, Any] = {}
         try:
@@ -249,6 +263,11 @@ class ModelRelayClient:
     ``temperature``/``stop``/``max_output_tokens`` override per-call
     arguments; ``on_delta`` (optional) streams text fragments as they
     generate while the call still returns the full assembled text.
+
+    ``root_requests_issued`` is the cumulative number of HTTP root requests
+    dispatched by this client. It includes streamed and non-streamed requests
+    that later fail, but excludes failures while validating or serializing a
+    request before dispatch.
     """
 
     def __init__(
@@ -266,8 +285,15 @@ class ModelRelayClient:
     ) -> None:
         if not api_key:
             raise ValueError("api_key is required (run `droste login`)")
+        self._accounting_lock = threading.Lock()
+        self._total_usage = TokenUsage(0, 0, 0)
+        self._root_requests_issued = 0
         self._transport = _ResponsesTransport(
-            base_url=base_url, api_key=api_key, timeout=timeout, label="root llm"
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            label="root llm",
+            on_dispatch=self._account_root_request,
         )
         self._model = str(model or "")
         self._temperature = temperature
@@ -275,8 +301,6 @@ class ModelRelayClient:
         self._max_output_tokens = int(max_output_tokens or 0)
         self._reasoning_effort = str(reasoning_effort or "")
         self._on_delta = on_delta
-        self._usage_lock = threading.Lock()
-        self._total_usage = TokenUsage(0, 0, 0)
         # Parity with RootLLMClient's response metadata surface.
         self.last_provider = ""
         self.last_response_id = ""
@@ -285,15 +309,25 @@ class ModelRelayClient:
 
     @property
     def total_usage(self) -> TokenUsage:
-        with self._usage_lock:
+        with self._accounting_lock:
             return TokenUsage(
                 self._total_usage.prompt_tokens,
                 self._total_usage.completion_tokens,
                 self._total_usage.total_tokens,
             )
 
+    @property
+    def root_requests_issued(self) -> int:
+        """Number of HTTP root requests dispatched by this client."""
+        with self._accounting_lock:
+            return self._root_requests_issued
+
+    def _account_root_request(self) -> None:
+        with self._accounting_lock:
+            self._root_requests_issued += 1
+
     def _account_usage(self, usage: TokenUsage) -> None:
-        with self._usage_lock:
+        with self._accounting_lock:
             self._total_usage = TokenUsage(
                 self._total_usage.prompt_tokens + usage.prompt_tokens,
                 self._total_usage.completion_tokens + usage.completion_tokens,

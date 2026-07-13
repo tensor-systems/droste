@@ -13,6 +13,14 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.10.6)
 
+### ModelRelay root request accounting
+
+`ModelRelayClient.root_requests_issued` exposes a thread-safe cumulative count
+of HTTP root requests dispatched by that client, including repair, extraction,
+streaming, and failed requests. Payload validation and request-construction
+failures before dispatch do not increment the count. This additive client-level
+metric does not change `RLMResult` or the runner protocol.
+
 ## 0.10.6 (from 0.10.5)
 
 ### Confirmed answers can carry structured metadata

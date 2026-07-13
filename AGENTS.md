@@ -43,6 +43,7 @@ only a retained draft or at least one successful step is extraction evidence.
 
 - `LLMClient` now exposes `responses_create(...)` (message-based) to avoid chat/completions terminology.
 - The core loop calls `responses_create` and expects it to wrap `/responses` semantics, not OpenAI-style completions.
+- `ModelRelayClient.root_requests_issued` is a thread-safe cumulative count of root HTTP requests at the dispatch boundary. It includes streaming and non-streaming requests that later fail, including repair and extraction calls, but excludes payload or request-construction failures before dispatch.
 - `ModelRelaySubcallClient.llm_batch` uses one typed `/responses/batch` request and never falls back to per-item fan-out. Batch ids are parsed back into caller order, per-item errors remain attributable, and the entire call budget is reserved atomically before dispatch. BYOK clients keep bounded concurrent fan-out because their synchronous APIs have no equivalent endpoint.
 
 ## droste_runner Package
