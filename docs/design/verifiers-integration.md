@@ -47,11 +47,14 @@ harness buys **independent, apples-to-apples benchmark numbers** for RLM vs.
 plain agent loops on shared tasksets, plus entry into an ecosystem where new
 tasksets keep arriving for free.
 
-It should also be cheap. All LLM calls already flow through one client seam,
-so "run droste against the interception server" is a base-URL and
-client-selection change, not a new integration surface. The interception
-server speaks Anthropic Messages and OpenAI dialects — both of which our
-client layer already produces.
+It should also be reasonably cheap: LLM traffic flows through the client
+layer, and the interception server speaks Anthropic Messages and OpenAI
+dialects — both of which our clients already produce. But it is not a single
+seam: root-loop calls (`LLMClient`) and REPL sub-calls (`SubcallClient`) are
+separate transports, and `ModelRelaySubcallClient` sends batches to a
+nonstandard `/responses/batch` endpoint that a standard interception server
+won't accept. The adapter must pick (or add) a standard per-call subcall
+transport for verifiers runs, not just change a base URL.
 
 Things to watch (record findings on #63):
 
@@ -84,8 +87,11 @@ Two prerequisites keep this honest:
 - **Branch identity.** Whether sub-calls made through the interception server
   are recorded as branches of the parent trace (vs. unrelated flat traces)
   likely hinges on how the adapter threads parent/session identity through
-  sub-call requests. The NDJSON event vocabulary (#35) gives us droste-side
-  correlation hooks either way.
+  sub-call requests. Droste can't supply this today: the #35 event vocabulary
+  reserves a `subcall` event but nothing emits it yet, and `output` carries
+  only an aggregate `calls_made` — concurrent batch items can't be matched to
+  requests or parents. Per-subcall identifiers (emitted events and/or request
+  metadata) are part of this issue's work, not an existing hook.
 
 Blocked on #63.
 
