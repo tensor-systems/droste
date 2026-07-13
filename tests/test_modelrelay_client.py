@@ -203,6 +203,9 @@ def test_root_returns_text_usage_and_sends_api_key_header(stub_native):
     )
     assert text == "the answer"
     assert usage.total_tokens == 10
+    assert client.total_usage.prompt_tokens == 7
+    assert client.total_usage.completion_tokens == 3
+    assert client.total_usage.total_tokens == 10
     assert client.last_provider == "stub"
     assert client.last_stop_reason == "stop"
 
@@ -234,6 +237,7 @@ def test_root_streaming_delivers_deltas(stub_native):
     assert "".join(deltas) == "streamed answer text"
     assert len(deltas) > 1
     assert usage.total_tokens == 10
+    assert client.total_usage.total_tokens == 10
 
 
 def test_root_stream_error_fails_loudly(stub_native):
@@ -272,6 +276,20 @@ def test_root_http_error_is_bounded(stub_native):
         client.responses_create([{"role": "user", "content": "q"}], model="")
 
 
+def test_root_accounts_usage_before_output_validation(monkeypatch):
+    client = ModelRelayClient(model="root-model", api_key="mr_sk_t")
+    monkeypatch.setattr(
+        client._transport,
+        "complete",
+        lambda payload: {"usage": {"input_tokens": 7, "output_tokens": 3}},
+    )
+
+    with pytest.raises(RuntimeError, match="missing output"):
+        client.responses_create([{"role": "user", "content": "q"}], model="")
+
+    assert client.total_usage.total_tokens == 10
+
+
 def test_subcall_accounting_and_cost_defaults(stub_native):
     context = create_execution_context(max_calls=3, max_iterations=5)
     client = ModelRelaySubcallClient(
@@ -291,6 +309,9 @@ def test_subcall_accounting_and_cost_defaults(stub_native):
     assert client.llm_batch(["a", "b"]) == ["echo: a", "echo: b"]
     assert context.stats.calls_made == 3
     assert context.stats.total_tokens == 30
+    assert client.total_usage.prompt_tokens == 21
+    assert client.total_usage.completion_tokens == 9
+    assert client.total_usage.total_tokens == 30
     assert stub_native.paths == ["/api/v1/responses", "/api/v1/responses/batch"]
     assert len(stub_native.requests) == 2
     assert stub_native.requests[1]["options"] == {"max_concurrent": 5, "fail_fast": False}
@@ -304,6 +325,23 @@ def test_subcall_requires_api_key():
     context = create_execution_context(max_calls=1, max_iterations=1)
     with pytest.raises(ValueError, match="api_key"):
         ModelRelaySubcallClient(model="m", context=context, api_key="")
+
+
+def test_subcall_accounts_usage_before_output_validation(monkeypatch):
+    context = create_execution_context(max_calls=1, max_iterations=1)
+    client = ModelRelaySubcallClient(model="sub-model", context=context, api_key="mr_sk_t")
+    monkeypatch.setattr(
+        client._transport,
+        "complete",
+        lambda payload: {"usage": {"input_tokens": 7, "output_tokens": 3}},
+    )
+
+    with pytest.raises(RuntimeError, match="missing output"):
+        client.llm_query("q")
+
+    assert context.stats.calls_made == 1
+    assert context.stats.total_tokens == 10
+    assert client.total_usage.total_tokens == 10
 
 
 def test_subcall_batch_reports_ordered_item_errors_without_retry(stub_native):
@@ -326,6 +364,7 @@ def test_subcall_batch_reports_ordered_item_errors_without_retry(stub_native):
     ]
     assert context.stats.calls_made == 3
     assert context.stats.total_tokens == 20
+    assert client.total_usage.total_tokens == 20
     assert stub_native.paths == ["/api/v1/responses/batch"]
     assert len(stub_native.requests) == 1
 

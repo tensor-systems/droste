@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import ast
 import math
 import re
 from collections import Counter
+from datetime import datetime
 from typing import Any
+
+from dateutil import parser as date_parser
 
 from .models import ScorerKind
 
@@ -46,6 +50,73 @@ def token_f1(prediction: Any, reference: Any) -> float:
     return 2 * precision * recall / (precision + recall) if overlap else 0.0
 
 
+_OOLONG_COMPARISONS = ("more common", "less common", "same frequency")
+
+
+def _oolong_text(prediction: Any) -> str:
+    if isinstance(prediction, dict) and "answer" in prediction:
+        prediction = prediction["answer"]
+    return str(prediction)
+
+
+def _oolong_candidate(prediction: Any) -> str:
+    """Parse the candidate using OOLONG-synth's published answer convention."""
+
+    text = _oolong_text(prediction)
+    if ":" not in text:
+        return text if len(text) < 20 else text.split()[-1]
+    candidate = text.rsplit(":", 1)[-1].strip().replace("*", "")
+    candidate = candidate.replace("[", "").replace("]", "")
+    if len(candidate) >= 20:
+        lowered = candidate.casefold()
+        for comparison in _OOLONG_COMPARISONS:
+            if comparison in lowered:
+                return comparison
+    return candidate
+
+
+def _oolong_reference(reference: Any) -> tuple[Any, str]:
+    if not isinstance(reference, dict):
+        raise ValueError("oolong_official reference must contain answer and answer_type")
+    raw_answer = reference.get("answer")
+    answer_type = reference.get("answer_type")
+    if not isinstance(raw_answer, str) or not isinstance(answer_type, str):
+        raise ValueError("oolong_official reference must contain string answer and answer_type")
+    try:
+        if "datetime" in raw_answer:
+            gold: Any = datetime.strptime(raw_answer, "[datetime.date(%Y, %m, %d)]")
+        else:
+            parsed = ast.literal_eval(raw_answer)
+            if not isinstance(parsed, list) or not parsed:
+                raise ValueError("answer is not a non-empty list")
+            gold = parsed[0]
+    except (SyntaxError, TypeError, ValueError) as exc:
+        raise ValueError(f"invalid oolong_official answer: {raw_answer!r}") from exc
+    return gold, answer_type
+
+
+def oolong_official(prediction: Any, reference: Any) -> float:
+    """Score one OOLONG-synth response with the benchmark's published rule."""
+
+    gold, answer_type = _oolong_reference(reference)
+    candidate = _oolong_candidate(prediction)
+    if str(candidate) == str(gold):
+        return 1.0
+    if candidate in _OOLONG_COMPARISONS and candidate in str(gold):
+        return 1.0
+    if answer_type == "ANSWER_TYPE.NUMERIC":
+        try:
+            return 0.75 ** abs(int(gold) - int(candidate))
+        except (TypeError, ValueError):
+            return 0.0
+    if answer_type == "ANSWER_TYPE.DATE":
+        try:
+            return float(date_parser.parse(candidate) == gold)
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+    return 0.0
+
+
 def score(
     kind: ScorerKind,
     prediction: Any,
@@ -60,5 +131,5 @@ def score(
     if kind == "token_f1":
         return token_f1(prediction, reference)
     if kind == "oolong_official":
-        raise ValueError("oolong_official requires the pinned upstream scorer adapter")
+        return oolong_official(prediction, reference)
     raise ValueError(f"unsupported scorer: {kind}")

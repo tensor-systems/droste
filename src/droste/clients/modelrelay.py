@@ -169,7 +169,16 @@ class _ResponsesTransport:
                     # Endpoint ignored the stream Accept and answered plainly.
                     raw = resp.read().decode("utf-8")
                     data = json.loads(raw)
-                    text = _output_text(data)
+                    if not isinstance(data, dict):
+                        raise RuntimeError(
+                            f"{self._label} returned a non-object JSON response"
+                        )
+                    try:
+                        text = _output_text(data)
+                    except RuntimeError:
+                        # Let the client account any returned usage before it
+                        # surfaces the malformed-output error.
+                        return data
                     if text:
                         on_delta(text)
                     return data
@@ -267,11 +276,30 @@ class ModelRelayClient:
         self._max_output_tokens = int(max_output_tokens or 0)
         self._reasoning_effort = str(reasoning_effort or "")
         self._on_delta = on_delta
+        self._usage_lock = threading.Lock()
+        self._total_usage = TokenUsage(0, 0, 0)
         # Parity with RootLLMClient's response metadata surface.
         self.last_provider = ""
         self.last_response_id = ""
         self.last_stop_reason = ""
         self.last_model = ""
+
+    @property
+    def total_usage(self) -> TokenUsage:
+        with self._usage_lock:
+            return TokenUsage(
+                self._total_usage.prompt_tokens,
+                self._total_usage.completion_tokens,
+                self._total_usage.total_tokens,
+            )
+
+    def _account_usage(self, usage: TokenUsage) -> None:
+        with self._usage_lock:
+            self._total_usage = TokenUsage(
+                self._total_usage.prompt_tokens + usage.prompt_tokens,
+                self._total_usage.completion_tokens + usage.completion_tokens,
+                self._total_usage.total_tokens + usage.total_tokens,
+            )
 
     def _payload(
         self,
@@ -312,13 +340,17 @@ class ModelRelayClient:
             data = self._transport.stream(payload, self._on_delta)
         else:
             data = self._transport.complete(payload)
-        result = _output_text(data)
+        # Account a provider-completed response before parsing its output. A
+        # malformed output is still billable and must remain visible to hosts.
+        usage = _usage_from(data)
+        self._account_usage(usage)
         self.last_provider = str(data.get("provider") or "")
         self.last_response_id = str(data.get("id") or "")
         self.last_stop_reason = str(data.get("stop_reason") or "")
         self.last_model = str(data.get("model") or payload["model"])
+        result = _output_text(data)
         if return_usage:
-            return result, _usage_from(data)
+            return result, usage
         return result
 
     def get_model_context_window(self, model: str) -> int | None:
@@ -375,6 +407,16 @@ class ModelRelaySubcallClient(SubcallClient):
         self._max_parallel = int(max_parallel)
         self._lock = threading.Lock()
         self._depth = threading.local()
+        self._total_usage = TokenUsage(0, 0, 0)
+
+    @property
+    def total_usage(self) -> TokenUsage:
+        with self._lock:
+            return TokenUsage(
+                self._total_usage.prompt_tokens,
+                self._total_usage.completion_tokens,
+                self._total_usage.total_tokens,
+            )
 
     def _depth_get(self) -> int:
         return getattr(self._depth, "value", 0)
@@ -393,6 +435,11 @@ class ModelRelaySubcallClient(SubcallClient):
     def _account_usage(self, usage: TokenUsage) -> None:
         with self._lock:
             self._context.stats.total_tokens += usage.total_tokens
+            self._total_usage = TokenUsage(
+                self._total_usage.prompt_tokens + usage.prompt_tokens,
+                self._total_usage.completion_tokens + usage.completion_tokens,
+                self._total_usage.total_tokens + usage.total_tokens,
+            )
 
     def llm_query(self, prompt: str, context: str = "") -> str:
         if context:
@@ -414,8 +461,8 @@ class ModelRelaySubcallClient(SubcallClient):
             if self._reasoning_effort:
                 payload["reasoning_effort"] = self._reasoning_effort
             data = self._transport.complete(payload)
-            result = _output_text(data)
             self._account_usage(_usage_from(data))
+            result = _output_text(data)
             return result
         finally:
             self._depth_set(depth - 1)
@@ -507,8 +554,8 @@ class ModelRelaySubcallClient(SubcallClient):
                     response = raw.get("response")
                     if not isinstance(response, dict):
                         raise RuntimeError(f"llm_batch item {idx} missing response")
-                    results[idx] = _output_text(response)
                     self._account_usage(_usage_from(response))
+                    results[idx] = _output_text(response)
                 elif status == "error":
                     error = raw.get("error")
                     if not isinstance(error, dict):

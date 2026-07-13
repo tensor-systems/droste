@@ -39,6 +39,7 @@ packages = ["src/droste", "src/droste_runner", "src/droste_cli"]
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "python-dateutil>=2.9.0.post0",
     "ruff>=0.15.20",
 ]
 

@@ -102,7 +102,7 @@ def load_artifacts(directory: Path, manifest: SuiteManifest) -> tuple[RunArtifac
             task["reference"]
         ):
             raise ReportError(f"artifact {path} reference does not match the declared task")
-        if artifact.status == "ok" and benchmark.scorer != "oolong_official":
+        if artifact.status == "ok":
             expected_score = score(
                 benchmark.scorer,
                 artifact.prediction,

@@ -13,6 +13,14 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.10.5)
 
+### Semantic policy is enforced when confirming an answer
+
+With `PolicyHints(semantic=True)`, inspection and local aggregation blocks may
+now execute before a semantic subcall. The ready-time gate still refuses to
+confirm an answer until at least one `llm_query` or batched equivalent has run.
+Hosts get the same final-answer contract without forcing harmless preparation
+steps through policy-repair iterations.
+
 ## 0.10.5 (from 0.10.4)
 
 The Pyodide credential broker now recognizes an optional exact

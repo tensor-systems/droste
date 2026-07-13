@@ -15,7 +15,7 @@ from droste.loop.step import (
     finalize,
     record_iteration,
 )
-from droste.policy import PolicyHints, ready_violations
+from droste.policy import PolicyHints, contract_violations, ready_violations
 
 
 def test_ready_violations_requires_hints_and_readiness() -> None:
@@ -29,6 +29,11 @@ def test_ready_violations_semantic_requires_a_subcall() -> None:
     violations = ready_violations(hints, answer_ready=True, calls_made=0, resolved_output="42")
     assert violations == ["semantic question must call llm_query/batch_llm_query at least once."]
     assert ready_violations(hints, answer_ready=True, calls_made=1, resolved_output="42") == []
+
+
+def test_semantic_contract_allows_inspection_before_ready_gate() -> None:
+    hints = PolicyHints(semantic=True)
+    assert contract_violations("print(context['files'][0]['text'][:100])", hints) == []
 
 
 def test_ready_violations_numeric_output_gate() -> None:

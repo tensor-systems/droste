@@ -4,7 +4,9 @@ import argparse
 import json
 from pathlib import Path
 
+from .live import run_modelrelay_suite
 from .models import load_manifest
+from .oolong import materialize_oolong
 from .report import aggregate, load_artifacts, render_markdown, summary_dict
 from .runner import run_fixture_suite
 
@@ -21,6 +23,19 @@ def _parser() -> argparse.ArgumentParser:
 
     smoke = commands.add_parser("smoke", help="run the deterministic zero-cost smoke suite")
     smoke.add_argument("--output", type=Path, required=True)
+
+    materialize = commands.add_parser(
+        "materialize-oolong", help="materialize the pinned public OOLONG 131K task slice"
+    )
+    materialize.add_argument("--output", type=Path, required=True)
+
+    run = commands.add_parser("run", help="run selected live ModelRelay benchmark arms")
+    run.add_argument("manifest", type=Path)
+    run.add_argument("--benchmark", required=True)
+    run.add_argument("--arm", action="append", required=True, dest="arms")
+    run.add_argument("--task-id", action="append", dest="task_ids")
+    run.add_argument("--limit", type=int, default=0)
+    run.add_argument("--output", type=Path, required=True)
 
     report = commands.add_parser("report", help="render a report from run artifacts")
     report.add_argument("manifest", type=Path)
@@ -40,6 +55,26 @@ def main(argv: list[str] | None = None) -> int:
         manifest = load_manifest(_SMOKE_MANIFEST)
         artifacts = run_fixture_suite(manifest, args.output)
         print(render_markdown(manifest, aggregate(artifacts)), end="")
+        return 0
+    if args.command == "materialize-oolong":
+        result = materialize_oolong(args.output)
+        print(
+            f"materialized {result.task_count} tasks and {result.context_count} contexts; "
+            f"tasks SHA-256: {result.tasks_sha256}"
+        )
+        return 0
+    if args.command == "run":
+        manifest = load_manifest(args.manifest)
+        artifacts = run_modelrelay_suite(
+            manifest,
+            args.output,
+            benchmark_id=args.benchmark,
+            arm_ids=set(args.arms),
+            task_ids=set(args.task_ids) if args.task_ids else None,
+            limit=args.limit,
+            progress=lambda message: print(message, flush=True),
+        )
+        print(f"wrote {len(artifacts)} immutable run artifacts")
         return 0
     manifest = load_manifest(args.manifest)
     rows = aggregate(load_artifacts(args.artifacts, manifest))

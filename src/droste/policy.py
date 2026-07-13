@@ -110,12 +110,6 @@ def contract_violations(
 
     violations: list[str] = []
 
-    if hints.semantic and not uses_llm_query(code):
-        violations.append(
-            "Semantic question requires llm_query() or llm_query_batched(). "
-            "Use search()/get_recent() to pre-filter, then call llm_query."
-        )
-
     if hints.count:
         if not uses_sql_aggregate(code):
             violations.append(

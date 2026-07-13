@@ -1,21 +1,32 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from benchmarks.models import ArtifactError, ManifestError, RunArtifact, load_manifest
+from benchmarks.live import (
+    ModelPrice,
+    PricingSnapshot,
+    _context_path,
+    _cost_microusd,
+    _LiveRunFailure,
+    _status_for_exception,
+)
+from benchmarks.models import ArtifactError, ManifestError, RunArtifact, Usage, load_manifest
+from benchmarks.oolong import materialize_oolong
 from benchmarks.report import ReportError, aggregate, load_artifacts, render_markdown
 from benchmarks.runner import BenchmarkRunError, run_fixture_suite
-from benchmarks.scoring import exact_match, numeric_score, token_f1
+from benchmarks.scoring import exact_match, numeric_score, oolong_official, token_f1
 
 ROOT = Path(__file__).resolve().parents[1]
 SMOKE_MANIFEST = ROOT / "benchmarks" / "manifests" / "smoke-v1.json"
 PAPER_MANIFEST = ROOT / "benchmarks" / "manifests" / "rlm-paper-v1.json"
 
 
-def test_manifest_pins_paper_tasks_and_blocks_live_runs() -> None:
+def test_manifest_pins_paper_tasks_and_opens_verified_live_runs() -> None:
     manifest = load_manifest(PAPER_MANIFEST)
 
     assert manifest.paper is not None
@@ -28,11 +39,12 @@ def test_manifest_pins_paper_tasks_and_blocks_live_runs() -> None:
         "longbench-v2-codeqa",
         "tag-bench",
     }
-    assert not manifest.live_run.enabled
-    assert [blocker.issue for blocker in manifest.live_run.blockers] == [
-        "https://github.com/tensor-systems/modelrelay/issues/1686"
-    ]
-    assert all(arm.executor == "blocked" for arm in manifest.arms)
+    assert manifest.live_run.enabled
+    assert not manifest.live_run.blockers
+    assert all(arm.executor == "modelrelay" for arm in manifest.arms)
+    oolong = next(item for item in manifest.benchmarks if item.benchmark_id == "oolong")
+    assert oolong.status == "ready"
+    assert oolong.tasks_sha256 == "28abaefcbcba1d843a384115a1217ea0017201b13074c95de6feb313c40c8da4"
 
 
 def test_manifest_rejects_unknown_fields(tmp_path: Path) -> None:
@@ -65,6 +77,16 @@ def test_manifest_rejects_artifact_delimiter_in_ids(tmp_path: Path) -> None:
         load_manifest(path)
 
 
+def test_manifest_rejects_unknown_execution_method(tmp_path: Path) -> None:
+    value = json.loads(SMOKE_MANIFEST.read_text())
+    value["arms"][0]["method"] = "typo"
+    path = tmp_path / "invalid.json"
+    path.write_text(json.dumps(value))
+
+    with pytest.raises(ManifestError, match="method is unsupported: typo"):
+        load_manifest(path)
+
+
 @pytest.mark.parametrize("model", [{}, [], None])
 def test_manifest_validates_any_declared_model_value(tmp_path: Path, model: object) -> None:
     value = json.loads(SMOKE_MANIFEST.read_text())
@@ -82,6 +104,154 @@ def test_scorers_are_deterministic_and_normalized() -> None:
     assert numeric_score(float("nan"), float("nan")) == 0.0
     assert token_f1("alpha alpha gamma", "alpha beta") == pytest.approx(0.4)
     assert token_f1("", "") == 1.0
+
+
+@pytest.mark.parametrize(
+    ("prediction", "reference", "expected"),
+    [
+        (
+            "Label: human being",
+            {"answer": "['human being']", "answer_type": "ANSWER_TYPE.LABEL"},
+            1.0,
+        ),
+        (
+            "Answer: human being is more common than abbreviation",
+            {
+                "answer": "['human being is more common than abbreviation']",
+                "answer_type": "ANSWER_TYPE.COMPARISON",
+            },
+            1.0,
+        ),
+        (
+            "Answer: 38",
+            {"answer": "[40]", "answer_type": "ANSWER_TYPE.NUMERIC"},
+            0.75**2,
+        ),
+        (
+            "Answer: unknown",
+            {"answer": "[40]", "answer_type": "ANSWER_TYPE.NUMERIC"},
+            0.0,
+        ),
+        (
+            "Date: January 5, 2024",
+            {
+                "answer": "[datetime.date(2024, 1, 5)]",
+                "answer_type": "ANSWER_TYPE.DATE",
+            },
+            1.0,
+        ),
+    ],
+)
+def test_oolong_official_scorer(prediction: object, reference: object, expected: float) -> None:
+    assert oolong_official(prediction, reference) == pytest.approx(expected)
+
+
+def test_oolong_official_rejects_incomplete_reference() -> None:
+    with pytest.raises(ValueError, match="answer and answer_type"):
+        oolong_official("Answer: 1", {"answer": "[1]"})
+
+
+def test_live_cost_uses_integer_microusd_and_snapshotted_fee() -> None:
+    manifest = load_manifest(PAPER_MANIFEST)
+    arm = next(item for item in manifest.arms if item.method == "droste")
+    price = ModelPrice("gpt-5.6-luna", "openai", 100, 600)
+    pricing = PricingSnapshot("test", 5, {price.model_id: price}, {})
+    usage = Usage(10, 2, 20, 3)
+
+    assert _cost_microusd(usage, arm, pricing) == 63
+
+
+def test_paid_failure_preserves_typed_timeout_status() -> None:
+    failure = _LiveRunFailure(
+        "benchmark task exceeded 10s",
+        usage=Usage(root_input_tokens=10),
+        status="timeout",
+    )
+
+    assert _status_for_exception(failure) == "timeout"
+    assert failure.usage.root_input_tokens == 10
+
+
+def test_context_path_is_relative_to_selected_benchmark(tmp_path: Path) -> None:
+    benchmark_root = tmp_path / "benchmarks"
+    manifest_path = benchmark_root / "manifests" / "suite.json"
+    selected_dir = benchmark_root / "selected"
+    context = selected_dir / "contexts" / "shared.txt"
+    context.parent.mkdir(parents=True)
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text("{}")
+    (selected_dir / "tasks.json").write_text("[]")
+    context.write_text("selected context")
+
+    manifest = load_manifest(PAPER_MANIFEST)
+    selected = next(item for item in manifest.benchmarks if item.benchmark_id == "oolong")
+    selected = replace(selected, tasks_path="../selected/tasks.json")
+    manifest = replace(manifest, source_path=manifest_path)
+    task = {
+        "id": "task",
+        "context_path": "contexts/shared.txt",
+        "context_sha256": hashlib.sha256(context.read_bytes()).hexdigest(),
+    }
+
+    assert _context_path(manifest, selected, task) == context
+
+
+def test_materialize_oolong_validates_and_deduplicates_contexts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import benchmarks.oolong as module
+
+    first = "first public context"
+    second = "second public context"
+    task_ids = tuple(str(9000 + index) for index in range(26))
+    monkeypatch.setattr(module, "ROW_OFFSET", 100)
+    monkeypatch.setattr(module, "ROW_COUNT", 26)
+    monkeypatch.setattr(module, "CONTEXT_LENGTH", 128)
+    monkeypatch.setattr(module, "_EXPECTED_TASK_IDS", task_ids)
+    monkeypatch.setattr(
+        module,
+        "_EXPECTED_CONTEXT_HASHES",
+        (
+            hashlib.sha256(first.encode()).hexdigest(),
+            hashlib.sha256(second.encode()).hexdigest(),
+        ),
+    )
+    rows = []
+    for position, task_id in enumerate(task_ids):
+        rows.append(
+            {
+                "row_idx": 100 + position,
+                "row": {
+                    "id": int(task_id),
+                    "dataset": "trec_coarse",
+                    "context_len": 128,
+                    "question": f"question {position}",
+                    "answer": "[1]",
+                    "answer_type": "ANSWER_TYPE.NUMERIC",
+                    "context_window_text": first if position < 25 else second,
+                    "context_window_id": position // 25,
+                    "task": "count",
+                    "task_group": "counting",
+                    "input_subset": False,
+                },
+            }
+        )
+
+    result = materialize_oolong(
+        tmp_path / "oolong", fetch=lambda: json.dumps({"rows": rows}).encode()
+    )
+
+    tasks = json.loads(result.tasks_path.read_text())
+    assert result.task_count == 26
+    assert result.context_count == 2
+    assert result.tasks_sha256 == hashlib.sha256(result.tasks_path.read_bytes()).hexdigest()
+    assert len(list((tmp_path / "oolong" / "contexts").glob("*.txt"))) == 2
+    assert tasks[0]["reference"] == {
+        "answer": "[1]",
+        "answer_type": "ANSWER_TYPE.NUMERIC",
+    }
+    with pytest.raises(BenchmarkRunError, match="refusing to overwrite"):
+        materialize_oolong(tmp_path / "oolong", fetch=lambda: json.dumps({"rows": rows}).encode())
 
 
 def test_smoke_suite_writes_artifacts_and_deterministic_report(tmp_path: Path) -> None:

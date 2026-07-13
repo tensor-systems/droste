@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -37,7 +38,15 @@ def _resolve(manifest: SuiteManifest, relative: str) -> Path:
 def load_tasks(manifest: SuiteManifest, benchmark: BenchmarkSpec) -> tuple[dict[str, Any], ...]:
     if benchmark.tasks_path is None:
         raise BenchmarkRunError(f"benchmark {benchmark.benchmark_id} has no runnable tasks")
-    value = _load_json(_resolve(manifest, benchmark.tasks_path))
+    path = _resolve(manifest, benchmark.tasks_path)
+    if benchmark.tasks_sha256 is not None:
+        actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual_sha256 != benchmark.tasks_sha256:
+            raise BenchmarkRunError(
+                f"tasks for {benchmark.benchmark_id} have SHA-256 {actual_sha256}; "
+                f"expected {benchmark.tasks_sha256}"
+            )
+    value = _load_json(path)
     if not isinstance(value, list) or not value:
         raise BenchmarkRunError(f"tasks for {benchmark.benchmark_id} must be a non-empty array")
     tasks: list[dict[str, Any]] = []

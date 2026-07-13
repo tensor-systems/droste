@@ -558,8 +558,8 @@ def test_terminal_subcall_budget_error_extracts_partial_answer() -> None:
 
 
 def test_terminal_semantic_policy_violation_extracts_kept_content() -> None:
-    # Turn 1 passes the static llm_query check (mention in comment) but makes
-    # zero subcalls before flipping ready -> semantic PolicyError. The old
+    # Turn 1 makes zero subcalls before flipping ready -> semantic PolicyError.
+    # The old
     # behavior wiped answer['content']; now the draft survives in-loop for the
     # model's next attempt (only readiness is revoked, violation fed back as
     # guidance). If the one repair still violates the hint, the bounded

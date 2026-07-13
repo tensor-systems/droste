@@ -83,6 +83,7 @@
             "enum": ["exact_match", "numeric", "token_f1", "oolong_official"]
           },
           "tasks_path": { "type": "string", "minLength": 1 },
+          "tasks_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
           "phase": { "type": "integer", "minimum": 1 },
           "status": { "enum": ["ready", "planned"] }
         }
@@ -106,16 +107,21 @@
                 "limits": false
               }
             },
-            "else": {
-              "required": ["blocker", "model", "limits"],
+            "else": { "required": ["model", "limits"] }
+          },
+          {
+            "if": { "properties": { "executor": { "const": "blocked" } } },
+            "then": {
+              "required": ["blocker"],
               "properties": { "predictions_path": false }
-            }
+            },
+            "else": { "properties": { "blocker": false } }
           }
         ],
         "properties": {
           "id": { "type": "string", "pattern": "^(?!.*--)[a-z0-9][a-z0-9._-]*$" },
-          "method": { "type": "string", "minLength": 1 },
-          "executor": { "enum": ["fixture", "blocked"] },
+          "method": { "enum": ["droste", "direct-model", "fixture"] },
+          "executor": { "enum": ["fixture", "modelrelay", "blocked"] },
           "predictions_path": { "type": "string", "minLength": 1 },
           "blocker": { "type": "string", "minLength": 1 },
           "model": {

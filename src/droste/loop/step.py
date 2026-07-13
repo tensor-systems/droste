@@ -243,7 +243,10 @@ def execute_step(
     try:
         if cfg.enforce_contract:
             violations = contract_violations(
-                code, cfg.policy_hints, data_accessor_names, namespaced_accessor_pairs
+                code,
+                cfg.policy_hints,
+                data_accessor_names,
+                namespaced_accessor_pairs,
             )
             if violations:
                 raise PolicyError("Policy violation: " + " | ".join(violations))
