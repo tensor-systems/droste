@@ -506,6 +506,7 @@ def run_ask(args: argparse.Namespace) -> int:
     if args.json:
         payload: dict[str, Any] = {
             "answer": result.answer,
+            "answer_metadata": getattr(result, "answer_metadata", {}),
             "ready": result.ready,
             "extracted": result.extracted,
             "iterations": result.iterations,

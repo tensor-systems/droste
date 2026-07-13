@@ -282,6 +282,7 @@ def run_rlm(
     last_output = ""
     last_response = ""
     error: RLMError | None = None
+    answer_metadata: dict[str, Any] = {}
 
     messages: list[dict[str, str]] = []
     code = ""
@@ -306,6 +307,7 @@ def run_rlm(
             context=context,
             trajectory=trajectory,
             error=run_error,
+            answer_metadata=answer_metadata,
         )
 
     try:
@@ -370,6 +372,7 @@ def run_rlm(
                         context=context,
                         trajectory=trajectory,
                         error=None,
+                        answer_metadata=answer_metadata,
                     )
 
             context.emit_progress(f"Iteration {iterations}/{cfg.max_iterations}: Executing...")
@@ -379,6 +382,7 @@ def run_rlm(
             answer = outcome.answer
             last_output = outcome.output
             error = outcome.error
+            answer_metadata = outcome.answer_metadata
             if outcome.error is None:
                 has_successful_step = True
                 trajectory.append(
@@ -429,6 +433,7 @@ def run_rlm(
                 answer = outcome.answer
                 last_output = outcome.output
                 error = outcome.error
+                answer_metadata = outcome.answer_metadata
                 if outcome.error is None:
                     code = repaired_code
                     has_successful_step = True
@@ -521,6 +526,7 @@ def run_rlm(
             extracted=was_extracted,
             extract_error=extract_error,
             recovered_error=recovered_error,
+            answer_metadata=answer_metadata,
         )
     finally:
         environment.close()

@@ -11,7 +11,28 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.10.5)
+## Unreleased (post-0.10.6)
+
+## 0.10.6 (from 0.10.5)
+
+### Confirmed answers can carry structured metadata
+
+Sandbox code may set a JSON object at `answer["metadata"]`. A confirmed
+result exposes a validated, defensively copied version as
+`RLMResult.answer_metadata`; the built-in runner and CLI JSON output include
+the same additive `answer_metadata` field. Metadata is limited to 64 KiB.
+
+`answer["metadata"]` is now reserved and validated whenever an answer claims
+readiness, even when contract enforcement is disabled. Invalid metadata blocks
+confirmation and is returned to the model for repair. Emit only plain JSON
+objects, arrays, strings, booleans, null, finite numbers, and integers within
+JavaScript's safe range; tuples, custom scalar types, non-string object keys,
+cycles, excessive nesting, and oversized structures are rejected.
+
+The text-only terminal extraction fallback intentionally returns empty
+metadata: partial structured values are not evidence for newly synthesized
+text. Embedders that construct `RLMResult` directly need no change because the
+new field defaults to an empty object.
 
 ### Successful semantic evidence and structured subcalls
 
