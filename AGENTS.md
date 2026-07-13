@@ -26,6 +26,20 @@ including on mid-run iterations that later recover successfully.
 A failed-only trajectory with no retained `answer["content"]` must stay fatal;
 only a retained draft or at least one successful step is extraction evidence.
 
+## Reproducible Benchmarks
+
+- Repository-local benchmark tooling lives in `benchmarks/` and is deliberately
+  excluded from the published wheel. Run its zero-cost integrity check with
+  `uv run python -m benchmarks smoke --output <new-directory>`.
+- Per-task artifacts are immutable: the runner refuses to overwrite an existing
+  artifact. Reports reject artifacts whose suite version or manifest SHA-256
+  differs from the selected manifest.
+- Store cost as integer micro-US dollars and root/subcall usage separately.
+  Failures and timeouts remain typed artifacts; never omit them from aggregates.
+- Live OpenAI benchmark arms remain blocked until ModelRelay #1686 is deployed
+  and `reasoning_effort=none` is verified end to end. Dataset/scorer/report
+  infrastructure can proceed without opening that gate.
+
 ## LLM Client Protocol
 
 - `LLMClient` now exposes `responses_create(...)` (message-based) to avoid chat/completions terminology.

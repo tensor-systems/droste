@@ -1,0 +1,12 @@
+[
+  {
+    "id": "normalization",
+    "input": "Return Alpha with harmless whitespace differences.",
+    "reference": "Alpha"
+  },
+  {
+    "id": "mismatch",
+    "input": "Return Beta.",
+    "reference": "Beta"
+  }
+]
