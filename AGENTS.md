@@ -36,9 +36,8 @@ only a retained draft or at least one successful step is extraction evidence.
   differs from the selected manifest.
 - Store cost as integer micro-US dollars and root/subcall usage separately.
   Failures and timeouts remain typed artifacts; never omit them from aggregates.
-- Live OpenAI benchmark arms remain blocked until ModelRelay #1686 is deployed
-  and `reasoning_effort=none` is verified end to end. Dataset/scorer/report
-  infrastructure can proceed without opening that gate.
+- The live OpenAI benchmark gate was cleared on 2026-07-13 after deployment and
+  end-to-end verification of `reasoning_effort=none`.
 
 ## LLM Client Protocol
 
