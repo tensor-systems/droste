@@ -80,6 +80,14 @@ class ExecutionContext:
         self.stats.calls_made = value
 
     @property
+    def successful_calls(self) -> int:
+        return self.stats.successful_calls
+
+    @successful_calls.setter
+    def successful_calls(self, value: int) -> None:
+        self.stats.successful_calls = value
+
+    @property
     def total_tokens(self) -> int:
         return self.stats.total_tokens
 

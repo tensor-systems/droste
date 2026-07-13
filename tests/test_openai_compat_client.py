@@ -18,6 +18,7 @@ from droste.clients.openai_compat import (
     OpenAICompatClient,
     OpenAICompatSubcallClient,
 )
+from droste.exceptions import SubcallBudgetExceeded
 from droste.execution.context import create_execution_context
 from droste.testing import MockEnvironment
 
@@ -233,6 +234,7 @@ def test_subcall_llm_query_counts_calls_and_tokens(stub_server):
     result = client.llm_query("summarize this", context="chunk text")
     assert result == "echo: chunk text\n\nsummarize this"
     assert context.stats.calls_made == 1
+    assert context.stats.successful_calls == 1
     assert context.stats.total_tokens == 10
     payload = stub_server.requests[0]
     assert payload["model"] == "sub-model"
@@ -280,7 +282,7 @@ def test_max_calls_enforced_and_rejections_not_counted(stub_server):
     client = _subcall_client(stub_server, context, max_calls=3)
     for _ in range(3):
         client.llm_query("ok")
-    with pytest.raises(RuntimeError, match="max subcalls exceeded"):
+    with pytest.raises(SubcallBudgetExceeded, match="max subcalls exceeded"):
         client.llm_query("over budget")
     # The rejected attempt must not inflate the reported subcall count.
     assert context.stats.calls_made == 3
@@ -293,6 +295,7 @@ def test_llm_batch_with_errors_reports_per_item_failures(stub_server):
     assert len([r for r in results if r]) == 2
     assert len(errors) == 2
     assert all("max subcalls exceeded" in str(e["error"]) for e in errors)
+    assert all(e["type"] == "budget_exhausted" for e in errors)
     assert context.stats.calls_made == 2
 
 

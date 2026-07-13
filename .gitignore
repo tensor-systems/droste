@@ -47,6 +47,7 @@ dmypy.json
 # Local benchmark outputs. Publish reviewed artifacts as explicit release
 # attachments; never let an ad-hoc paid run become a source file by accident.
 benchmark-results/
+benchmarks/.data/
 
 # pyright
 pyrightconfig.json

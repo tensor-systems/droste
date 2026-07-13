@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import math
 from collections import defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .models import ArtifactError, RunArtifact, SuiteManifest, reject_json_constant
-from .runner import BenchmarkRunError, load_tasks, task_tolerance
+from .runner import BenchmarkRunError, load_tasks, task_tolerance, validate_task_ids
 from .scoring import score
 
 
@@ -42,7 +43,12 @@ class Aggregate:
         }
 
 
-def load_artifacts(directory: Path, manifest: SuiteManifest) -> tuple[RunArtifact, ...]:
+def load_artifacts(
+    directory: Path,
+    manifest: SuiteManifest,
+    *,
+    task_ids: Collection[str] | None = None,
+) -> tuple[RunArtifact, ...]:
     paths = sorted(directory.glob("*.json"))
     if not paths:
         raise ReportError(f"no JSON artifacts found in {directory}")
@@ -59,6 +65,12 @@ def load_artifacts(directory: Path, manifest: SuiteManifest) -> tuple[RunArtifac
                 tasks[(benchmark.benchmark_id, task["id"])] = task
     except BenchmarkRunError as exc:
         raise ReportError(f"cannot load declared tasks: {exc}") from exc
+    try:
+        selected_task_ids = validate_task_ids(
+            task_ids, {declared_task_id for _, declared_task_id in tasks}
+        )
+    except BenchmarkRunError as exc:
+        raise ReportError(str(exc)) from exc
     for path in paths:
         try:
             artifact = RunArtifact.from_dict(
@@ -102,7 +114,7 @@ def load_artifacts(directory: Path, manifest: SuiteManifest) -> tuple[RunArtifac
             task["reference"]
         ):
             raise ReportError(f"artifact {path} reference does not match the declared task")
-        if artifact.status == "ok" and benchmark.scorer != "oolong_official":
+        if artifact.status == "ok":
             expected_score = score(
                 benchmark.scorer,
                 artifact.prediction,
@@ -118,14 +130,16 @@ def load_artifacts(directory: Path, manifest: SuiteManifest) -> tuple[RunArtifac
         seen.add(artifact.artifact_id)
         artifacts.append(artifact)
     runnable_arms = tuple(arm for arm in manifest.arms if arm.executor != "blocked")
-    expected: set[str] = set()
-    for benchmark in manifest.benchmarks:
-        if benchmark.status != "ready":
-            continue
-        for arm in runnable_arms:
-            for benchmark_id, task_id in tasks:
-                if benchmark_id == benchmark.benchmark_id:
-                    expected.add(f"{benchmark_id}--{arm.arm_id}--{task_id}")
+    selected_tasks = (
+        tasks
+        if selected_task_ids is None
+        else {key: task for key, task in tasks.items() if key[1] in selected_task_ids}
+    )
+    expected = {
+        f"{benchmark_id}--{arm.arm_id}--{task_id}"
+        for benchmark_id, task_id in selected_tasks
+        for arm in runnable_arms
+    }
     actual = {artifact.artifact_id for artifact in artifacts}
     missing = sorted(expected - actual)
     extra = sorted(actual - expected)

@@ -8,13 +8,8 @@
     "url": "https://arxiv.org/abs/2512.24601v3"
   },
   "live_run": {
-    "enabled": false,
-    "blockers": [
-      {
-        "issue": "https://github.com/tensor-systems/modelrelay/issues/1686",
-        "reason": "OpenAI reasoning_effort is silently dropped; live results would misstate cost and latency until the fix is deployed and verified."
-      }
-    ]
+    "enabled": true,
+    "blockers": []
   },
   "benchmarks": [
     {
@@ -37,12 +32,14 @@
     },
     {
       "id": "oolong",
-      "dataset": "OOLONG",
-      "dataset_version": "pending-pin",
-      "split": "trec_coarse",
+      "dataset": "oolongbench/oolong-synth",
+      "dataset_version": "f0d59eaf0febf130664cfceb710436c8e3216b2b",
+      "split": "validation/trec_coarse/context_len=131072/rows=1050-1099",
       "scorer": "oolong_official",
+      "tasks_path": "../.data/oolong-trec-coarse-131k-v1/tasks.json",
+      "tasks_sha256": "28abaefcbcba1d843a384115a1217ea0017201b13074c95de6feb313c40c8da4",
       "phase": 1,
-      "status": "planned"
+      "status": "ready"
     },
     {
       "id": "oolong-pairs",
@@ -76,12 +73,11 @@
     {
       "id": "droste-openai-none",
       "method": "droste",
-      "executor": "blocked",
-      "blocker": "ModelRelay #1686 must be deployed and reasoning_effort=none verified end to end.",
+      "executor": "modelrelay",
       "model": {
         "provider": "modelrelay",
-        "root_model": "openai/gpt-5.6",
-        "subcall_model": "openai/gpt-5.6",
+        "root_model": "gpt-5.6-luna",
+        "subcall_model": "gpt-5.6-luna",
         "root_reasoning_effort": "none",
         "subcall_reasoning_effort": "none",
         "temperature": null,
@@ -98,11 +94,10 @@
     {
       "id": "direct-openai-none",
       "method": "direct-model",
-      "executor": "blocked",
-      "blocker": "ModelRelay #1686 must be deployed and reasoning_effort=none verified end to end.",
+      "executor": "modelrelay",
       "model": {
         "provider": "modelrelay",
-        "root_model": "openai/gpt-5.6",
+        "root_model": "gpt-5.6-luna",
         "subcall_model": null,
         "root_reasoning_effort": "none",
         "subcall_reasoning_effort": null,

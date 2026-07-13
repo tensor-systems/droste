@@ -24,6 +24,12 @@ class BatchLLMError(SandboxError):
         self.errors = errors
 
 
+class SubcallBudgetExceeded(RuntimeError):
+    """A subcall dispatch was rejected before exceeding its call budget."""
+
+    pass
+
+
 @dataclass
 class RLMError:
     """Structured error for RLM execution."""

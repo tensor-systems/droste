@@ -3,7 +3,7 @@
 from .clients.anthropic import AnthropicClient, AnthropicSubcallClient
 from .clients.modelrelay import ModelRelayClient, ModelRelaySubcallClient
 from .clients.openai_compat import OpenAICompatClient, OpenAICompatSubcallClient
-from .exceptions import PolicyError, RLMError
+from .exceptions import PolicyError, RLMError, SubcallBudgetExceeded
 from .execution.config import (
     DEFAULT_MAX_CALLS,
     DEFAULT_MAX_DEPTH,
@@ -23,6 +23,7 @@ from .protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironm
 from .protocols.llm_client import LLMClient, TokenUsage
 from .protocols.subcall_client import SubcallClient
 from .registry import DataSourceRegistry
+from .structured import aggregate_json_counts, structured_batch, validate_json
 
 __all__ = [
     "run_rlm",
@@ -41,6 +42,7 @@ __all__ = [
     "emit_progress",
     "RLMError",
     "PolicyError",
+    "SubcallBudgetExceeded",
     "PolicyHints",
     "RLMEnvironment",
     "EnvCapabilities",
@@ -59,4 +61,7 @@ __all__ = [
     "ModelRelaySubcallClient",
     "OpenAICompatClient",
     "OpenAICompatSubcallClient",
+    "structured_batch",
+    "validate_json",
+    "aggregate_json_counts",
 ]

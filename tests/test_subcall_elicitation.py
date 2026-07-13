@@ -558,8 +558,8 @@ def test_terminal_subcall_budget_error_extracts_partial_answer() -> None:
 
 
 def test_terminal_semantic_policy_violation_extracts_kept_content() -> None:
-    # Turn 1 passes the static llm_query check (mention in comment) but makes
-    # zero subcalls before flipping ready -> semantic PolicyError. The old
+    # Turn 1 makes zero subcalls before flipping ready -> semantic PolicyError.
+    # The old
     # behavior wiped answer['content']; now the draft survives in-loop for the
     # model's next attempt (only readiness is revoked, violation fed back as
     # guidance). If the one repair still violates the hint, the bounded
@@ -637,10 +637,11 @@ def test_policy_violation_resolved_in_loop_returns_answer_normally() -> None:
         """llm_query that registers as a real subcall for the semantic gate."""
 
         def __init__(self, context) -> None:
-            self._context = context
+            super().__init__(context=context)
 
         def llm_query(self, prompt: str, context: str = "") -> str:
             self._context.stats.calls_made += 1
+            self._context.stats.successful_calls += 1
             return "sub-answer"
 
     from droste import create_execution_context

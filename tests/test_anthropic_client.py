@@ -8,7 +8,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from droste import AnthropicClient, AnthropicSubcallClient, create_execution_context
+from droste import (
+    AnthropicClient,
+    AnthropicSubcallClient,
+    SubcallBudgetExceeded,
+    create_execution_context,
+)
 from droste_cli.main import main
 
 
@@ -261,8 +266,9 @@ def test_subcall_accounting_and_cap(stub):
     assert sub.llm_query("alpha") == "echo: alpha"
     assert sub.llm_query("beta") == "echo: beta"
     assert ctx.stats.calls_made == 2
+    assert ctx.stats.successful_calls == 2
     assert ctx.stats.total_tokens == 20  # 2 x (7 + 3)
-    with pytest.raises(RuntimeError, match="max subcalls exceeded"):
+    with pytest.raises(SubcallBudgetExceeded, match="max subcalls exceeded"):
         sub.llm_query("gamma")
     assert ctx.stats.calls_made == 2  # rejected attempt does not inflate
     assert stub.requests[0]["max_tokens"] == 2048  # bounded by default

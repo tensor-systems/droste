@@ -11,11 +11,12 @@ from typing import Any, Literal, TypeAlias, cast
 SCHEMA_VERSION = 1
 
 ScorerKind: TypeAlias = Literal["exact_match", "numeric", "token_f1", "oolong_official"]
-ExecutorKind: TypeAlias = Literal["fixture", "blocked"]
+ExecutorKind: TypeAlias = Literal["fixture", "modelrelay", "blocked"]
 RunStatus: TypeAlias = Literal["ok", "error", "timeout", "context_limit", "refusal"]
 
 _SCORERS = frozenset({"exact_match", "numeric", "token_f1", "oolong_official"})
-_EXECUTORS = frozenset({"fixture", "blocked"})
+_EXECUTORS = frozenset({"fixture", "modelrelay", "blocked"})
+_METHODS = frozenset({"droste", "direct-model", "fixture"})
 _STATUSES = frozenset({"ok", "error", "timeout", "context_limit", "refusal"})
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
@@ -138,6 +139,7 @@ class BenchmarkSpec:
     split: str
     scorer: ScorerKind
     tasks_path: str | None
+    tasks_sha256: str | None
     phase: int
     status: Literal["ready", "planned"]
 
@@ -154,6 +156,7 @@ class BenchmarkSpec:
                 "split",
                 "scorer",
                 "tasks_path",
+                "tasks_sha256",
                 "phase",
                 "status",
             },
@@ -170,6 +173,13 @@ class BenchmarkSpec:
             tasks_path = _expect_str(tasks_path, f"{path}.tasks_path")
         if status == "ready" and tasks_path is None:
             raise ManifestError(f"{path}.tasks_path is required when status is ready")
+        tasks_sha256 = data.get("tasks_sha256")
+        if tasks_sha256 is not None:
+            tasks_sha256 = _expect_str(tasks_sha256, f"{path}.tasks_sha256")
+            if not _SHA256_RE.fullmatch(tasks_sha256):
+                raise ManifestError(f"{path}.tasks_sha256 must be a lowercase SHA-256 digest")
+        if tasks_sha256 is not None and tasks_path is None:
+            raise ManifestError(f"{path}.tasks_sha256 requires tasks_path")
         return cls(
             benchmark_id=_expect_id(data.get("id"), f"{path}.id"),
             dataset=_expect_str(data.get("dataset"), f"{path}.dataset"),
@@ -177,6 +187,7 @@ class BenchmarkSpec:
             split=_expect_str(data.get("split"), f"{path}.split"),
             scorer=cast(ScorerKind, scorer),
             tasks_path=tasks_path,
+            tasks_sha256=tasks_sha256,
             phase=_expect_int(data.get("phase"), f"{path}.phase", minimum=1),
             status=cast(Literal["ready", "planned"], status),
         )
@@ -310,6 +321,9 @@ class ArmSpec:
         executor = _expect_str(data.get("executor"), f"{path}.executor")
         if executor not in _EXECUTORS:
             raise ManifestError(f"{path}.executor is unsupported: {executor}")
+        method = _expect_str(data.get("method"), f"{path}.method")
+        if method not in _METHODS:
+            raise ManifestError(f"{path}.method is unsupported: {method}")
         predictions_path = data.get("predictions_path")
         blocker = data.get("blocker")
         if predictions_path is not None:
@@ -334,9 +348,15 @@ class ArmSpec:
             raise ManifestError(f"{path} blocked executors must not declare predictions_path")
         if executor == "blocked" and (model is None or limits is None):
             raise ManifestError(f"{path} blocked live executors require model and limits")
+        if executor == "modelrelay" and predictions_path is not None:
+            raise ManifestError(f"{path} modelrelay executors must not declare predictions_path")
+        if executor == "modelrelay" and blocker is not None:
+            raise ManifestError(f"{path} modelrelay executors must not declare a blocker")
+        if executor == "modelrelay" and (model is None or limits is None):
+            raise ManifestError(f"{path} modelrelay executors require model and limits")
         return cls(
             arm_id=_expect_id(data.get("id"), f"{path}.id"),
-            method=_expect_str(data.get("method"), f"{path}.method"),
+            method=method,
             executor=cast(ExecutorKind, executor),
             predictions_path=predictions_path,
             blocker=blocker,

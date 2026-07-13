@@ -28,11 +28,35 @@ uv run python -m benchmarks report \
   --json /tmp/droste-smoke.json
 ```
 
+Repeat `--task-id <id>` to report a selected gate. The artifact directory must
+then contain exactly every runnable arm for the selected tasks and no other run
+artifacts. Without `--task-id`, reporting retains strict full-suite coverage.
+
 Validate a manifest without executing it:
 
 ```bash
 uv run python -m benchmarks validate benchmarks/manifests/rlm-paper-v1.json
 ```
+
+## Pinned OOLONG data
+
+Materialize the public 50-task, 131K-token `trec_coarse` validation slice used
+by the first OOLONG arm:
+
+```bash
+uv run python -m benchmarks materialize-oolong \
+  --output benchmarks/.data/oolong-trec-coarse-131k-v1
+```
+
+The materializer downloads rows 1050–1099 from the pinned public dataset
+revision, verifies every task id and the SHA-256 of both shared contexts, and
+writes a deterministic task file. The generated data is gitignored; it is not
+part of the published wheel or source tree. Existing files are never
+overwritten.
+
+The `oolong_official` scorer implements the benchmark's published synth
+evaluation: exact parsed answers, comparison-phrase matching, date matching,
+and graded numeric credit of `0.75 ** absolute_error`.
 
 ## RLM paper suite
 
@@ -41,23 +65,42 @@ paper's S-NIAH, BrowseComp-Plus, OOLONG, OOLONG-Pairs, and LongBench-v2 CodeQA
 task families. TAG-Bench is tracked separately in the same manifest as a
 Droste-specific follow-on rather than being presented as part of the paper.
 
-The datasets and live executors remain `planned`. A planned benchmark cannot be
-run: it has no task path, and a blocked executor cannot silently degrade to a
-fixture or another provider. Dataset adapters will promote each benchmark to
-`ready` only after its source revision, split, scorer, and license are pinned.
+The OOLONG 131K `trec_coarse` validation slice and its ModelRelay arms are ready
+after materialization; the other datasets remain `planned`. A planned benchmark
+cannot be run: it has no task path, and a blocked executor cannot silently
+degrade to a fixture or another provider. Dataset adapters promote each
+benchmark to `ready` only after its public source revision, split, integrity
+checks, and scorer are pinned.
 
 ## Live-run gate
 
-Do not publish live OpenAI benchmark results until
-[ModelRelay #1686](https://github.com/tensor-systems/modelrelay/issues/1686) is
-merged, released, deployed, and verified end to end. Before that fix,
-`reasoning_effort=none` can be silently dropped, so reported OpenAI cost and
-latency would not match the manifest.
+The `reasoning_effort=none` gate was verified end to end against production on
+2026-07-13: the response usage reported zero reasoning tokens. Re-run that
+credentialed probe before publishing results if the model or relay deployment
+changes; otherwise reported cost and latency could differ from the manifest.
 
-Infrastructure work—dataset adapters, scorers, artifact plumbing, and report
-generation—can proceed while the gate is closed. The manifest records the gate
-as data and all live arms use the `blocked` executor kind, so the runner fails
-fast instead of producing mislabeled results.
+Authenticate once with `droste login`, then start with one task and a new output
+directory:
+
+```bash
+uv run python -m benchmarks run benchmarks/manifests/rlm-paper-v1.json \
+  --benchmark oolong \
+  --arm droste-openai-none \
+  --arm direct-openai-none \
+  --task-id 17000208 \
+  --max-cost-microusd 4000000 \
+  --output benchmark-results/oolong-pilot-1
+```
+
+Use another new output directory when expanding the task set. The runner
+refuses to overwrite artifacts, snapshots the current public price table, and
+rejects additions if that output directory's price snapshot has changed.
+The optional integer micro-USD cap includes existing artifacts in the output
+directory. Once actual cumulative cost reaches the cap, or an observed
+same-arm cost projects the next run past it, execution stops before another
+arm without inventing a skipped artifact (artifact v1 has no skipped status).
+ModelRelay's platform fee is currently 0%; model input and output tokens still
+incur the snapshotted provider prices.
 
 ## Artifact rules
 

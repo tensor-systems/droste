@@ -9,5 +9,6 @@ class ExecutionStats:
 
     depth: int = 0
     calls_made: int = 0
+    successful_calls: int = 0
     total_tokens: int = 0
     retrieved_ids: list[str] = field(default_factory=list)

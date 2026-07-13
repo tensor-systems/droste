@@ -15,33 +15,48 @@ from droste.loop.step import (
     finalize,
     record_iteration,
 )
-from droste.policy import PolicyHints, ready_violations
+from droste.policy import PolicyHints, contract_violations, ready_violations
 
 
 def test_ready_violations_requires_hints_and_readiness() -> None:
     hints = PolicyHints(semantic=True, numeric_output=True)
-    assert ready_violations(None, answer_ready=True, calls_made=0, resolved_output="x") == []
-    assert ready_violations(hints, answer_ready=False, calls_made=0, resolved_output="x") == []
+    assert ready_violations(None, answer_ready=True, successful_calls=0, resolved_output="x") == []
+    assert (
+        ready_violations(hints, answer_ready=False, successful_calls=0, resolved_output="x") == []
+    )
 
 
 def test_ready_violations_semantic_requires_a_subcall() -> None:
     hints = PolicyHints(semantic=True)
-    violations = ready_violations(hints, answer_ready=True, calls_made=0, resolved_output="42")
-    assert violations == ["semantic question must call llm_query/batch_llm_query at least once."]
-    assert ready_violations(hints, answer_ready=True, calls_made=1, resolved_output="42") == []
+    violations = ready_violations(
+        hints, answer_ready=True, successful_calls=0, resolved_output="42"
+    )
+    assert violations == [
+        "semantic question must complete at least one successful llm_query/batch_llm_query subcall."
+    ]
+    assert (
+        ready_violations(hints, answer_ready=True, successful_calls=1, resolved_output="42") == []
+    )
+
+
+def test_semantic_contract_allows_inspection_before_ready_gate() -> None:
+    hints = PolicyHints(semantic=True)
+    assert contract_violations("print(context['files'][0]['text'][:100])", hints) == []
 
 
 def test_ready_violations_numeric_output_gate() -> None:
     hints = PolicyHints(numeric_output=True)
-    ok = ready_violations(hints, answer_ready=True, calls_made=0, resolved_output="12.5%")
+    ok = ready_violations(hints, answer_ready=True, successful_calls=0, resolved_output="12.5%")
     assert ok == []
-    bad = ready_violations(hints, answer_ready=True, calls_made=0, resolved_output="about 12")
+    bad = ready_violations(hints, answer_ready=True, successful_calls=0, resolved_output="about 12")
     assert bad == ["output must be a single number (optionally with %)."]
 
 
 def test_ready_violations_reports_both_when_both_trip() -> None:
     hints = PolicyHints(semantic=True, numeric_output=True)
-    violations = ready_violations(hints, answer_ready=True, calls_made=0, resolved_output="prose")
+    violations = ready_violations(
+        hints, answer_ready=True, successful_calls=0, resolved_output="prose"
+    )
     assert len(violations) == 2
 
 
@@ -119,6 +134,7 @@ def test_finalize_reads_stats_and_readiness() -> None:
     context = create_execution_context(max_calls=10, max_depth=2)
     context.stats.total_tokens = 7
     context.stats.calls_made = 3
+    context.stats.successful_calls = 2
     result = finalize(
         answer_text="42",
         answer={"content": "42", "ready": True},
@@ -130,4 +146,5 @@ def test_finalize_reads_stats_and_readiness() -> None:
     assert result.ready is True
     assert result.tokens_used == 7
     assert result.sub_calls_made == 3
+    assert result.sub_calls_succeeded == 2
     assert result.error is None and result.extracted is False

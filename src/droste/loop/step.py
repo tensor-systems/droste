@@ -72,6 +72,9 @@ class RLMResult:
     # present the answer as best-effort using `extracted`, while telemetry and
     # benchmarks can still distinguish policy, budget, and execution recovery.
     recovered_error: RLMError | None = None
+    # Append-only result surface: keep positional construction of every older
+    # field stable while exposing successful semantic evidence separately.
+    sub_calls_succeeded: int = 0
 
 
 @dataclass
@@ -243,7 +246,10 @@ def execute_step(
     try:
         if cfg.enforce_contract:
             violations = contract_violations(
-                code, cfg.policy_hints, data_accessor_names, namespaced_accessor_pairs
+                code,
+                cfg.policy_hints,
+                data_accessor_names,
+                namespaced_accessor_pairs,
             )
             if violations:
                 raise PolicyError("Policy violation: " + " | ".join(violations))
@@ -260,7 +266,7 @@ def execute_step(
         violations = ready_violations(
             hints,
             answer_ready=bool(answer.get("ready")),
-            calls_made=context.stats.calls_made,
+            successful_calls=context.stats.successful_calls,
             resolved_output=_resolved_output(answer, last_output),
         )
         if violations:
@@ -355,6 +361,7 @@ def finalize(
         tokens_used=context.stats.total_tokens,
         sub_calls_made=context.stats.calls_made,
         trajectory=trajectory,
+        sub_calls_succeeded=context.stats.successful_calls,
         error=error,
         extracted=extracted,
         extract_error=extract_error,

@@ -15,12 +15,16 @@ not the data itself, which lives as REPL variables (`context`, or named
 sources like `db`). What flows back to the root each iteration is exactly
 what the executed code prints: narrow deliberately, because printed output
 is root-visible by design. Each iteration it writes Python;
-the sandbox executes it; stdout feeds the next iteration. Two functions
+the sandbox executes it; stdout feeds the next iteration. Three functions
 bridge back to language models:
 
 - `llm_query(prompt)` — one subcall.
 - `llm_query_batched(prompts)` — concurrent subcalls (bounded workers),
   order-preserving. Aliases: `llm_batch`, `batch_llm_query`.
+- `llm_batch_json(prompts, schema, ...)` — ordered local JSON validation and
+  malformed-only bounded repair, with per-item errors (the error indices are
+  authoritative because valid JSON `null` and failed slots are both `None`).
+  Alias: `llm_query_batched_json`.
 
 The loop ends when the model sets `answer["ready"] = True`, or the iteration
 budget runs out — in which case, when the trajectory contains executed work,
@@ -31,7 +35,8 @@ final answer rather than silently passing it through.
 ## Budgets and cost
 
 Everything expensive is bounded and explicit: `max_iterations`, `max_calls`
-(subcalls; counted only when issued, enforced under a lock), `max_depth`,
+(subcalls; attempted calls are counted only when issued and successful calls
+are tracked separately, both enforced under a lock), `max_depth`,
 per-subcall `max_output_tokens` (default 2048), and `reasoning_effort`
 passthrough. Subcall usage is added to `result.tokens_used`. The defaults
 encode a measured lesson: unbounded subcall output (thinking tokens
@@ -71,7 +76,8 @@ enforced on host-supplied connections.
 
 `python -m droste_runner` is a one-shot JSON worker: a host writes a request
 file (question, budgets, endpoints or context, declarative data sources) and
-reads a response (answer, `ready`, `extracted`, iterations, subcalls,
+reads a response (answer, `ready`, `extracted`, iterations, attempted and
+successful subcalls,
 trajectory, usage). This is how non-Python hosts embed the engine.
 
 **Compatibility window**: the request/response schema and the source

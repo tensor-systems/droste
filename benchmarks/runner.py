@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 import re
 import tempfile
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,6 +19,28 @@ class BenchmarkRunError(RuntimeError):
 
 
 _TASK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
+def validate_task_ids(
+    task_ids: Collection[str] | None, available_task_ids: Collection[str]
+) -> set[str] | None:
+    """Validate a repeatable task-id selection without silently collapsing duplicates."""
+
+    if task_ids is None:
+        return None
+    requested = list(task_ids)
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for task_id in requested:
+        if task_id in seen:
+            duplicates.add(task_id)
+        seen.add(task_id)
+    if duplicates:
+        raise BenchmarkRunError(f"duplicate task ids: {', '.join(sorted(duplicates))}")
+    missing = sorted(seen - set(available_task_ids))
+    if missing:
+        raise BenchmarkRunError(f"unknown task ids: {', '.join(missing)}")
+    return seen
 
 
 def _load_json(path: Path) -> Any:
@@ -37,7 +61,15 @@ def _resolve(manifest: SuiteManifest, relative: str) -> Path:
 def load_tasks(manifest: SuiteManifest, benchmark: BenchmarkSpec) -> tuple[dict[str, Any], ...]:
     if benchmark.tasks_path is None:
         raise BenchmarkRunError(f"benchmark {benchmark.benchmark_id} has no runnable tasks")
-    value = _load_json(_resolve(manifest, benchmark.tasks_path))
+    path = _resolve(manifest, benchmark.tasks_path)
+    if benchmark.tasks_sha256 is not None:
+        actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual_sha256 != benchmark.tasks_sha256:
+            raise BenchmarkRunError(
+                f"tasks for {benchmark.benchmark_id} have SHA-256 {actual_sha256}; "
+                f"expected {benchmark.tasks_sha256}"
+            )
+    value = _load_json(path)
     if not isinstance(value, list) or not value:
         raise BenchmarkRunError(f"tasks for {benchmark.benchmark_id} must be a non-empty array")
     tasks: list[dict[str, Any]] = []
