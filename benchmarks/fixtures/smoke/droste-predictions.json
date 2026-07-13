@@ -1,0 +1,13 @@
+{
+  "smoke-exact": {
+    "normalization": "  ALPHA  ",
+    "mismatch": "Beta"
+  },
+  "smoke-numeric": {
+    "integer": "42",
+    "tolerance": 3.145
+  },
+  "smoke-f1": {
+    "token-overlap": "alpha beta"
+  }
+}

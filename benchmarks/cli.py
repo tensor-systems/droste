@@ -1,0 +1,61 @@
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+from .models import load_manifest
+from .report import aggregate, load_artifacts, render_markdown, summary_dict
+from .runner import run_fixture_suite
+
+_ROOT = Path(__file__).resolve().parent
+_SMOKE_MANIFEST = _ROOT / "manifests" / "smoke-v1.json"
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="python -m benchmarks")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    validate = commands.add_parser("validate", help="validate a versioned suite manifest")
+    validate.add_argument("manifest", type=Path)
+
+    smoke = commands.add_parser("smoke", help="run the deterministic zero-cost smoke suite")
+    smoke.add_argument("--output", type=Path, required=True)
+
+    report = commands.add_parser("report", help="render a report from run artifacts")
+    report.add_argument("manifest", type=Path)
+    report.add_argument("artifacts", type=Path)
+    report.add_argument("--json", dest="json_output", type=Path)
+    report.add_argument("--markdown", type=Path)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    if args.command == "validate":
+        manifest = load_manifest(args.manifest)
+        print(f"valid: {manifest.suite_id} {manifest.suite_version} ({manifest.sha256})")
+        return 0
+    if args.command == "smoke":
+        manifest = load_manifest(_SMOKE_MANIFEST)
+        artifacts = run_fixture_suite(manifest, args.output)
+        print(render_markdown(manifest, aggregate(artifacts)), end="")
+        return 0
+    manifest = load_manifest(args.manifest)
+    rows = aggregate(load_artifacts(args.artifacts, manifest))
+    markdown = render_markdown(manifest, rows)
+    if args.markdown:
+        args.markdown.write_text(markdown)
+    else:
+        print(markdown, end="")
+    if args.json_output:
+        args.json_output.write_text(
+            json.dumps(
+                summary_dict(manifest, rows),
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n"
+        )
+    return 0

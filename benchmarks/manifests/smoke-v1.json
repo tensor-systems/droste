@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "suite_id": "droste-smoke",
+  "suite_version": "1.0.0",
+  "live_run": {
+    "enabled": true,
+    "blockers": []
+  },
+  "benchmarks": [
+    {
+      "id": "smoke-exact",
+      "dataset": "checked-in smoke fixtures",
+      "dataset_version": "1",
+      "split": "smoke",
+      "scorer": "exact_match",
+      "tasks_path": "../fixtures/smoke/exact-tasks.json",
+      "phase": 1,
+      "status": "ready"
+    },
+    {
+      "id": "smoke-numeric",
+      "dataset": "checked-in smoke fixtures",
+      "dataset_version": "1",
+      "split": "smoke",
+      "scorer": "numeric",
+      "tasks_path": "../fixtures/smoke/numeric-tasks.json",
+      "phase": 1,
+      "status": "ready"
+    },
+    {
+      "id": "smoke-f1",
+      "dataset": "checked-in smoke fixtures",
+      "dataset_version": "1",
+      "split": "smoke",
+      "scorer": "token_f1",
+      "tasks_path": "../fixtures/smoke/f1-tasks.json",
+      "phase": 1,
+      "status": "ready"
+    }
+  ],
+  "arms": [
+    {
+      "id": "fixture-droste",
+      "method": "droste",
+      "executor": "fixture",
+      "predictions_path": "../fixtures/smoke/droste-predictions.json"
+    },
+    {
+      "id": "fixture-direct",
+      "method": "direct-model",
+      "executor": "fixture",
+      "predictions_path": "../fixtures/smoke/direct-predictions.json"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+[
+  {
+    "id": "token-overlap",
+    "input": "Return the labels alpha and beta.",
+    "reference": "alpha beta"
+  }
+]

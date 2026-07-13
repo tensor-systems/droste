@@ -1,0 +1,14 @@
+[
+  {
+    "id": "integer",
+    "input": "Return 42.",
+    "reference": 42,
+    "tolerance": 0
+  },
+  {
+    "id": "tolerance",
+    "input": "Return pi to two decimal places.",
+    "reference": 3.14,
+    "tolerance": 0.01
+  }
+]

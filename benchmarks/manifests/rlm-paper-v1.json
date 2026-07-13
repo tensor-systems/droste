@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "suite_id": "rlm-paper",
+  "suite_version": "0.1.0",
+  "paper": {
+    "title": "Recursive Language Models",
+    "revision": "arXiv:2512.24601v3",
+    "url": "https://arxiv.org/abs/2512.24601v3"
+  },
+  "live_run": {
+    "enabled": false,
+    "blockers": [
+      {
+        "issue": "https://github.com/tensor-systems/modelrelay/issues/1686",
+        "reason": "OpenAI reasoning_effort is silently dropped; live results would misstate cost and latency until the fix is deployed and verified."
+      }
+    ]
+  },
+  "benchmarks": [
+    {
+      "id": "s-niah",
+      "dataset": "RULER S-NIAH",
+      "dataset_version": "pending-pin",
+      "split": "paper-v3",
+      "scorer": "exact_match",
+      "phase": 2,
+      "status": "planned"
+    },
+    {
+      "id": "browsecomp-plus-1k",
+      "dataset": "BrowseComp-Plus",
+      "dataset_version": "pending-pin",
+      "split": "1k-documents/paper-v3-150-task-sample",
+      "scorer": "exact_match",
+      "phase": 3,
+      "status": "planned"
+    },
+    {
+      "id": "oolong",
+      "dataset": "OOLONG",
+      "dataset_version": "pending-pin",
+      "split": "trec_coarse",
+      "scorer": "oolong_official",
+      "phase": 1,
+      "status": "planned"
+    },
+    {
+      "id": "oolong-pairs",
+      "dataset": "OOLONG-Pairs",
+      "dataset_version": "pending-pin",
+      "split": "paper-v3",
+      "scorer": "token_f1",
+      "phase": 1,
+      "status": "planned"
+    },
+    {
+      "id": "longbench-v2-codeqa",
+      "dataset": "LongBench-v2",
+      "dataset_version": "pending-pin",
+      "split": "CodeQA",
+      "scorer": "exact_match",
+      "phase": 3,
+      "status": "planned"
+    },
+    {
+      "id": "tag-bench",
+      "dataset": "TAG-Bench",
+      "dataset_version": "pending-pin",
+      "split": "droste-follow-on",
+      "scorer": "exact_match",
+      "phase": 2,
+      "status": "planned"
+    }
+  ],
+  "arms": [
+    {
+      "id": "droste-openai-none",
+      "method": "droste",
+      "executor": "blocked",
+      "blocker": "ModelRelay #1686 must be deployed and reasoning_effort=none verified end to end.",
+      "model": {
+        "provider": "modelrelay",
+        "root_model": "openai/gpt-5.6",
+        "subcall_model": "openai/gpt-5.6",
+        "root_reasoning_effort": "none",
+        "subcall_reasoning_effort": "none",
+        "temperature": null,
+        "max_root_output_tokens": 4096,
+        "max_subcall_output_tokens": 2048
+      },
+      "limits": {
+        "max_iterations": 20,
+        "max_subcalls": 50,
+        "timeout_seconds": 900,
+        "concurrency": 8
+      }
+    },
+    {
+      "id": "direct-openai-none",
+      "method": "direct-model",
+      "executor": "blocked",
+      "blocker": "ModelRelay #1686 must be deployed and reasoning_effort=none verified end to end.",
+      "model": {
+        "provider": "modelrelay",
+        "root_model": "openai/gpt-5.6",
+        "subcall_model": null,
+        "root_reasoning_effort": "none",
+        "subcall_reasoning_effort": null,
+        "temperature": null,
+        "max_root_output_tokens": 4096,
+        "max_subcall_output_tokens": null
+      },
+      "limits": {
+        "max_iterations": 1,
+        "max_subcalls": 0,
+        "timeout_seconds": 900,
+        "concurrency": 1
+      }
+    }
+  ]
+}
