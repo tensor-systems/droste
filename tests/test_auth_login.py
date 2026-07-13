@@ -231,6 +231,24 @@ def test_login_end_to_end_grants_credits(fake_platform, capsys):
     assert all("authorization" not in h for h in normalized)
 
 
+def test_login_uses_explicit_opener_in_remote_session(fake_platform, monkeypatch):
+    monkeypatch.setenv("SSH_CONNECTION", "client 12345 server 22")
+
+    assert _login(fake_platform) == 0
+    assert load_credentials() is not None
+
+
+def test_remote_session_without_opener_prints_url_only(monkeypatch, capsys):
+    opened: list[str] = []
+    monkeypatch.setenv("SSH_TTY", "/dev/pts/1")
+    monkeypatch.setattr(auth.webbrowser, "open", opened.append)
+
+    auth._open_browser("https://example.com/authorize", opener=None)
+
+    assert opened == []
+    assert "https://example.com/authorize" in capsys.readouterr().err
+
+
 def test_login_prefers_signup_issued_key(fake_platform):
     code = _login(
         fake_platform,

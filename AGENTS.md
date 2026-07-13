@@ -65,6 +65,8 @@ only a retained draft or at least one successful step is extraction evidence.
   loopback. Nonce-checked; 3-minute timeout. Unsolicited loopback POSTs
   (wrong path, or no `handoff_nonce` field) are rejected without aborting
   the wait; a well-formed callback with the wrong nonce is terminal (CSRF).
+- Browser launching is suppressed over SSH only when no opener is supplied.
+  Explicit opener callbacks still run, and the fallback URL is always printed.
 - Free credits require a $0 card check: the CLI opens the checkout URL and
   polls `POST /account/card-verification/confirm` (409 = still open, 422 =
   prepaid). All card UX is web-side; the CLI only reads the outcome.

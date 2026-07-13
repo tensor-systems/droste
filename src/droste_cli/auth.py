@@ -82,13 +82,15 @@ def _is_remote_session() -> bool:
 
 
 def _open_browser(url: str, opener: Callable[[str], bool] | None) -> None:
-    """Open the browser unless we're clearly remote; always print the URL so
-    the user can hand-off manually (SSH, no default browser, ...)."""
+    """Use an explicit opener, or the system browser when running locally.
+
+    Always print the URL so the user can hand it off manually when needed.
+    """
     print(f"  if your browser doesn't open, visit:\n  {url}", file=sys.stderr, flush=True)
-    if _is_remote_session():
+    if opener is None and _is_remote_session():
         return
     try:
-        (opener or webbrowser.open)(url)
+        (opener if opener is not None else webbrowser.open)(url)
     except Exception:
         pass
 
