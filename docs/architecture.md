@@ -138,3 +138,36 @@ own file access (the SQL source's read-only policy assumes this), and
 process/container/WASM isolation owns escape (hosts run the engine in a
 subprocess, jail, or Pyodide/WASM runtime as their threat model requires).
 The engine will not pretend otherwise, and neither should you.
+
+### Host environment factory
+
+Hosts select the execution substrate through one immutable configuration and
+derive the loop context and environment from it:
+
+```python
+from droste import EnvironmentConfig, create_environment, create_environment_context
+
+config = EnvironmentConfig(
+    kind="native",
+    max_calls=50,
+    max_iterations=20,
+    max_output_chars=25_000,
+    exec_timeout_ms=5_000,
+)
+execution_context = create_environment_context(config)
+environment = create_environment(
+    config,
+    context=data,
+    registry=registry,
+    subcalls=subcalls,
+)
+```
+
+`native` selects the signal-timed in-process environment. `pyodide` selects
+the thread- and signal-free raw executor; because WASM isolation and
+wall-clock termination live outside Python, that config requires explicit
+`host_managed_isolation=True` and `host_managed_timeout=True` declarations and
+rejects a nonzero `exec_timeout_ms`. These booleans are assertions by the host,
+not security mechanisms. The host still has to provide the Deno/WASM jail and
+kill deadline. This keeps substrate selection pure while the constructor is a
+thin shell around live data, registry, and subcall dependencies.

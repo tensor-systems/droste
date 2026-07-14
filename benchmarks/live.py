@@ -14,9 +14,16 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from droste import ModelRelayClient, ModelRelaySubcallClient, RLMConfig, run_rlm
-from droste.environments import RunnerEnvironment
-from droste.execution.context import create_execution_context
+from droste import (
+    DEFAULT_MAX_OUTPUT_CHARS,
+    EnvironmentConfig,
+    ModelRelayClient,
+    ModelRelaySubcallClient,
+    RLMConfig,
+    create_environment,
+    create_environment_context,
+    run_rlm,
+)
 from droste.policy import PolicyHints
 from droste_cli.credentials import CredentialsError, load_credentials
 
@@ -359,9 +366,18 @@ def _droste_run(
     assert arm.model is not None and arm.limits is not None
     if arm.model.subcall_model is None or arm.model.max_subcall_output_tokens is None:
         raise BenchmarkRunError(f"arm {arm.arm_id} has no subcall configuration")
-    execution_context = create_execution_context(
+    environment_config = EnvironmentConfig(
+        kind="native",
         max_calls=arm.limits.max_subcalls,
         max_iterations=arm.limits.max_iterations,
+        max_output_chars=DEFAULT_MAX_OUTPUT_CHARS,
+        # Preserve the historical two-stage limits: the loop gates at its
+        # 25k default while the native stdout buffer allows up to 100k so the
+        # loop owns the repairable SandboxError at the lower threshold.
+        executor_max_output_chars=100_000,
+    )
+    execution_context = create_environment_context(
+        environment_config,
     )
     root = ModelRelayClient(
         model=arm.model.root_model,
@@ -377,14 +393,15 @@ def _droste_run(
         context=execution_context,
         base_url=base_url,
         api_key=api_key,
-        max_calls=arm.limits.max_subcalls,
+        max_calls=environment_config.max_calls,
         max_output_tokens=arm.model.max_subcall_output_tokens,
         temperature=arm.model.temperature,
         reasoning_effort=arm.model.subcall_reasoning_effort or "",
         max_parallel=arm.limits.concurrency,
         timeout=arm.limits.timeout_seconds,
     )
-    environment = RunnerEnvironment(
+    environment = create_environment(
+        environment_config,
         context={
             "files": [
                 {
@@ -398,8 +415,6 @@ def _droste_run(
         },
         registry=None,
         subcalls=subcalls,
-        max_output_chars=100_000,
-        exec_timeout_ms=0,
     )
     semantic = task.get("answer_type") != "ANSWER_TYPE.USER"
     if semantic:
@@ -417,8 +432,9 @@ def _droste_run(
             root_llm=root,
             subcalls=subcalls,
             config=RLMConfig(
-                max_iterations=arm.limits.max_iterations,
-                max_calls=arm.limits.max_subcalls,
+                max_iterations=environment_config.max_iterations,
+                max_calls=environment_config.max_calls,
+                max_output_chars=environment_config.max_output_chars,
                 root_model=arm.model.root_model,
                 policy_hints=PolicyHints(semantic=semantic),
             ),

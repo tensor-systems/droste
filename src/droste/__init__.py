@@ -3,6 +3,7 @@
 from .clients.anthropic import AnthropicClient, AnthropicSubcallClient
 from .clients.modelrelay import ModelRelayClient, ModelRelaySubcallClient
 from .clients.openai_compat import OpenAICompatClient, OpenAICompatSubcallClient
+from .environments import EnvironmentConfig, create_environment, create_environment_context
 from .exceptions import PolicyError, RLMError, SubcallBudgetExceeded
 from .execution.config import (
     DEFAULT_MAX_CALLS,
@@ -45,6 +46,9 @@ __all__ = [
     "DEFAULT_MAX_OUTPUT_CHARS",
     "ExecutionConfig",
     "ExecutionStats",
+    "EnvironmentConfig",
+    "create_environment",
+    "create_environment_context",
     "ExecutionContext",
     "create_execution_context",
     "ProgressCallback",

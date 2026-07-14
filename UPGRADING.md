@@ -13,6 +13,20 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.10.6)
 
+### Hosts select environments through one substrate factory
+
+New in-process hosts should build an immutable `EnvironmentConfig`, then call
+`create_environment_context(config, ...)` and `create_environment(config,
+...)`. The CLI, HTTP runner, benchmark harness, and reference Pyodide adapter
+now use this path, so execution budgets and substrate selection have one owner.
+
+Existing direct `RunnerEnvironment` imports remain compatible. Pyodide hosts
+should migrate: `kind="pyodide"` selects the signal-free `RawExecutor` path and
+requires `host_managed_timeout=True` plus `host_managed_isolation=True`. Those
+flags assert that the host already supplies the external deadline and WASM
+jail; they do not create either boundary. A Pyodide config with a nonzero
+`exec_timeout_ms` fails loudly instead of pretending to enforce a signal timer.
+
 ### Runner implementation modules are focused
 
 The former `droste_runner.runner` monolith is split into `run`, `protocol`,

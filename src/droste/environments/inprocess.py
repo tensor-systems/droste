@@ -191,9 +191,10 @@ class RunnerEnvironment(RLMEnvironment):
         def _handle_timeout(signum: int, frame: Any) -> None:
             raise TimeoutError("execution timed out")
 
-        # The in-process SIGALRM timer is native-CPython only. Under Pyodide/WASM
-        # (the v1 substrate) signals are unavailable, so the per-exec timeout is
-        # enforced by the host instead (Deno wall-clock kill of the run).
+        # Native in-process execution uses SIGALRM. New Pyodide/WASM hosts are
+        # selected through create_environment and use PyodideEnvironment, but
+        # keep the availability guard for compatibility with older hosts that
+        # still construct RunnerEnvironment directly under Pyodide.
         use_signal_timeout = bool(
             self._exec_timeout_ms and self._exec_timeout_ms > 0 and hasattr(signal, "setitimer")
         )

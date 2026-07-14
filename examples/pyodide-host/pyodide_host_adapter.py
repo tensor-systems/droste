@@ -18,11 +18,9 @@ nothing host-specific to carry (contrast a product host, which might carry a
 Everything here is droste-general: `droste.substrates.pyodide` for the
 Pyodide-safe LLM client, `droste.sources.sql_local` for a read-only SQLite
 data source, `droste.sources.bridge` for the untrusted/trusted interpreter
-split, `droste.environments.RunnerEnvironment` for the same in-process REPL
-environment droste's own CLI (`droste_cli.main.run_ask`) and `droste_runner`
-(ModelRelay's hosted runner) already use. No third-party or product-specific
-imports. A real host's production adapter looks like this file with its own
-data source and result shape substituted in.
+split, and `droste.create_environment` for substrate-specific REPL wiring.
+No third-party or product-specific imports. A real host's production adapter
+looks like this file with its own data source and result shape substituted in.
 
 Subcalls (`llm_query`) are stubbed with `droste.testing.MockSubcallClient` —
 this example's job is to prove the relay's adapter-loading mechanism end to
@@ -34,9 +32,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from droste import DataSourceRegistry, RLMConfig, run_rlm
-from droste.environments import RunnerEnvironment
-from droste.execution.context import create_execution_context
+from droste import (
+    DataSourceRegistry,
+    EnvironmentConfig,
+    RLMConfig,
+    create_environment,
+    create_environment_context,
+    run_rlm,
+)
 from droste.execution.progress import emit_event, emit_progress
 from droste.sources.bridge import BridgeDataSource, DataSourceService
 from droste.sources.sql_local import local_sql_source_factory
@@ -53,8 +56,8 @@ _DEFAULT_BASE_URL = "https://api.modelrelay.ai/api/v1"
 # per-query timeout with threading.Timer, and where thread creation is
 # unavailable (Pyodide/WASM) it degrades to no timer with a RuntimeWarning —
 # the host's own wall-clock kill (Deno's process timeout) is the real
-# enforcement in this substrate, exactly like
-# RunnerEnvironment(exec_timeout_ms=0, ...) below for exec timeouts.
+# enforcement in this substrate, exactly like the factory's Pyodide policy
+# below for exec timeouts.
 def _sql_source(db_path: str) -> Any:
     return local_sql_source_factory({"name": "db", "sqlite_path": db_path})
 
@@ -111,29 +114,36 @@ def run_for_host_pyodide(
 
     registry = DataSourceRegistry([source], default_source_name=source.name())
     subcalls = MockSubcallClient()
-    exec_context = create_execution_context(
+    environment_config = EnvironmentConfig(
+        kind="pyodide",
         max_depth=int(request.get("max_depth") or 1),
         max_calls=int(request.get("max_calls") or 0),
         max_iterations=int(request.get("max_iterations") or 8),
         max_output_chars=int(request.get("max_output_chars") or 8000),
+        # The Deno/WASM process owns both boundaries; constructing a Pyodide
+        # environment without these explicit declarations fails loudly.
+        host_managed_timeout=True,
+        host_managed_isolation=True,
+    )
+    exec_context = create_environment_context(
+        environment_config,
         # Stderr NDJSON is how loop events reach the relay's forwarding
         # filter under Pyodide — attached explicitly (#35: no default sink).
         on_progress=emit_progress,
         on_event=emit_event,
     )
-    environment = RunnerEnvironment(
+    environment = create_environment(
+        environment_config,
         context=None,
         registry=registry,
         subcalls=subcalls,
-        max_output_chars=int(request.get("max_output_chars") or 8000),
-        exec_timeout_ms=0,  # host (Deno) enforces the wall-clock kill, not this interpreter
     )
 
     config = RLMConfig(
-        max_iterations=int(request.get("max_iterations") or 8),
-        max_depth=int(request.get("max_depth") or 1),
-        max_calls=int(request.get("max_calls") or 0),
-        max_output_chars=int(request.get("max_output_chars") or 8000),
+        max_iterations=environment_config.max_iterations,
+        max_depth=environment_config.max_depth,
+        max_calls=environment_config.max_calls,
+        max_output_chars=environment_config.max_output_chars,
         root_model=request.get("root_model"),
     )
 

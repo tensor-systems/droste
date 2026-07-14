@@ -38,10 +38,12 @@ from droste import (
     DEFAULT_MAX_CALLS,
     DEFAULT_MAX_ITERATIONS,
     DEFAULT_MAX_OUTPUT_CHARS,
+    EnvironmentConfig,
     OpenAICompatClient,
     OpenAICompatSubcallClient,
     RLMConfig,
-    create_execution_context,
+    create_environment,
+    create_environment_context,
     run_rlm,
 )
 from droste.clients.openai_compat import DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS
@@ -409,10 +411,14 @@ def run_ask(args: argparse.Namespace) -> int:
         on_event = _trace_sink
         on_progress = _trace_progress
 
-    exec_context = create_execution_context(
+    environment_config = EnvironmentConfig(
+        kind="native",
         max_calls=args.max_subcalls,
         max_iterations=args.max_iterations,
         max_output_chars=DEFAULT_MAX_OUTPUT_CHARS,
+    )
+    exec_context = create_environment_context(
+        environment_config,
         # Progress lines only stream with --verbose/--trace; None means no
         # emission (#35) — a plain `droste ask` writes nothing to stderr.
         on_progress=on_progress,
@@ -473,21 +479,17 @@ def run_ask(args: argparse.Namespace) -> int:
             reasoning_effort=args.reasoning_effort,
         )
 
-    # RunnerEnvironment provides the in-process REPL plus the context
-    # name + size prompt description for free.
-    from droste.environments import RunnerEnvironment
-
-    environment = RunnerEnvironment(
+    environment = create_environment(
+        environment_config,
         context=loaded.context,
         registry=registry,
         subcalls=subcalls,
-        max_output_chars=DEFAULT_MAX_OUTPUT_CHARS,
-        exec_timeout_ms=0,
     )
 
     config = RLMConfig(
-        max_iterations=args.max_iterations,
-        max_calls=args.max_subcalls,
+        max_iterations=environment_config.max_iterations,
+        max_calls=environment_config.max_calls,
+        max_output_chars=environment_config.max_output_chars,
         root_model=args.model,
         # The full loop dump (code, outputs, responses) is --trace, rendered
         # by the _trace_sink above from structured events; the core no longer

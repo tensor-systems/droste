@@ -83,6 +83,15 @@ evidence with that status rather than leaving the model to interpret prefixes.
   `droste.environments.inprocess`; `droste_runner.environment` and
   `droste_runner.runner` are compatibility shims. Core/CLI code must not import
   the runner package to obtain an execution environment.
+- Host entrypoints must use one frozen `EnvironmentConfig` with
+  `create_environment_context` and `create_environment`; do not copy budget,
+  registry, timeout, and executor selection across host modules. Direct
+  `RunnerEnvironment` construction remains compatibility-only.
+- `kind="pyodide"` selects `PyodideEnvironment`/`RawExecutor` and requires
+  explicit `host_managed_timeout` and `host_managed_isolation` declarations.
+  They are assertions that the Deno/WASM host supplies those boundaries, not
+  Python-side enforcement. Never weaken them or silently accept a native
+  signal timeout for Pyodide.
 - Every request MUST carry `"protocol_version"` (currently 1) — missing/mismatched versions get a structured refusal, never partial work. See docs/architecture.md, "The runner protocol".
 - The runner wraps `droste` and supplies an HTTP `LLMClient` + `SubcallClient` plus a sandboxed `RunnerEnvironment`.
 - Timeouts in `RunnerEnvironment.execute` use `signal.setitimer` and restore the previous handler (`old_handler`) after each execution to avoid clobbering host signal handlers.
