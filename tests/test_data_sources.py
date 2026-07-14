@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
@@ -98,6 +98,20 @@ def test_one_provider_registration_binds_multiple_named_sources() -> None:
     assert "SQL" not in registry.prompt_fragment()
 
 
+def test_flattened_binding_cannot_overwrite_another_source_namespace() -> None:
+    registry = ProviderCatalog((fake_records_provider(),)).bind(
+        (
+            ConfiguredSource("records", "fake_records"),
+            ConfiguredSource("search", "fake_records"),
+        ),
+        default_source_id="records",
+    )
+    from droste.capabilities import CapabilityBroker
+
+    with pytest.raises(ValueError, match="would overwrite a source namespace"):
+        registry.broker_globals(CapabilityBroker(registry.capability_registrations()))
+
+
 @pytest.mark.parametrize(
     "environment_config",
     [
@@ -165,6 +179,33 @@ def test_descriptor_metadata_changes_do_not_change_capability_identity() -> None
     assert first.descriptor.side_effect is SideEffect.READ
     assert second.descriptor.side_effect is SideEffect.EFFECTFUL
     assert second.descriptor.to_dict()["policy_metadata"] == {"host_override": True}
+
+    revised_manifest = replace(
+        registration.manifest,
+        revision="2",
+        operations=(
+            replace(
+                registration.manifest.operations[0],
+                description="Revised search documentation.",
+                parameters=replace(
+                    registration.manifest.operations[0].parameters,
+                    provenance="droste:testing/fake/search/parameters@2",
+                ),
+            ),
+            registration.manifest.operations[1],
+        ),
+    )
+    revised = type(registration)(
+        manifest=revised_manifest,
+        effects=registration.effects,
+        binder=registration.binder,
+    )
+    third = ProviderCatalog((revised,)).bind((source,)).capability_registrations()[0]
+
+    assert third.descriptor.capability_id == first.descriptor.capability_id
+    assert third.descriptor.provider_revision == "2"
+    assert third.descriptor.provider_digest != first.descriptor.provider_digest
+    assert third.descriptor.operation.description == "Revised search documentation."
 
 
 def test_runner_binds_only_explicit_configured_sources() -> None:

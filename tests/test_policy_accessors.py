@@ -57,6 +57,12 @@ def test_no_descriptor_accessors_means_no_fixed_verb_fallback() -> None:
     assert contract_violations(code, COUNT) == []
 
 
+def test_accessor_matching_is_case_sensitive() -> None:
+    manifest = _registry().accessor_manifest()
+    code = 'query("SELECT COUNT(*) FROM t")\nprint(len(SEARCH("x")))'
+    assert contract_violations(code, COUNT, manifest.flat, manifest.namespaced) == []
+
+
 def test_registry_namespace_contains_only_generated_bindings() -> None:
     registry = _registry()
     broker = CapabilityBroker(registry.capability_registrations())

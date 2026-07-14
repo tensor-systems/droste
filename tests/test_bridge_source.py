@@ -56,6 +56,10 @@ def test_service_denies_unknown_control_and_operation_names() -> None:
     )
 
     assert unknown_control["ok"] is False
+    assert unknown_control["error"] == {
+        "type": "ValueError",
+        "message": "unknown bridge method: 'getattr'",
+    }
     assert unknown_operation["ok"] is False
     assert unknown_operation["error"]["type"] == "PermissionError"
 
@@ -100,6 +104,14 @@ def test_bridge_requires_exact_receiving_host_effect_map() -> None:
             effects={
                 "records.search": SideEffect.UNSPECIFIED,
                 "records.fetch": SideEffect.READ,
+            }
+        )
+    with pytest.raises(ValueError, match="classify every"):
+        bridge.registration(
+            effects={
+                "records.search": SideEffect.READ,
+                "records.fetch": SideEffect.READ,
+                "records.delete": SideEffect.EFFECTFUL,
             }
         )
 

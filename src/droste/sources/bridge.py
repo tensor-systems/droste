@@ -124,7 +124,12 @@ class ProviderService:
 
 
 class BridgeProvider:
-    """Receiving half that projects one remote manifest into a registration."""
+    """Receiving half that projects one remote manifest into a registration.
+
+    Construction performs the ``describe`` call immediately. Pyodide callers
+    whose bridge is async must therefore construct this value from a
+    ``runPythonAsync``/JSPI-capable stack, as the bundled host adapter does.
+    """
 
     def __init__(self, bridge_call: BridgeCall) -> None:
         if not callable(bridge_call):
