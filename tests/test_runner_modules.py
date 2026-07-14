@@ -18,7 +18,7 @@ from droste_runner.protocol import (
     build_exception_response,
     build_response,
 )
-from droste_runner.sources import WrapperV1DataSource, build_data_sources
+from droste_runner.sources import WrapperTransport, build_provider_registry
 
 
 def test_legacy_runner_facade_reexports_canonical_implementations() -> None:
@@ -27,8 +27,8 @@ def test_legacy_runner_facade_reexports_canonical_implementations() -> None:
     assert runner.RunnerEnvironment is RunnerEnvironment
     assert runner.HTTPSubcallClient is HTTPSubcallClient
     assert runner.RootLLMClient is RootLLMClient
-    assert runner.WrapperV1DataSource is WrapperV1DataSource
-    assert runner.build_data_sources is build_data_sources
+    assert runner.WrapperTransport is WrapperTransport
+    assert runner.build_provider_registry is build_provider_registry
     assert runner.run is run_module.run
     assert not hasattr(runner, "run_rlm")
 

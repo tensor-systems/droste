@@ -56,4 +56,5 @@ def test_relay_emits_startup_handshake() -> None:
     relay = (relay_dir() / "relay.ts").read_text()
     assert '"type": "startup"' in relay
     assert "RUNNER_PROTOCOL_VERSION" in relay
-    assert "SOURCE_PROTOCOL_VERSION" in relay
+    assert "PROVIDER_PROTOCOL_VERSION" in relay
+    assert '"provider_protocol"' in relay

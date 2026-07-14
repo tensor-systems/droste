@@ -8,6 +8,8 @@ and result values without becoming alternate dispatch paths.
 
 from __future__ import annotations
 
+import hashlib
+import keyword
 import math
 import re
 import warnings
@@ -20,11 +22,14 @@ from uuid import uuid4
 
 from .protocols.subcall_client import SubcallClient
 
+JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema"
+
 _ERROR_CODE_PATTERN = re.compile(r"[a-z][a-z0-9_.-]*\Z", re.ASCII)
 _ERROR_TYPE_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\Z", re.ASCII)
 _MEDIA_TYPE_PATTERN = re.compile(
     r"[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*\Z", re.ASCII
 )
+_OPERATION_ID_PATTERN = re.compile(r"[a-z][a-z0-9_.:/-]*\Z", re.ASCII)
 
 
 def _exception_type_name(exc: BaseException) -> str:
@@ -43,6 +48,17 @@ class SideEffect(StrEnum):
     READ = "read"
     EFFECTFUL = "effectful"
     UNSPECIFIED = "unspecified"
+
+
+class PaginationMode(StrEnum):
+    NONE = "none"
+    CURSOR = "cursor"
+
+
+class ResultDelivery(StrEnum):
+    INLINE = "inline"
+    HANDLE = "handle"
+    UNTYPED = "untyped"
 
 
 class CapabilityStatus(StrEnum):
@@ -116,6 +132,97 @@ def thaw_value(value: Any) -> Any:
 
 
 @dataclass(frozen=True, slots=True)
+class SchemaSpec:
+    """One explicit JSON Schema document and its origin."""
+
+    schema: Any
+    dialect: str
+    provenance: str
+
+    def __post_init__(self) -> None:
+        frozen = freeze_value(self.schema)
+        if not isinstance(frozen, FrozenDict):
+            raise TypeError("capability schema must be a JSON object")
+        object.__setattr__(self, "schema", frozen)
+        if not isinstance(self.dialect, str) or not self.dialect:
+            raise ValueError("schema dialect must not be empty")
+        if not isinstance(self.provenance, str) or not self.provenance:
+            raise ValueError("schema provenance must not be empty")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": thaw_value(self.schema),
+            "dialect": self.dialect,
+            "provenance": self.provenance,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderOperation:
+    """Source-agnostic operation metadata supplied by a provider manifest."""
+
+    operation_id: str
+    binding_name: str
+    description: str
+    parameters: SchemaSpec
+    result: SchemaSpec | None
+    pagination: PaginationMode
+    delivery: ResultDelivery
+    budget_class: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.operation_id, str) or not _OPERATION_ID_PATTERN.fullmatch(
+            self.operation_id
+        ):
+            raise ValueError("provider operation_id must be a stable lowercase ASCII ID")
+        if (
+            not isinstance(self.binding_name, str)
+            or not self.binding_name.isidentifier()
+            or keyword.iskeyword(self.binding_name)
+            or self.binding_name.startswith("_")
+        ):
+            raise ValueError("provider binding_name must be a public Python identifier")
+        if not isinstance(self.description, str) or not self.description.strip():
+            raise ValueError("provider operation description must not be empty")
+        if not isinstance(self.parameters, SchemaSpec):
+            raise TypeError("provider operation parameters must be a SchemaSpec")
+        if not isinstance(self.pagination, PaginationMode):
+            raise TypeError("provider operation pagination must be a PaginationMode")
+        if not isinstance(self.delivery, ResultDelivery):
+            raise TypeError("provider operation delivery must be a ResultDelivery")
+        if not isinstance(self.budget_class, str) or not _ERROR_CODE_PATTERN.fullmatch(
+            self.budget_class
+        ):
+            raise ValueError("provider operation budget_class must be a stable lowercase ID")
+        if self.delivery is ResultDelivery.UNTYPED:
+            if self.result is not None:
+                raise ValueError("untyped provider operations must not declare a result schema")
+        elif not isinstance(self.result, SchemaSpec):
+            raise TypeError("typed provider operations require a result SchemaSpec")
+        if self.pagination is PaginationMode.CURSOR:
+            params = thaw_value(self.parameters.schema)
+            result = thaw_value(self.result.schema) if self.result is not None else {}
+            param_properties = params.get("properties") if isinstance(params, dict) else None
+            result_properties = result.get("properties") if isinstance(result, dict) else None
+            if not isinstance(param_properties, dict) or "cursor" not in param_properties:
+                raise ValueError("cursor pagination requires a cursor parameter schema")
+            if not isinstance(result_properties, dict) or "next_cursor" not in result_properties:
+                raise ValueError("cursor pagination requires a next_cursor result schema")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "operation_id": self.operation_id,
+            "binding_name": self.binding_name,
+            "description": self.description,
+            "parameters": self.parameters.to_dict(),
+            "result": self.result.to_dict() if self.result else None,
+            "pagination": self.pagination.value,
+            "delivery": self.delivery.value,
+            "budget_class": self.budget_class,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class CapabilityId:
     """Stable operation identity carried by calls and results.
 
@@ -163,18 +270,42 @@ class CapabilityDescriptor:
     """Manifest metadata for one stable capability identity."""
 
     capability_id: CapabilityId
-    side_effect: SideEffect = SideEffect.UNSPECIFIED
+    operation: ProviderOperation
+    side_effect: SideEffect
+    provider_revision: str
+    provider_digest: str
+    policy_metadata: Any = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.capability_id, CapabilityId):
             raise TypeError("capability descriptor requires a CapabilityId")
+        if not isinstance(self.operation, ProviderOperation):
+            raise TypeError("capability descriptor requires a ProviderOperation")
+        if self.capability_id.operation != self.operation.operation_id:
+            raise ValueError("capability identity and descriptor operation_id disagree")
         if not isinstance(self.side_effect, SideEffect):
             raise TypeError("capability side_effect must be a SideEffect")
+        if self.side_effect is SideEffect.UNSPECIFIED:
+            raise ValueError("capability side_effect must be classified by the host")
+        if not isinstance(self.provider_revision, str) or not self.provider_revision:
+            raise ValueError("capability provider_revision must not be empty")
+        if not isinstance(self.provider_digest, str) or not re.fullmatch(
+            r"sha256:[0-9a-f]{64}", self.provider_digest
+        ):
+            raise ValueError("capability provider_digest must be a sha256 digest")
+        policy_metadata = freeze_value(self.policy_metadata)
+        if not isinstance(policy_metadata, FrozenDict):
+            raise TypeError("capability policy_metadata must be an object")
+        object.__setattr__(self, "policy_metadata", policy_metadata)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "capability_id": self.capability_id.to_dict(),
+            "operation": self.operation.to_dict(),
             "side_effect": self.side_effect.value,
+            "provider_revision": self.provider_revision,
+            "provider_digest": self.provider_digest,
+            "policy_metadata": thaw_value(self.policy_metadata),
         }
 
 
@@ -225,20 +356,104 @@ class CapabilityMetric:
     def to_dict(self) -> dict[str, Any]:
         return {"name": self.name, "value": self.value, "unit": self.unit}
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> CapabilityMetric:
+        return cls(
+            name=value.get("name"),  # type: ignore[arg-type]
+            value=value.get("value"),  # type: ignore[arg-type]
+            unit=value.get("unit"),  # type: ignore[arg-type]
+        )
+
 
 @dataclass(frozen=True, slots=True)
-class EvidenceRef:
-    kind: str
-    ref: str
+class EvidenceRange:
+    """Optional byte/line/section coordinates within one evidence path."""
+
+    byte_start: int | None = None
+    byte_end: int | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    section: str | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.kind, str) or not self.kind:
-            raise ValueError("evidence kind must not be empty")
-        if not isinstance(self.ref, str) or not self.ref:
-            raise ValueError("evidence ref must not be empty")
+        for start_name, end_name in (("byte_start", "byte_end"), ("line_start", "line_end")):
+            start = getattr(self, start_name)
+            end = getattr(self, end_name)
+            if (start is None) != (end is None):
+                raise ValueError(f"evidence {start_name}/{end_name} must be supplied together")
+            if start is not None and (
+                isinstance(start, bool)
+                or isinstance(end, bool)
+                or not isinstance(start, int)
+                or not isinstance(end, int)
+                or start < 0
+                or end < start
+            ):
+                raise ValueError(f"evidence {start_name}/{end_name} must be an ordered range")
+        if self.section is not None and (not isinstance(self.section, str) or not self.section):
+            raise ValueError("evidence section must be a non-empty string")
+        if self.byte_start is None and self.line_start is None and self.section is None:
+            raise ValueError("evidence range must include byte, line, or section coordinates")
 
-    def to_dict(self) -> dict[str, str]:
-        return {"kind": self.kind, "ref": self.ref}
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "byte_start": self.byte_start,
+            "byte_end": self.byte_end,
+            "line_start": self.line_start,
+            "line_end": self.line_end,
+            "section": self.section,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> EvidenceRange:
+        return cls(
+            byte_start=value.get("byte_start"),  # type: ignore[arg-type]
+            byte_end=value.get("byte_end"),  # type: ignore[arg-type]
+            line_start=value.get("line_start"),  # type: ignore[arg-type]
+            line_end=value.get("line_end"),  # type: ignore[arg-type]
+            section=value.get("section"),  # type: ignore[arg-type]
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceLocation:
+    source_id: str
+    path: str
+    revision: str | None = None
+    ranges: tuple[EvidenceRange, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source_id, str) or not self.source_id:
+            raise ValueError("evidence source_id must not be empty")
+        if not isinstance(self.path, str) or not self.path:
+            raise ValueError("evidence path must not be empty")
+        if self.revision is not None and (not isinstance(self.revision, str) or not self.revision):
+            raise ValueError("evidence revision must be a non-empty string")
+        object.__setattr__(self, "ranges", tuple(self.ranges))
+        if not all(isinstance(item, EvidenceRange) for item in self.ranges):
+            raise TypeError("evidence ranges require EvidenceRange values")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source_id": self.source_id,
+            "path": self.path,
+            "revision": self.revision,
+            "ranges": [item.to_dict() for item in self.ranges],
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> EvidenceLocation:
+        raw_ranges = value.get("ranges", [])
+        if not isinstance(raw_ranges, list) or not all(
+            isinstance(item, Mapping) for item in raw_ranges
+        ):
+            raise TypeError("evidence ranges must be a list of objects")
+        return cls(
+            source_id=value.get("source_id"),  # type: ignore[arg-type]
+            path=value.get("path"),  # type: ignore[arg-type]
+            revision=value.get("revision"),  # type: ignore[arg-type]
+            ranges=tuple(EvidenceRange.from_dict(item) for item in raw_ranges),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +486,14 @@ class CapabilityResultHandle:
             "size_bytes": self.size_bytes,
         }
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> CapabilityResultHandle:
+        return cls(
+            handle=value.get("handle"),  # type: ignore[arg-type]
+            media_type=value.get("media_type"),  # type: ignore[arg-type]
+            size_bytes=value.get("size_bytes"),  # type: ignore[arg-type]
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class CapabilityError:
@@ -298,6 +521,15 @@ class CapabilityError:
             "message": self.message,
             "retryable": self.retryable,
         }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> CapabilityError:
+        return cls(
+            code=value.get("code"),  # type: ignore[arg-type]
+            type=value.get("type"),  # type: ignore[arg-type]
+            message=value.get("message"),  # type: ignore[arg-type]
+            retryable=value.get("retryable", False),  # type: ignore[arg-type]
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,18 +569,18 @@ class CapabilityMetadata:
 
     usage: tuple[CapabilityMetric, ...] = ()
     budget_delta: tuple[CapabilityMetric, ...] = ()
-    evidence_refs: tuple[EvidenceRef, ...] = ()
+    evidence: tuple[EvidenceLocation, ...] = ()
     result_handle: CapabilityResultHandle | None = None
     child_run_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "usage", tuple(self.usage))
         object.__setattr__(self, "budget_delta", tuple(self.budget_delta))
-        object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
+        object.__setattr__(self, "evidence", tuple(self.evidence))
         _validate_metadata_values(
             self.usage,
             self.budget_delta,
-            self.evidence_refs,
+            self.evidence,
             self.result_handle,
             self.child_run_id,
         )
@@ -372,9 +604,41 @@ class CapabilityMetadata:
         return CapabilityMetadata(
             usage=self.usage + finalizer.usage,
             budget_delta=self.budget_delta + finalizer.budget_delta,
-            evidence_refs=self.evidence_refs + finalizer.evidence_refs,
+            evidence=self.evidence + finalizer.evidence,
             result_handle=singular("result_handle", self.result_handle, finalizer.result_handle),
             child_run_id=singular("child_run_id", self.child_run_id, finalizer.child_run_id),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "usage": [item.to_dict() for item in self.usage],
+            "budget_delta": [item.to_dict() for item in self.budget_delta],
+            "evidence": [item.to_dict() for item in self.evidence],
+            "result_handle": self.result_handle.to_dict() if self.result_handle else None,
+            "child_run_id": self.child_run_id,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> CapabilityMetadata:
+        def objects(name: str) -> list[Mapping[str, Any]]:
+            raw = value.get(name, [])
+            if not isinstance(raw, list) or not all(isinstance(item, Mapping) for item in raw):
+                raise TypeError(f"capability metadata {name} must be a list of objects")
+            return raw
+
+        raw_handle = value.get("result_handle")
+        if raw_handle is not None and not isinstance(raw_handle, Mapping):
+            raise TypeError("capability metadata result_handle must be an object")
+        return cls(
+            usage=tuple(CapabilityMetric.from_dict(item) for item in objects("usage")),
+            budget_delta=tuple(
+                CapabilityMetric.from_dict(item) for item in objects("budget_delta")
+            ),
+            evidence=tuple(EvidenceLocation.from_dict(item) for item in objects("evidence")),
+            result_handle=(
+                CapabilityResultHandle.from_dict(raw_handle) if raw_handle is not None else None
+            ),
+            child_run_id=value.get("child_run_id"),  # type: ignore[arg-type]
         )
 
 
@@ -394,18 +658,39 @@ class CapabilityOutcome:
         if self.error is not None and self.result is not None:
             raise ValueError("failed capability outcome cannot also contain a result")
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "result": thaw_value(freeze_value(self.result)),
+            "error": self.error.to_dict() if self.error else None,
+            "metadata": self.metadata.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> CapabilityOutcome:
+        raw_error = value.get("error")
+        raw_metadata = value.get("metadata", {})
+        if raw_error is not None and not isinstance(raw_error, Mapping):
+            raise TypeError("capability outcome error must be an object")
+        if not isinstance(raw_metadata, Mapping):
+            raise TypeError("capability outcome metadata must be an object")
+        return cls(
+            result=value.get("result"),
+            error=CapabilityError.from_dict(raw_error) if raw_error is not None else None,
+            metadata=CapabilityMetadata.from_dict(raw_metadata),
+        )
+
 
 def _validate_metadata_values(
     usage: tuple[CapabilityMetric, ...],
     budget_delta: tuple[CapabilityMetric, ...],
-    evidence_refs: tuple[EvidenceRef, ...],
+    evidence: tuple[EvidenceLocation, ...],
     result_handle: CapabilityResultHandle | None,
     child_run_id: str | None,
 ) -> None:
     if not all(isinstance(item, CapabilityMetric) for item in (*usage, *budget_delta)):
         raise TypeError("capability usage and budget_delta require CapabilityMetric values")
-    if not all(isinstance(item, EvidenceRef) for item in evidence_refs):
-        raise TypeError("capability evidence_refs require EvidenceRef values")
+    if not all(isinstance(item, EvidenceLocation) for item in evidence):
+        raise TypeError("capability evidence requires EvidenceLocation values")
     if result_handle is not None and not isinstance(result_handle, CapabilityResultHandle):
         raise TypeError("capability result_handle must be a CapabilityResultHandle")
     if child_run_id is not None and (not isinstance(child_run_id, str) or not child_run_id):
@@ -423,7 +708,7 @@ class CapabilityResult:
     error: CapabilityError | None = None
     usage: tuple[CapabilityMetric, ...] = ()
     budget_delta: tuple[CapabilityMetric, ...] = ()
-    evidence_refs: tuple[EvidenceRef, ...] = ()
+    evidence: tuple[EvidenceLocation, ...] = ()
     result_handle: CapabilityResultHandle | None = None
     child_run_id: str | None = None
 
@@ -431,11 +716,11 @@ class CapabilityResult:
         object.__setattr__(self, "result", freeze_value(self.result))
         object.__setattr__(self, "usage", tuple(self.usage))
         object.__setattr__(self, "budget_delta", tuple(self.budget_delta))
-        object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
+        object.__setattr__(self, "evidence", tuple(self.evidence))
         _validate_metadata_values(
             self.usage,
             self.budget_delta,
-            self.evidence_refs,
+            self.evidence,
             self.result_handle,
             self.child_run_id,
         )
@@ -459,7 +744,7 @@ class CapabilityResult:
                 "error": self.error.to_dict() if self.error else None,
                 "usage": [item.to_dict() for item in self.usage],
                 "budget_delta": [item.to_dict() for item in self.budget_delta],
-                "evidence_refs": [item.to_dict() for item in self.evidence_refs],
+                "evidence": [item.to_dict() for item in self.evidence],
                 "child_run_id": self.child_run_id,
             }
         )
@@ -489,7 +774,7 @@ class CapabilityResult:
             ),
             "usage": [item.to_dict() for item in self.usage],
             "budget_delta": [item.to_dict() for item in self.budget_delta],
-            "evidence": {"count": len(self.evidence_refs)},
+            "evidence": {"count": len(self.evidence)},
             "result_handle": (
                 {
                     "present": True,
@@ -783,16 +1068,34 @@ class CapabilityBroker:
                     _exception_type_name(exc),
                     str(exc),
                 )
+        delivery_error: CapabilityError | None = None
+        descriptor = self._manifest.find(call.capability_id)
+        if status is CapabilityStatus.OK and annotation_error is None and descriptor is not None:
+            delivery = descriptor.operation.delivery
+            if delivery is ResultDelivery.HANDLE and metadata.result_handle is None:
+                delivery_error = CapabilityError(
+                    CapabilityErrorCode.INVALID_RESULT,
+                    "ResultDeliveryMismatch",
+                    "handle delivery requires a CapabilityResultHandle",
+                )
+            elif delivery is ResultDelivery.INLINE and metadata.result_handle is not None:
+                delivery_error = CapabilityError(
+                    CapabilityErrorCode.INVALID_RESULT,
+                    "ResultDeliveryMismatch",
+                    "inline delivery cannot return a CapabilityResultHandle",
+                )
+        delivery_override = annotation_error or delivery_error
+        terminal_error = delivery_override or error
         envelope = CapabilityResult(
             call=call,
-            ok=status is CapabilityStatus.OK and annotation_error is None,
-            status=(CapabilityStatus.ERROR if annotation_error is not None else status),
+            ok=status is CapabilityStatus.OK and terminal_error is None,
+            status=(CapabilityStatus.ERROR if delivery_override is not None else status),
             # An annotator-provided handle deliberately replaces the inline value.
             result=result if metadata.result_handle is None else None,
-            error=annotation_error or error,
+            error=terminal_error,
             usage=metadata.usage,
             budget_delta=metadata.budget_delta,
-            evidence_refs=metadata.evidence_refs,
+            evidence=metadata.evidence,
             result_handle=metadata.result_handle,
             child_run_id=metadata.child_run_id,
         )
@@ -832,10 +1135,78 @@ def generate_binding(
             else envelope.result_handle
         )
 
-    binding.__name__ = name or descriptor.capability_id.operation
+    binding.__name__ = name or descriptor.operation.binding_name
     binding.__qualname__ = binding.__name__
-    binding.__doc__ = f"Brokered compatibility binding for {descriptor.capability_id.operation}."
+    binding.__doc__ = descriptor.operation.description
     return binding
+
+
+def _schema(schema: dict[str, Any], provenance: str) -> SchemaSpec:
+    return SchemaSpec(schema, JSON_SCHEMA_2020_12, provenance)
+
+
+_SUBCALL_REVISION = "1"
+_SUBCALL_DIGEST = "sha256:" + hashlib.sha256(b"droste.subcall-provider.v1").hexdigest()
+_QUERY_OPERATION = ProviderOperation(
+    operation_id="llm_query",
+    binding_name="llm_query",
+    description="Ask one sub-LLM using an optional context string.",
+    parameters=_schema(
+        {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string"},
+                "context": {"type": "string", "default": ""},
+            },
+            "required": ["prompt"],
+            "additionalProperties": False,
+        },
+        "droste:subcall/llm_query/parameters@1",
+    ),
+    result=_schema({"type": "string"}, "droste:subcall/llm_query/result@1"),
+    pagination=PaginationMode.NONE,
+    delivery=ResultDelivery.INLINE,
+    budget_class="inference.query",
+)
+_BATCH_OPERATION = ProviderOperation(
+    operation_id="llm_batch",
+    binding_name="llm_batch",
+    description="Ask a sub-LLM for an ordered batch of prompts atomically.",
+    parameters=_schema(
+        {
+            "type": "object",
+            "properties": {
+                "prompts": {"type": "array", "items": {"type": "string"}},
+                "contexts": {
+                    "anyOf": [
+                        {"type": "array", "items": {"type": "string"}},
+                        {"type": "null"},
+                    ]
+                },
+            },
+            "required": ["prompts"],
+            "additionalProperties": False,
+        },
+        "droste:subcall/llm_batch/parameters@1",
+    ),
+    result=_schema(
+        {"type": "array", "items": {"type": "string"}},
+        "droste:subcall/llm_batch/result@1",
+    ),
+    pagination=PaginationMode.NONE,
+    delivery=ResultDelivery.INLINE,
+    budget_class="inference.batch",
+)
+_BATCH_ERRORS_OPERATION = ProviderOperation(
+    operation_id="llm_batch_with_errors",
+    binding_name="llm_batch_with_errors",
+    description="Internal ordered batch operation retaining typed per-item errors.",
+    parameters=_BATCH_OPERATION.parameters,
+    result=None,
+    pagination=PaginationMode.NONE,
+    delivery=ResultDelivery.UNTYPED,
+    budget_class="inference.batch",
+)
 
 
 LLM_QUERY_CAPABILITY = CapabilityDescriptor(
@@ -844,7 +1215,10 @@ LLM_QUERY_CAPABILITY = CapabilityDescriptor(
         provider_type="subcall",
         operation="llm_query",
     ),
+    operation=_QUERY_OPERATION,
     side_effect=SideEffect.READ,
+    provider_revision=_SUBCALL_REVISION,
+    provider_digest=_SUBCALL_DIGEST,
 )
 LLM_BATCH_CAPABILITY = CapabilityDescriptor(
     CapabilityId(
@@ -852,7 +1226,10 @@ LLM_BATCH_CAPABILITY = CapabilityDescriptor(
         provider_type="subcall",
         operation="llm_batch",
     ),
+    operation=_BATCH_OPERATION,
     side_effect=SideEffect.READ,
+    provider_revision=_SUBCALL_REVISION,
+    provider_digest=_SUBCALL_DIGEST,
 )
 LLM_BATCH_WITH_ERRORS_CAPABILITY = CapabilityDescriptor(
     CapabilityId(
@@ -860,7 +1237,10 @@ LLM_BATCH_WITH_ERRORS_CAPABILITY = CapabilityDescriptor(
         provider_type="subcall",
         operation="llm_batch_with_errors",
     ),
+    operation=_BATCH_ERRORS_OPERATION,
     side_effect=SideEffect.READ,
+    provider_revision=_SUBCALL_REVISION,
+    provider_digest=_SUBCALL_DIGEST,
 )
 
 _MISSING_OUTPUT_TOKEN_LIMIT = object()
@@ -951,10 +1331,16 @@ __all__ = [
     "CapabilityResultHandle",
     "CapabilityStatus",
     "BrokeredSubcallClient",
-    "EvidenceRef",
+    "EvidenceLocation",
+    "EvidenceRange",
     "FrozenDict",
     "FrozenList",
     "FrozenTuple",
+    "JSON_SCHEMA_2020_12",
+    "PaginationMode",
+    "ProviderOperation",
+    "ResultDelivery",
+    "SchemaSpec",
     "SideEffect",
     "LLM_BATCH_CAPABILITY",
     "LLM_BATCH_WITH_ERRORS_CAPABILITY",

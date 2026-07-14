@@ -124,15 +124,16 @@ def test_db_missing_file_errors(tmp_path, capsys):
 
 
 def test_db_exposes_sqlite_as_source(tmp_path):
-    from droste_cli.main import _load_sql_source
+    from droste_cli.main import _load_sql_registry
 
     db = tmp_path / "app.db"
     make_sqlite(db)
 
-    source = _load_sql_source(str(db))
-    assert source.name() == "db"
-    assert "t(" in source.get_schema()
-    rows = source.query("SELECT name FROM t")
+    registry = _load_sql_registry(str(db))
+    source = registry.sources[0]
+    assert source.source.source_id == "db"
+    assert "t(" in source.runtime.handlers["schema"]()
+    rows = source.runtime.handlers["query"]("SELECT name FROM t")
     assert rows == [{"name": "ada"}]
 
 

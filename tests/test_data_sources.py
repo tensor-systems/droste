@@ -1,361 +1,191 @@
-"""Unified data sources: registry-through-runner + WrapperV1DataSource.
-
-Covers the source-unification plumbing — build_data_sources(), the WrapperV1DataSource
-remote adapter, and that RunnerEnvironment now sources its globals/prompt from a
-DataSourceRegistry instead of the old flat data_source_* special-case.
-"""
+"""Provider manifest, configured-source, and registry conformance."""
 
 from __future__ import annotations
 
+import json
+import sqlite3
+from dataclasses import FrozenInstanceError
+
 import pytest
 
-from droste.capabilities import CapabilityBroker
-from droste.registry import DataSourceRegistry
-from droste.testing import MockDataSource, MockSubcallClient
-from droste_runner.runner import (
-    SOURCE_PROTOCOL_VERSION,
-    RunnerEnvironment,
-    WrapperV1DataSource,
-    _reset_source_types,
-    build_data_sources,
-    register_source_type,
+from droste import (
+    ConfiguredSource,
+    EnvironmentConfig,
+    ProviderCatalog,
+    ProviderManifest,
+    SideEffect,
+    create_environment,
+)
+from droste.sources.sql_local import sqlite_provider
+from droste.testing import MockSubcallClient, fake_records_provider
+from droste_runner.sources import (
+    build_provider_registry,
+    default_provider_catalog,
+    wrapper_provider,
 )
 
 
-@pytest.fixture(autouse=True)
-def _clean_source_registry():
-    """register_source_type is process-global; isolate it per test."""
-    _reset_source_types()
-    yield
-    _reset_source_types()
+def _database(tmp_path) -> str:
+    path = tmp_path / "records.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE entries (id INTEGER, title TEXT)")
+    conn.execute("INSERT INTO entries VALUES (1, 'sqlite row')")
+    conn.commit()
+    conn.close()
+    return str(path)
 
 
-def _broker_globals(registry: DataSourceRegistry):
-    broker = CapabilityBroker(registry.capability_registrations())
-    return registry.broker_globals(broker)
+def test_manifest_round_trip_digest_and_immutable_snapshot() -> None:
+    manifest = fake_records_provider().manifest
+    wire = manifest.to_dict()
+
+    assert ProviderManifest.from_dict(json.loads(json.dumps(wire))) == manifest
+    assert manifest.digest.startswith("sha256:")
+    assert manifest.operations[0].operation_id == "records.search"
+    assert manifest.operations[0].binding_name == "search"
+    assert manifest.operations[0].parameters.dialect.endswith("2020-12/schema")
+    assert manifest.operations[0].parameters.provenance
+    with pytest.raises(FrozenInstanceError):
+        manifest.revision = "2"  # type: ignore[misc]
+
+    wire["revision"] = "tampered"
+    with pytest.raises(ValueError, match="digest mismatch"):
+        ProviderManifest.from_dict(wire)
 
 
-# --- build_data_sources ----------------------------------------------------
+def test_manifest_rejects_missing_schema_provenance_and_unsafe_binding() -> None:
+    wire = fake_records_provider().manifest.to_dict()
+    wire["operations"][0]["parameters"]["provenance"] = ""
+    with pytest.raises(ValueError, match="provenance"):
+        ProviderManifest.from_dict(wire)
+
+    wire = fake_records_provider().manifest.to_dict()
+    wire["operations"][0]["binding_name"] = "len"
+    wire.pop("digest")
+    with pytest.raises(ValueError, match="builtin"):
+        ProviderManifest.from_dict(wire)
 
 
-def test_legacy_singular_data_source_is_wrapper_sugar() -> None:
-    sources, default = build_data_sources({"data_source": {"base_url": "https://x", "token": "t"}})
-    assert len(sources) == 1
-    assert isinstance(sources[0], WrapperV1DataSource)
-    assert sources[0].name() == "wrapper"
-    # The single legacy source flattens to top-level globals by default.
-    assert default == "wrapper"
+def test_configured_sources_and_catalog_are_explicit_and_fail_closed() -> None:
+    source = ConfiguredSource.from_spec({"type": "fake_records", "name": "records", "page_size": 2})
+    assert source.config_dict() == {"page_size": 2}
+    with pytest.raises(FrozenInstanceError):
+        source.source_id = "other"  # type: ignore[misc]
+    with pytest.raises(ValueError, match="unknown provider"):
+        ProviderCatalog((fake_records_provider(),)).bind((ConfiguredSource("db", "unknown"),))
+    with pytest.raises(ValueError, match="duplicate provider"):
+        ProviderCatalog((fake_records_provider(), fake_records_provider()))
+    with pytest.raises(ValueError, match="duplicate configured"):
+        ProviderCatalog((fake_records_provider(),)).bind((source, source))
+    with pytest.raises(ValueError, match="default source"):
+        ProviderCatalog((fake_records_provider(),)).bind((source,), default_source_id="missing")
 
 
-def test_data_sources_list_builds_named_wrapper() -> None:
-    sources, default = build_data_sources(
-        {
-            "data_sources": [
-                {"type": "wrapper_v1", "name": "partner", "base_url": "https://x", "token": "t"}
-            ],
-            "default_source": "partner",
-        }
+def test_one_provider_registration_binds_multiple_named_sources() -> None:
+    registry = ProviderCatalog((fake_records_provider(),)).bind(
+        (
+            ConfiguredSource("primary", "fake_records", {"page_size": 1}),
+            ConfiguredSource("secondary", "fake_records", {"page_size": 2}),
+        ),
+        default_source_id="primary",
     )
-    assert [s.name() for s in sources] == ["partner"]
-    assert default == "partner"
+    from droste.capabilities import CapabilityBroker
+
+    globals_ = registry.broker_globals(CapabilityBroker(registry.capability_registrations()))
+    assert globals_["primary"].fetch("1") == {"id": "1", "title": "alpha"}
+    assert globals_["secondary"].fetch("1") == {"id": "1", "title": "alpha"}
+    assert len(registry.capability_registrations()) == 4
+    assert "SQL" not in registry.prompt_fragment()
 
 
-def test_no_data_source_yields_empty() -> None:
-    sources, default = build_data_sources({})
-    assert sources == []
-    assert default is None
-
-
-def test_unknown_type_raises() -> None:
-    with pytest.raises(ValueError, match="unknown data source type"):
-        build_data_sources({"data_sources": [{"type": "redis", "name": "r"}]})
-
-
-def test_sql_and_fs_unregistered_raise_loudly() -> None:
-    for stype in ("sql", "fs"):
-        with pytest.raises(ValueError, match="no registered factory"):
-            build_data_sources({"data_sources": [{"type": stype, "name": "db"}]})
-
-
-def test_data_sources_entry_must_be_object() -> None:
-    with pytest.raises(ValueError, match="must be an object"):
-        build_data_sources({"data_sources": ["not-a-dict"]})
-
-
-# --- register_source_type (Option C, source unification) -----------------
-
-
-def test_registered_factory_builds_source_with_config_and_ctx() -> None:
-    seen: dict[str, object] = {}
-
-    def factory(config, ctx):
-        seen["config"] = config
-        seen["ctx"] = ctx
-        return MockDataSource(schema="tables: t")
-
-    register_source_type("sql", factory, protocol=SOURCE_PROTOCOL_VERSION)
-    ctx = object()
-    sources, default = build_data_sources(
-        {
-            "data_sources": [{"type": "sql", "name": "db", "profile_id": "p1"}],
-            "default_source": "db",
-        },
-        ctx,
+@pytest.mark.parametrize(
+    "environment_config",
+    [
+        EnvironmentConfig(kind="native"),
+        EnvironmentConfig(
+            kind="pyodide",
+            host_managed_timeout=True,
+            host_managed_isolation=True,
+        ),
+    ],
+)
+def test_mixed_sql_and_non_sql_sources_have_identical_generic_projections(
+    tmp_path, environment_config: EnvironmentConfig
+) -> None:
+    catalog = ProviderCatalog((sqlite_provider(), fake_records_provider()))
+    registry = catalog.bind(
+        (
+            ConfiguredSource("db", "sqlite", {"sqlite_path": _database(tmp_path)}),
+            ConfiguredSource("records", "fake_records"),
+        ),
+        default_source_id="records",
     )
-    assert len(sources) == 1 and default == "db"
-    assert seen["config"] == {"type": "sql", "name": "db", "profile_id": "p1"}
-    assert seen["ctx"] is ctx
-
-
-def test_factory_dispatch_is_not_limited_to_sql_fs() -> None:
-    register_source_type(
-        "messages", lambda config, ctx: MockDataSource(schema="m"), protocol=SOURCE_PROTOCOL_VERSION
-    )
-    sources, _ = build_data_sources({"data_sources": [{"type": "messages", "name": "chats"}]})
-    assert len(sources) == 1
-
-
-def test_factory_returning_none_raises() -> None:
-    register_source_type("sql", lambda config, ctx: None, protocol=SOURCE_PROTOCOL_VERSION)
-    with pytest.raises(ValueError, match="returned no source"):
-        build_data_sources({"data_sources": [{"type": "sql", "name": "db"}]})
-
-
-def test_duplicate_registration_raises() -> None:
-    register_source_type(
-        "sql", lambda config, ctx: MockDataSource(schema="t"), protocol=SOURCE_PROTOCOL_VERSION
-    )
-    with pytest.raises(ValueError, match="already registered"):
-        register_source_type(
-            "sql", lambda config, ctx: MockDataSource(schema="t"), protocol=SOURCE_PROTOCOL_VERSION
-        )
-
-
-def test_builtin_wrapper_v1_cannot_be_preempted() -> None:
-    # Import order must not allow a consumer factory to stand in for the
-    # runner's built-in type (codex review): simulate a consumer registering
-    # 'wrapper_v1' through the droste-level registry before droste_runner's
-    # builtin registration runs.
-    from droste.sources import registration
-    from droste_runner.runner import _register_builtin_source_types
-
-    registration._reset_source_types()
-    registration.register_source_type(
-        "wrapper_v1", lambda config, ctx: None, protocol=SOURCE_PROTOCOL_VERSION
-    )
-    with pytest.raises(ValueError, match="built in"):
-        _register_builtin_source_types()
-
-
-def test_wrapper_v1_cannot_be_reregistered() -> None:
-    # wrapper_v1 now registers through the same mechanism as everything else
-    # (#32), so re-registering it fails as a duplicate like any other type.
-    with pytest.raises(ValueError, match="already registered"):
-        register_source_type(
-            "wrapper_v1", lambda config, ctx: None, protocol=SOURCE_PROTOCOL_VERSION
-        )
-
-
-def test_blank_type_rejected() -> None:
-    with pytest.raises(ValueError, match="non-empty"):
-        register_source_type("  ", lambda config, ctx: None, protocol=SOURCE_PROTOCOL_VERSION)
-
-
-def test_protocol_mismatch_fails_at_registration() -> None:
-    with pytest.raises(RuntimeError, match="protocol"):
-        register_source_type(
-            "sql",
-            lambda config, ctx: MockDataSource(schema="t"),
-            protocol=SOURCE_PROTOCOL_VERSION + 1,
-        )
-
-
-def test_request_cannot_name_a_module() -> None:
-    # The request stays declarative: an unregistered type never triggers an
-    # import, it just fails. (This is the whole point of Option C.)
-    with pytest.raises(ValueError, match="unknown data source type"):
-        build_data_sources({"data_sources": [{"type": "some.module.path", "name": "x"}]})
-
-
-def test_run_threads_source_ctx_to_factories(monkeypatch) -> None:
-    # Guard the run() -> build_data_sources(request, source_ctx) passthrough:
-    # a regression back to build_data_sources(request) would silently drop the
-    # host-supplied edge context.
-    from importlib import import_module
-
-    import droste_runner.runner as runner_mod
-
-    seen: dict[str, object] = {}
-
-    def factory(config, ctx):
-        seen["ctx"] = ctx
-        return MockDataSource(schema="t")
-
-    register_source_type("sql", factory, protocol=SOURCE_PROTOCOL_VERSION)
-
-    from types import SimpleNamespace
-
-    def fake_run_rlm(question, **kwargs):
-        return SimpleNamespace(
-            answer="ok",
-            ready=True,
-            iterations=1,
-            tokens_used=0,
-            sub_calls_made=0,
-            trajectory=[],
-            error=None,
-        )
-
-    monkeypatch.setattr(import_module("droste_runner.run"), "run_rlm", fake_run_rlm)
-
-    ctx = object()
-    response = runner_mod.run(
-        {
-            "protocol_version": 2,
-            "question": "q",
-            "token": "t",
-            "root_endpoint": "https://cloud/root",
-            "subcall_endpoint": "https://cloud/subcall",
-            "data_sources": [{"type": "sql", "name": "db"}],
-        },
-        source_ctx=ctx,
-    )
-    assert seen["ctx"] is ctx
-    assert response["answer"] == "ok"
-
-
-def test_main_rejects_adapter_module_from_request_file(monkeypatch, tmp_path) -> None:
-    # The request file is the untrusted boundary: it must never name code to
-    # import. Trusted in-process callers of run() keep the adapter seam.
-    import droste_runner.runner as runner_mod
-
-    request_path = tmp_path / "request.json"
-    # protocol_version present so the request reaches the security check —
-    # the version gate deliberately runs first (see test_rlm_runner_adapter's
-    # test_main_version_gate_precedes_adapter_module_rejection).
-    request_path.write_text('{"protocol_version": 2, "adapter_module": "evil.module"}')
-    monkeypatch.setenv("RLM_RUNNER_REQUEST_PATH", str(request_path))
-    with pytest.raises(RuntimeError, match="not accepted from the request file"):
-        runner_mod.main()
-
-
-# --- WrapperV1DataSource + registry wiring ---------------------------------
-
-
-def test_wrapper_capabilities_and_schema() -> None:
-    src = WrapperV1DataSource(
-        {
-            "base_url": "https://x",
-            "token": "t",
-            "allowed_hosts": ["x"],
-            "limits": {"max_requests": 5},
-        },
-        name="partner",
-    )
-    caps = src.capabilities()
-    assert caps["search"] and caps["get"] and caps["stats"]
-    assert caps["sql"] is False
-    schema = src.get_schema()
-    assert "wrapper_v1" in schema
-    assert "Allowed hosts: x" in schema
-    assert "max_requests" in schema
-
-
-def test_registry_exposes_wrapper_verbs_including_content() -> None:
-    src = WrapperV1DataSource({"base_url": "https://x", "token": "t"}, name="partner")
-    env = _broker_globals(DataSourceRegistry([src], default_source_name="partner"))
-    ns = env["partner"]
-    # Namespace is attribute-accessible (db.search), not a dict (db["search"]).
-    assert all(hasattr(ns, v) for v in ("search", "get", "content", "get_stats"))
-    assert not hasattr(ns, "query")  # no sql capability
-    # default_source flattens the verbs to top level.
-    assert env["search"] is ns.search
-    assert env["content"] is ns.content
-
-
-def test_registry_sql_source_exposes_query_and_schema() -> None:
-    env = _broker_globals(
-        DataSourceRegistry([MockDataSource(schema="t")], default_source_name="mock")
-    )
-    assert hasattr(env["mock"], "query")
-    assert hasattr(env["mock"], "get_schema")  # schema capability -> callable
-    assert env["query"] is env["mock"].query
-
-
-def test_reserved_and_duplicate_names_rejected() -> None:
-    class Named(MockDataSource):
-        def __init__(self, n: str) -> None:
-            super().__init__(schema="t")
-            self._n = n
-
-        def name(self) -> str:
-            return self._n
-
-    with pytest.raises(ValueError, match="reserved"):
-        _broker_globals(DataSourceRegistry([Named("context")]))
-    with pytest.raises(ValueError, match="duplicate"):
-        _broker_globals(DataSourceRegistry([Named("db"), Named("db")]))
-
-
-def test_unknown_default_source_rejected() -> None:
-    with pytest.raises(ValueError, match="not a defined source"):
-        _broker_globals(
-            DataSourceRegistry([MockDataSource(schema="t")], default_source_name="nope")
-        )
-
-
-def test_non_list_data_sources_rejected() -> None:
-    with pytest.raises(ValueError, match="must be a list"):
-        build_data_sources({"data_sources": {"type": "wrapper_v1", "base_url": "x", "token": "t"}})
-
-
-# --- RunnerEnvironment integration -----------------------------------------
-
-
-def _env(registry: DataSourceRegistry | None) -> RunnerEnvironment:
-    return RunnerEnvironment(
-        context={"files": []},
+    environment = create_environment(
+        environment_config,
+        context={},
         registry=registry,
         subcalls=MockSubcallClient(),
-        max_output_chars=10000,
-        exec_timeout_ms=0,
     )
+    globals_ = environment.globals()
+
+    assert globals_["records"].search("alpha")["items"][0]["title"] == "alpha"
+    assert globals_["search"]("alpha")["next_cursor"] is None
+    assert globals_["db"].query("SELECT title FROM entries") == [{"title": "sqlite row"}]
+    assert "records.search(query, cursor, limit)" in registry.prompt_fragment()
+    assert "db.get_schema()" in registry.prompt_fragment()
+    assert registry.accessor_manifest().flat == frozenset({"search", "fetch"})
+
+    descriptors = environment.capability_broker().describe().descriptors
+    raw_to_binding = {
+        item.capability_id.operation: item.operation.binding_name
+        for item in descriptors
+        if item.capability_id.source_id is not None
+    }
+    assert raw_to_binding == {
+        "query": "query",
+        "schema": "get_schema",
+        "records.search": "search",
+        "records.fetch": "fetch",
+    }
 
 
-def test_environment_merges_registry_globals() -> None:
-    src = WrapperV1DataSource({"base_url": "https://x", "token": "t"}, name="partner")
-    env = _env(DataSourceRegistry([src], default_source_name="partner"))
-    g = env.globals()
-    assert "partner" in g and "search" in g  # namespaced + flattened
-    assert callable(g["llm_query"])  # base globals still present
+def test_descriptor_metadata_changes_do_not_change_capability_identity() -> None:
+    registration = fake_records_provider()
+    source = ConfiguredSource("records", "fake_records")
+    first = ProviderCatalog((registration,)).bind((source,)).capability_registrations()[0]
+    changed = type(registration)(
+        manifest=registration.manifest,
+        effects={"records.search": SideEffect.EFFECTFUL, "records.fetch": SideEffect.READ},
+        binder=registration.binder,
+        policy_metadata={"records.search": {"host_override": True}},
+    )
+    second = ProviderCatalog((changed,)).bind((source,)).capability_registrations()[0]
+
+    assert first.descriptor.capability_id == second.descriptor.capability_id
+    assert first.descriptor.side_effect is SideEffect.READ
+    assert second.descriptor.side_effect is SideEffect.EFFECTFUL
+    assert second.descriptor.to_dict()["policy_metadata"] == {"host_override": True}
 
 
-def test_query_is_attribute_callable_in_sandbox() -> None:
-    """The defining RLM property: `db.query(...)` runs in the sandbox and its
-    result is a Python value the model computes over — not a tool call whose
-    result returns to the context window. Drive it through the real executor."""
-    src = MockDataSource(schema="t", query_results={"SELECT": [{"x": 1}, {"x": 2}]})
-    environment = _env(DataSourceRegistry([src]))
-    # Exactly what the prompt tells the model to write — attribute access, then
-    # arbitrary Python over the returned rows.
-    result = environment.execute("rows = mock.query('SELECT x')\ntotal = sum(r['x'] for r in rows)")
-    assert result.exit_code == 0
-    g = environment.globals()
-    assert g["rows"] == [{"x": 1}, {"x": 2}]
-    assert g["total"] == 3
-
-
-def test_environment_prompt_fragment_reflects_sources() -> None:
-    with_src = _env(DataSourceRegistry([MockDataSource(schema="my-schema")]))
-    frag = with_src.prompt_fragment()
-    assert "## Data Sources" in frag
-    assert "my-schema" in frag
-    # RLM framing: data is pulled into persistent Python variables, not tool-called
-    # into the context window. Guard against regressing to a tool-menu prompt.
-    assert "Python variables" in frag
-    assert "persist across iterations" in frag
-
-    without = _env(None)
-    bare = without.prompt_fragment()
-    assert "## Data Sources" not in bare
-    assert "context" in bare  # the context guidance line remains
+def test_runner_binds_only_explicit_configured_sources() -> None:
+    registry = build_provider_registry(
+        {
+            "data_sources": [
+                {
+                    "type": "wrapper_v1",
+                    "name": "remote",
+                    "base_url": "https://example.com",
+                    "token": "secret",
+                }
+            ],
+            "default_source": "remote",
+        },
+        catalog=default_provider_catalog(),
+    )
+    assert registry is not None
+    assert registry.sources[0].registration.manifest == wrapper_provider().manifest
+    with pytest.raises(ValueError, match="legacy data_source"):
+        build_provider_registry(
+            {"data_source": {"base_url": "https://example.com"}},
+            catalog=default_provider_catalog(),
+        )

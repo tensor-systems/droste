@@ -9,6 +9,7 @@ import pytest
 
 from droste import RLMConfig, run_rlm
 from droste.capabilities import (
+    JSON_SCHEMA_2020_12,
     CapabilityBroker,
     CapabilityCall,
     CapabilityCallError,
@@ -25,7 +26,12 @@ from droste.capabilities import (
     CapabilityResult,
     CapabilityResultHandle,
     CapabilityStatus,
-    EvidenceRef,
+    EvidenceLocation,
+    EvidenceRange,
+    PaginationMode,
+    ProviderOperation,
+    ResultDelivery,
+    SchemaSpec,
     SideEffect,
     broker_subcalls,
     generate_binding,
@@ -34,12 +40,59 @@ from droste.capabilities import (
 )
 from droste.environments import EnvironmentConfig, RunnerEnvironment, create_environment
 from droste.protocols.llm_client import TokenUsage
-from droste.registry import DataSourceRegistry
-from droste.testing import MockDataSource, MockEnvironment, MockLLMClient, MockResponse
+from droste.providers import ConfiguredSource, ProviderCatalog
+from droste.testing import (
+    MockEnvironment,
+    MockLLMClient,
+    MockResponse,
+    fake_records_provider,
+)
+
+
+def _operation(
+    operation_id: str,
+    binding_name: str,
+    delivery: ResultDelivery = ResultDelivery.INLINE,
+) -> ProviderOperation:
+    parameters = SchemaSpec(
+        {"type": "object"}, JSON_SCHEMA_2020_12, f"test:{operation_id}/params@1"
+    )
+    result = SchemaSpec({}, JSON_SCHEMA_2020_12, f"test:{operation_id}/result@1")
+    return ProviderOperation(
+        operation_id,
+        binding_name,
+        f"Test {operation_id}.",
+        parameters,
+        result,
+        PaginationMode.NONE,
+        delivery,
+        "test.call",
+    )
+
 
 QUERY = CapabilityDescriptor(
-    CapabilityId(kind=CapabilityKind.DATA, source_id="db", operation="query"),
+    CapabilityId(
+        kind=CapabilityKind.DATA,
+        provider_type="test",
+        source_id="db",
+        operation="query",
+    ),
+    operation=_operation("query", "query"),
     side_effect=SideEffect.READ,
+    provider_revision="1",
+    provider_digest="sha256:" + "0" * 64,
+)
+HANDLE_QUERY = CapabilityDescriptor(
+    CapabilityId(
+        kind=CapabilityKind.DATA,
+        provider_type="test",
+        source_id="db",
+        operation="export",
+    ),
+    operation=_operation("export", "export", ResultDelivery.HANDLE),
+    side_effect=SideEffect.READ,
+    provider_revision="1",
+    provider_digest="sha256:" + "2" * 64,
 )
 
 
@@ -81,8 +134,16 @@ def test_validation_and_dispatch_fail_closed_without_invoking_a_handler() -> Non
 
     broker = CapabilityBroker((CapabilityRegistration(QUERY, handler),), run_id="run-1")
     unknown = CapabilityDescriptor(
-        CapabilityId(kind=CapabilityKind.DATA, source_id="db", operation="drop"),
+        CapabilityId(
+            kind=CapabilityKind.DATA,
+            provider_type="test",
+            source_id="db",
+            operation="drop",
+        ),
+        operation=_operation("drop", "drop"),
         side_effect=SideEffect.EFFECTFUL,
+        provider_revision="1",
+        provider_digest="sha256:" + "1" * 64,
     )
     call = CapabilityCall(unknown.capability_id, "call-1", "run-1")
 
@@ -108,7 +169,14 @@ def test_one_result_shape_carries_identity_error_usage_budget_and_evidence() -> 
         return CapabilityMetadata(
             usage=(CapabilityMetric("rows", 1),),
             budget_delta=(CapabilityMetric("capability_calls", 1),),
-            evidence_refs=(EvidenceRef("row", "row-7"),),
+            evidence=(
+                EvidenceLocation(
+                    "db",
+                    "rows/7",
+                    revision="rev-1",
+                    ranges=(EvidenceRange(line_start=7, line_end=8),),
+                ),
+            ),
         )
 
     broker = CapabilityBroker(
@@ -124,7 +192,7 @@ def test_one_result_shape_carries_identity_error_usage_budget_and_evidence() -> 
     assert result.ok is True
     assert wire["capability_id"] == {
         "kind": "data",
-        "provider_type": None,
+        "provider_type": "test",
         "source_id": "db",
         "operation": "query",
     }
@@ -134,7 +202,22 @@ def test_one_result_shape_carries_identity_error_usage_budget_and_evidence() -> 
     assert wire["status"] == "ok"
     assert wire["usage"] == [{"name": "rows", "value": 1, "unit": None}]
     assert wire["budget_delta"][0]["name"] == "capability_calls"
-    assert wire["evidence_refs"] == [{"kind": "row", "ref": "row-7"}]
+    assert wire["evidence"] == [
+        {
+            "source_id": "db",
+            "path": "rows/7",
+            "revision": "rev-1",
+            "ranges": [
+                {
+                    "byte_start": None,
+                    "byte_end": None,
+                    "line_start": 7,
+                    "line_end": 8,
+                    "section": None,
+                }
+            ],
+        }
+    ]
     assert json.loads(json.dumps(wire))["call_id"] == wire["call_id"]
     assert observed == [result]
 
@@ -149,14 +232,14 @@ def test_provider_outcomes_and_finalizer_metadata_share_one_envelope_path() -> N
         return CapabilityMetadata(
             usage=(CapabilityMetric("accounted_calls", 1, "call"),),
             budget_delta=(CapabilityMetric("remaining_calls", -1, "call"),),
-            evidence_refs=(EvidenceRef("audit", f"audit:{call.call_id}"),),
+            evidence=(EvidenceLocation("audit", f"audit:{call.call_id}"),),
         )
 
     provider_success = CapabilityOutcome(
         result={"rows": 1},
         metadata=CapabilityMetadata(
             usage=(CapabilityMetric("rows", 1, "row"),),
-            evidence_refs=(EvidenceRef("row", "row-7"),),
+            evidence=(EvidenceLocation("db", "row-7"),),
         ),
     )
     success = CapabilityBroker(
@@ -177,7 +260,7 @@ def test_provider_outcomes_and_finalizer_metadata_share_one_envelope_path() -> N
                     error=provider_error,
                     metadata=CapabilityMetadata(
                         usage=(CapabilityMetric("lookups", 1, "call"),),
-                        evidence_refs=(EvidenceRef("query", "lookup-7"),),
+                        evidence=(EvidenceLocation("db", "lookup-7"),),
                     ),
                 ),
             ),
@@ -201,11 +284,11 @@ def test_provider_outcomes_and_finalizer_metadata_share_one_envelope_path() -> N
 
     assert thaw_value(success.result) == {"rows": 1}
     assert [item.name for item in success.usage] == ["rows", "accounted_calls"]
-    assert [item.kind for item in success.evidence_refs] == ["row", "audit"]
+    assert [item.source_id for item in success.evidence] == ["db", "audit"]
     assert failed.error is provider_error
     assert failed.error.code == "sqlite.not_found"
     assert [item.name for item in failed.usage] == ["lookups", "accounted_calls"]
-    assert [item.kind for item in failed.evidence_refs] == ["query", "audit"]
+    assert [item.source_id for item in failed.evidence] == ["db", "audit"]
     assert invalid.error is not None
     assert invalid.error.code == CapabilityErrorCode.INVALID_RESULT
     assert [item.name for item in invalid.usage] == [
@@ -256,7 +339,7 @@ def test_trace_projection_is_json_safe_and_contains_no_replay_content() -> None:
         (CapabilityRegistration(QUERY, fail),),
         run_id="run-1",
         annotator=lambda call, value, error: CapabilityMetadata(
-            evidence_refs=(EvidenceRef("row", f"private/path/{secret}"),)
+            evidence=(EvidenceLocation("db", f"private/path/{secret}"),)
         ),
     ).call(QUERY.capability_id, secret)
 
@@ -273,7 +356,7 @@ def test_trace_projection_is_json_safe_and_contains_no_replay_content() -> None:
     assert json.loads(encoded) == trace
 
     handled = CapabilityBroker(
-        (CapabilityRegistration(QUERY, lambda: secret),),
+        (CapabilityRegistration(HANDLE_QUERY, lambda: secret),),
         annotator=lambda call, value, error: CapabilityMetadata(
             result_handle=CapabilityResultHandle(
                 handle=f"file:///private/{secret}",
@@ -281,7 +364,7 @@ def test_trace_projection_is_json_safe_and_contains_no_replay_content() -> None:
                 size_bytes=42,
             )
         ),
-    ).call(QUERY.capability_id)
+    ).call(HANDLE_QUERY.capability_id)
     handled_trace = handled.to_trace_dict()
     assert handled_trace["result_handle"] == {
         "present": True,
@@ -289,6 +372,27 @@ def test_trace_projection_is_json_safe_and_contains_no_replay_content() -> None:
         "size_bytes": 42,
     }
     assert secret not in json.dumps(handled_trace)
+
+
+def test_result_delivery_mode_is_enforced_by_the_broker() -> None:
+    missing_handle = CapabilityBroker(
+        (CapabilityRegistration(HANDLE_QUERY, lambda: "inline"),)
+    ).call(HANDLE_QUERY.capability_id)
+    unexpected_handle = CapabilityBroker(
+        (
+            CapabilityRegistration(
+                QUERY,
+                lambda: CapabilityOutcome(
+                    metadata=CapabilityMetadata(result_handle=CapabilityResultHandle("unexpected"))
+                ),
+            ),
+        )
+    ).call(QUERY.capability_id)
+
+    assert missing_handle.error is not None
+    assert missing_handle.error.code == CapabilityErrorCode.INVALID_RESULT
+    assert unexpected_handle.error is not None
+    assert unexpected_handle.error.code == CapabilityErrorCode.INVALID_RESULT
 
 
 def test_accounting_metadata_rejects_non_json_values_at_construction() -> None:
@@ -533,10 +637,13 @@ def _runner(
     *,
     observer: object | None = None,
 ) -> RunnerEnvironment:
-    source = MockDataSource(schema="t", query_results={"SELECT 1": [{"x": 1}]})
+    registry = ProviderCatalog((fake_records_provider(),)).bind(
+        (ConfiguredSource("records", "fake_records"),),
+        default_source_id="records",
+    )
     return RunnerEnvironment(
         context={},
-        registry=DataSourceRegistry([source], default_source_name="mock"),
+        registry=registry,
         subcalls=subcalls,
         max_output_chars=10_000,
         exec_timeout_ms=0,
@@ -553,8 +660,8 @@ def test_builtin_globals_are_generated_bindings_not_raw_bound_methods() -> None:
     for binding in (
         globals_["llm_query"],
         globals_["llm_batch"],
-        globals_["query"],
-        globals_["mock"].query,
+        globals_["search"],
+        globals_["records"].search,
     ):
         assert callable(binding)
         assert getattr(binding, "__self__", None) is None
@@ -562,18 +669,18 @@ def test_builtin_globals_are_generated_bindings_not_raw_bound_methods() -> None:
     assert globals_["llm_batch"] is globals_["batch_llm_query"]
     assert globals_["llm_batch"] is globals_["llm_query_batched"]
     environment.execute(
-        "one = llm_query('p', 'c')\nmany = llm_batch(['a', 'b'])\nrows = query('SELECT 1')"
+        "one = llm_query('p', 'c')\nmany = llm_batch(['a', 'b'])\nrows = search('alpha')"
     )
     assert subcalls.query_calls == [("p", "c")]
     assert subcalls.batch_calls == [(["a", "b"], None)]
-    assert globals_["rows"] == [{"x": 1}]
+    assert globals_["rows"]["items"] == [{"id": "1", "title": "alpha"}]
 
     manifest_keys = {
         item.capability_id.key for item in environment.capability_broker().describe().descriptors
     }
     assert ("inference", "subcall", None, "llm_query") in manifest_keys
     assert ("inference", "subcall", None, "llm_batch") in manifest_keys
-    assert ("data", None, "mock", "query") in manifest_keys
+    assert ("data", "fake_records", "records", "records.search") in manifest_keys
 
 
 def test_structured_batch_is_one_atomic_broker_operation() -> None:
@@ -695,11 +802,14 @@ def test_native_and_pyodide_publish_the_same_manifest_and_brokered_results(
     config: EnvironmentConfig,
 ) -> None:
     subcalls = RecordingSubcalls()
-    source = MockDataSource(schema="t", query_results={"SELECT 1": [{"x": 1}]})
+    registry = ProviderCatalog((fake_records_provider(),)).bind(
+        (ConfiguredSource("records", "fake_records"),),
+        default_source_id="records",
+    )
     environment = create_environment(
         config,
         context={},
-        registry=DataSourceRegistry([source], default_source_name="mock"),
+        registry=registry,
         subcalls=subcalls,
         capability_run_id="run-parity",
     )
@@ -712,14 +822,9 @@ def test_native_and_pyodide_publish_the_same_manifest_and_brokered_results(
         ("inference", "subcall", None, "llm_query"),
         ("inference", "subcall", None, "llm_batch"),
         ("inference", "subcall", None, "llm_batch_with_errors"),
-        ("data", None, "mock", "search"),
-        ("data", None, "mock", "query"),
-        ("data", None, "mock", "get"),
-        ("data", None, "mock", "get_recent"),
-        ("data", None, "mock", "get_schema"),
-        ("data", None, "mock", "get_stats"),
-        ("data", None, "mock", "sample"),
+        ("data", "fake_records", "records", "records.search"),
+        ("data", "fake_records", "records", "records.fetch"),
     )
     assert keys == expected
     assert environment.globals()["llm_query"]("p") == "answer:p:"
-    assert environment.globals()["query"]("SELECT 1") == [{"x": 1}]
+    assert environment.globals()["search"]("alpha")["items"] == [{"id": "1", "title": "alpha"}]

@@ -7,18 +7,23 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from droste.capabilities import (
+    JSON_SCHEMA_2020_12,
+    PaginationMode,
+    ProviderOperation,
+    ResultDelivery,
+    SchemaSpec,
+    SideEffect,
+)
 from droste.clients.errors import http_error_excerpt
 from droste.clients.useragent import USER_AGENT
-from droste.sources.registration import (
-    SOURCE_PROTOCOL_VERSION,
-    register_source_type,
-    source_factory,
-)
-from droste.sources.registration import (
-    SourceFactory as SourceFactory,
-)
-from droste.sources.registration import (
-    _reset_source_types as _registration_reset_source_types,
+from droste.providers import (
+    ConfiguredSource,
+    ProviderCatalog,
+    ProviderManifest,
+    ProviderRegistration,
+    ProviderRegistry,
+    ProviderRuntime,
 )
 
 _http_error_excerpt = http_error_excerpt
@@ -45,7 +50,7 @@ def _allowlist_opener(allowed: set[str]) -> Any:
     return urllib.request.build_opener(_Guard)
 
 
-class DataSourceWrapper:
+class WrapperTransport:
     def __init__(self, config: dict[str, Any] | None) -> None:
         self._config = config or {}
         self._requests_made = 0
@@ -172,154 +177,140 @@ class DataSourceWrapper:
         return self._call("/content", payload)
 
 
-class WrapperV1DataSource:
-    """`DataSource` adapter over the remote wrapper_v1 HTTP transport.
-
-    Lets the remote search/get/content partner API participate in the
-    `DataSourceRegistry` like any in-process source instead of being a parallel
-    special-case. Request budgets and the `allowed_hosts` allowlist are
-    enforced per-request by the wrapped `DataSourceWrapper` (no allowlist
-    configured = the deployer accepts arbitrary hosts). `content` is exposed
-    as an extra method (the registry binds it via its `hasattr` path); it is
-    not a first-class capability.
-    """
-
-    def __init__(self, config: dict[str, Any] | None, *, name: str = "wrapper") -> None:
-        self._config = config or {}
-        self._name = name or "wrapper"
-        self._wrapper = DataSourceWrapper(self._config)
-
-    def name(self) -> str:
-        return self._name
-
-    def capabilities(self) -> dict[str, bool]:
-        return {
-            "sql": False,
-            "search": True,
-            "get": True,
-            "recent": False,
-            "schema": True,
-            "stats": True,
-        }
-
-    def get_schema(self) -> str:
-        parts = ["Remote wrapper_v1 source — search(query)/get(id)/content(id) over HTTP."]
-        allowed_hosts = self._config.get("allowed_hosts")
-        if isinstance(allowed_hosts, list) and allowed_hosts:
-            parts.append("Allowed hosts: " + ", ".join(str(h) for h in allowed_hosts if h))
-        limits = self._config.get("limits")
-        if isinstance(limits, dict) and limits:
-            parts.append("Limits: " + json.dumps(limits, ensure_ascii=True))
-        return " ".join(parts)
-
-    def get_stats(self) -> dict[str, Any]:
-        return {"requests_made": self._wrapper.requests_made}
-
-    @property
-    def requests_made(self) -> int:
-        return self._wrapper.requests_made
-
-    def search(self, query: str, filters: Any = None, page: Any = None) -> Any:
-        return self._wrapper.search(query, filters, page)
-
-    def get(self, id: str) -> Any:
-        return self._wrapper.get(id)
-
-    def content(self, id: str, format: str = "text", max_bytes: int | None = None) -> Any:
-        return self._wrapper.content(id, format, max_bytes)
+def _schema(value: dict[str, Any], name: str) -> SchemaSpec:
+    return SchemaSpec(value, JSON_SCHEMA_2020_12, f"droste:provider/wrapper_v1/{name}@1")
 
 
-# --- Option C: build-time source-type registration (source unification)
-#
-# Consumers register factories for their own source types at *startup* — never
-# from the request. The machinery lives in droste.sources.registration (#32)
-# so non-runner embedders can use it too; this module re-exports the names
-# and registers the runner's own built-in wrapper_v1 type through it.
+WRAPPER_PROVIDER_MANIFEST = ProviderManifest(
+    provider_type="wrapper_v1",
+    revision="1",
+    operations=(
+        ProviderOperation(
+            "search",
+            "search",
+            "Search the remote source using provider-defined filters.",
+            _schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "filters": {},
+                        "page": {},
+                    },
+                    "required": ["query"],
+                },
+                "search/parameters",
+            ),
+            None,
+            PaginationMode.NONE,
+            ResultDelivery.UNTYPED,
+            "data.search",
+        ),
+        ProviderOperation(
+            "get",
+            "get",
+            "Fetch one remote item by provider-defined ID.",
+            _schema(
+                {"type": "object", "properties": {"id": {}}, "required": ["id"]},
+                "get/parameters",
+            ),
+            None,
+            PaginationMode.NONE,
+            ResultDelivery.UNTYPED,
+            "data.read",
+        ),
+        ProviderOperation(
+            "content",
+            "content",
+            "Fetch bounded content for one remote item.",
+            _schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "id": {},
+                        "format": {"type": "string"},
+                        "max_bytes": {"type": ["integer", "null"]},
+                    },
+                    "required": ["id"],
+                },
+                "content/parameters",
+            ),
+            None,
+            PaginationMode.NONE,
+            ResultDelivery.UNTYPED,
+            "data.read",
+        ),
+        ProviderOperation(
+            "stats",
+            "get_stats",
+            "Return request counts for this configured remote source.",
+            _schema({"type": "object", "properties": {}}, "stats/parameters"),
+            None,
+            PaginationMode.NONE,
+            ResultDelivery.UNTYPED,
+            "data.metadata",
+        ),
+    ),
+)
 
 
-def _wrapper_v1_factory(spec: dict[str, Any], ctx: Any = None) -> Any:
-    name = str(spec.get("name") or "").strip()
-    return WrapperV1DataSource(spec, name=name or "wrapper")
+def _bind_wrapper(source: ConfiguredSource, context: Any = None) -> ProviderRuntime:
+    config = source.config_dict()
+    transport = WrapperTransport(config)
+    parts = ["Remote wrapper_v1 provider over HTTP."]
+    allowed_hosts = config.get("allowed_hosts")
+    if isinstance(allowed_hosts, list) and allowed_hosts:
+        parts.append("Allowed hosts: " + ", ".join(str(item) for item in allowed_hosts))
+    return ProviderRuntime(
+        handlers={
+            "search": transport.search,
+            "get": transport.get,
+            "content": transport.content,
+            "stats": lambda: {"requests_made": transport.requests_made},
+        },
+        source_description=" ".join(parts),
+        stats=lambda: {"requests_made": transport.requests_made},
+    )
 
 
-def _register_builtin_source_types() -> None:
-    # The runner's built-in remote source registers through the same
-    # mechanism as everyone else (#32) instead of a _build_one_source
-    # carve-out; attempts to re-register the type fail like any duplicate.
-    # Import order must not subvert that (codex review): a consumer that
-    # registered its own 'wrapper_v1' BEFORE this module was imported gets a
-    # loud failure here, never a silent factory swap.
-    existing = source_factory("wrapper_v1")
-    if existing is _wrapper_v1_factory:
-        return
-    if existing is not None:
-        raise ValueError(
-            "source type 'wrapper_v1' is built in to droste_runner and cannot "
-            "be replaced by a pre-registered factory"
-        )
-    register_source_type("wrapper_v1", _wrapper_v1_factory, protocol=SOURCE_PROTOCOL_VERSION)
+def wrapper_provider() -> ProviderRegistration:
+    return ProviderRegistration(
+        WRAPPER_PROVIDER_MANIFEST,
+        effects={
+            operation.operation_id: SideEffect.READ
+            for operation in WRAPPER_PROVIDER_MANIFEST.operations
+        },
+        binder=_bind_wrapper,
+    )
 
 
-_register_builtin_source_types()
+def default_provider_catalog() -> ProviderCatalog:
+    return ProviderCatalog((wrapper_provider(),))
 
 
-def _reset_source_types() -> None:
-    """Test hook: clear registered source-type factories (builtins stay)."""
-    _registration_reset_source_types()
-    _register_builtin_source_types()
+def build_provider_registry(
+    request: dict[str, Any],
+    *,
+    catalog: ProviderCatalog,
+    context: Any = None,
+) -> ProviderRegistry | None:
+    """Bind explicit configured sources through an explicit host catalog."""
 
-
-def _build_one_source(spec: dict[str, Any], ctx: Any = None) -> Any:
-    stype = str(spec.get("type") or "").strip()
-    factory = source_factory(stype)
-    if factory is not None:
-        source = factory(spec, ctx)
-        if source is None:
-            raise ValueError(f"factory for source type {stype!r} returned no source")
-        return source
-    if stype in ("sql", "fs"):
-        # Minimal-engine contract (Option C): in-process sources carry DB drivers
-        # and path/SQL policy, which live with the consumer that owns the data
-        # boundary — registered via register_source_type() at startup, never
-        # constructed here.
-        raise ValueError(
-            f"data source type '{stype}' has no registered factory; the consumer's "
-            "runner entrypoint must call register_source_type() at startup "
-            "(the base runner only builds remote wrapper_v1 sources)"
-        )
-    raise ValueError(f"unknown data source type: {stype!r}")
-
-
-def build_data_sources(request: dict[str, Any], ctx: Any = None) -> tuple[list[Any], str | None]:
-    """Resolve a request's data sources into `DataSource` objects + a default name.
-
-    Accepts the new `data_sources` list shape, and the legacy singular
-    `data_source` wrapper_v1 config as sugar for a one-element list. Non-built-in
-    types dispatch to factories registered via `register_source_type`; `ctx` is
-    passed through to each factory as the host-supplied edge context.
-    """
-    default_name = request.get("default_source")
-    if default_name is not None:
-        default_name = str(default_name)
-    sources: list[Any] = []
-
-    raw = request.get("data_sources")
-    if raw is not None:
-        # Present-but-malformed must fail loudly, not silently fall through to
-        # the legacy singular path (which would ignore the caller's intent).
-        if not isinstance(raw, list):
-            raise ValueError("data_sources must be a list")
-        for spec in raw:
-            if not isinstance(spec, dict):
-                raise ValueError("each data_sources entry must be an object")
-            sources.append(_build_one_source(spec, ctx))
-        return sources, default_name
-
-    legacy = request.get("data_source")
-    if legacy is not None:
-        if not isinstance(legacy, dict):
-            raise ValueError("data_source must be an object")
-        sources.append(WrapperV1DataSource(legacy, name="wrapper"))
-        if default_name is None:
-            default_name = "wrapper"
-    return sources, default_name
+    if "data_source" in request:
+        raise ValueError("legacy data_source is removed; use data_sources")
+    raw = request.get("data_sources", [])
+    if not isinstance(raw, list):
+        raise ValueError("data_sources must be a list")
+    sources: list[ConfiguredSource] = []
+    for spec in raw:
+        if not isinstance(spec, dict):
+            raise ValueError("each data_sources entry must be an object")
+        sources.append(ConfiguredSource.from_spec(spec))
+    if not sources:
+        return None
+    default_source = request.get("default_source")
+    return catalog.bind(
+        tuple(sources),
+        context=context,
+        default_source_id=str(default_source) if default_source is not None else None,
+    )

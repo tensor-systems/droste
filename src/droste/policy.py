@@ -10,7 +10,6 @@ LLM_CALL_REGEX = re.compile(
     r"batch_llm_query|llm_batch)\s*\(",
     re.IGNORECASE,
 )
-LEN_SEARCH_REGEX = re.compile(r"\blen\s*\(\s*(search|get_recent)\s*\(", re.IGNORECASE)
 NUMERIC_OUTPUT_REGEX = re.compile(r"^\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)(%)?\s*$")
 
 
@@ -60,12 +59,12 @@ def _len_over_accessor_regex(
     namespaced verbs match only under their OWN source namespace
     (`len(db.search(...))`) — never an arbitrary receiver, or ordinary code
     like `len(row.get("items", []))` would trip the contract just because a
-    source exposes a verb named `get`. Falls back to the static generic
-    verbs when the caller supplies nothing."""
+    source exposes a verb named `get`. With no descriptor-derived accessors,
+    the detector matches nothing."""
     flat = sorted({str(n) for n in data_accessors if n})
     pairs = sorted({(str(ns), str(v)) for ns, v in namespaced_accessors if ns and v})
     if not flat and not pairs:
-        flat = ["search", "get_recent"]
+        return re.compile(r"(?!)")
     alternatives: list[str] = []
     if flat:
         alternatives.append("(?:" + "|".join(re.escape(n) for n in flat) + ")")

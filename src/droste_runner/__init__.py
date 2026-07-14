@@ -3,18 +3,18 @@
 from .protocol import RUNNER_PROTOCOL_VERSION
 from .run import main, run
 from .sources import (
-    SOURCE_PROTOCOL_VERSION,
-    WrapperV1DataSource,
-    build_data_sources,
-    register_source_type,
+    WrapperTransport,
+    build_provider_registry,
+    default_provider_catalog,
+    wrapper_provider,
 )
 
 __all__ = [
     "RUNNER_PROTOCOL_VERSION",
-    "SOURCE_PROTOCOL_VERSION",
-    "WrapperV1DataSource",
-    "build_data_sources",
+    "WrapperTransport",
+    "build_provider_registry",
+    "default_provider_catalog",
     "main",
-    "register_source_type",
     "run",
+    "wrapper_provider",
 ]

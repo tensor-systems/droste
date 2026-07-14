@@ -230,7 +230,7 @@ flowchart LR
 ```
 
 **Runner Inputs**
-- `protocol_version`: **required** on every request (currently `1`) — a
+- `protocol_version`: **required** on every request (currently `2`) — a
   missing or mismatched version gets a structured refusal, so hosts detect
   incompatibility instead of failing on a missing field. See
   [docs/architecture.md](docs/architecture.md) for the compatibility rules and
@@ -251,27 +251,25 @@ Implement these to integrate with your infrastructure:
   read-only `output_token_limit`: a positive per-call token ceiling or `None`
   when deliberately unbounded. Clients that omit it remain compatible and are
   reported to the root model as having an unknown limit.
-- **`DataSource`** - Optional data source integration
+- **`ProviderManifest`** - Immutable data-operation metadata
 
-#### Data sources are domain-blind
+#### Providers are descriptor-driven
 
-`DataSource` carries core verbs only — `query`, `search`, `get`,
-`get_recent`, `get_schema`, `get_stats`, plus the generic optionals
-`find`/`content`/`sample`. The engine knows nothing about any product's
-data shape. A source with domain-specific verbs declares them itself:
+Droste has no universal data verb table. A reusable `ProviderManifest`
+declares each provider's stable raw operation ID, Python binding name,
+description, parameter/result schemas with dialect and provenance, pagination,
+delivery mode, and budget class. A host combines the manifest with its own
+authoritative side-effect classifications and policy metadata in a
+`ProviderRegistration`, then binds named `ConfiguredSource` values through an
+explicit `ProviderCatalog`.
 
-```python
-class MessageArchiveSource:
-    extra_methods = ("get_messages", "get_chats")  # your verbs, your names
-    ...
-```
-
-Exactly those callables are exposed to the sandbox — validated against
-engine verbs, Python builtins, and reserved names — and the declaration
-works identically in-process and across the Pyodide bridge. Registrations
-via `register_source_type` must pass the source-protocol version they
-implement (`protocol=2` today); a stale extension fails loudly at startup
-instead of silently losing its verbs.
+The resulting immutable per-run descriptors generate the prompt, Python
+bindings, policy accessor inventory, and broker allowlist. Provider metadata
+can evolve without changing `CapabilityId`; raw operation IDs remain separate
+from Python names. The bridge transports manifests and operation calls but not
+authoritative effects or policy, which the receiving host must supply.
+See [Provider manifests](docs/provider-manifests.md) for the value model,
+ownership boundaries, bridge contract, and migration example.
 
 #### Configuration
 

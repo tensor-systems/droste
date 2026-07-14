@@ -38,16 +38,17 @@ from droste import (
     DEFAULT_MAX_CALLS,
     DEFAULT_MAX_ITERATIONS,
     DEFAULT_MAX_OUTPUT_CHARS,
+    ConfiguredSource,
     EnvironmentConfig,
     OpenAICompatClient,
     OpenAICompatSubcallClient,
+    ProviderCatalog,
     RLMConfig,
     create_environment,
     create_environment_context,
     run_rlm,
 )
 from droste.clients.openai_compat import DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS
-from droste.registry import DataSourceRegistry
 
 from .credentials import Credentials, CredentialsError, load_credentials
 from .inputs import (
@@ -176,8 +177,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_sql_source(db_path: str) -> Any:
-    """Build the local-mode read-only SQLite data source.
+def _load_sql_registry(db_path: str) -> Any:
+    """Bind the local-mode read-only SQLite provider as source ``db``.
 
     Exposes the database as the `db` source: SELECT-only, policy-gated, opened
     mode=ro. The policy is a guardrail, not a security boundary — OS file
@@ -185,16 +186,25 @@ def _load_sql_source(db_path: str) -> Any:
     """
     if not os.path.isfile(db_path):
         raise CLIError(f"database not found (or not a file): {db_path}")
-    from droste.sources.sql_local import local_sql_source_factory
+    from droste.sources.sql_local import sqlite_provider
 
-    source = local_sql_source_factory({"name": "db", "sqlite_path": db_path})
     # Fail fast with a clean usage error if the file is not a readable SQLite
     # database, rather than crashing mid-run on the first query.
     try:
-        source.get_schema()
+        registry = ProviderCatalog((sqlite_provider(),)).bind(
+            (
+                ConfiguredSource(
+                    source_id="db",
+                    provider_type="sqlite",
+                    config={"sqlite_path": db_path},
+                ),
+            ),
+            default_source_id="db",
+        )
+        registry.sources[0].runtime.handlers["schema"]()
     except Exception as exc:
         raise CLIError(f"cannot open {db_path} as a SQLite database: {exc}") from exc
-    return source
+    return registry
 
 
 class _StreamEcho:
@@ -352,8 +362,7 @@ def run_ask(args: argparse.Namespace) -> int:
 
     registry = None
     if loaded.db_path:
-        source = _load_sql_source(loaded.db_path)
-        registry = DataSourceRegistry([source], default_source_name=source.name())
+        registry = _load_sql_registry(loaded.db_path)
 
     provider, creds = resolve_run_target(args)
 

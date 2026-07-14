@@ -1,215 +1,149 @@
-"""Bridge-backed `DataSource`: proxy a real data source across a trust
-boundary between two interpreter contexts (A'-2 sandbox split).
-
-Two halves, kept in one file so the wire contract can't drift between them:
-
-  DataSourceService - server half. Runs alongside the real `DataSource` in the
-                       trusted context. Dispatches `(method, params_json)` to a
-                       fixed method allowlist and returns a JSON envelope.
-  BridgeDataSource   - client half. Runs in the untrusted context. Implements
-                       the `DataSource` protocol by forwarding every call over
-                       an injected synchronous `bridge_call(method, params_json)
-                       -> response_json`.
-
-Neither half knows what's really behind the bridge (iMessage, SQL, anything);
-the host wires a `bridge_call` implementation (e.g. a Deno JSON-RPC transport
-between two Pyodide interpreters) and supplies the real `DataSource` to
-`DataSourceService` on the trusted side.
-
-Security note: generated code in the untrusted context can always reach the
-raw `bridge_call` directly (e.g. via `db.query.__self__._call`), bypassing
-`BridgeDataSource` entirely. `DataSourceService.handle` is therefore the real
-boundary — it dispatches only against a hardcoded method allowlist gated by
-the wrapped source's own `capabilities()` / `hasattr()`, never generic
-`getattr(source, method)` on the caller-supplied method name.
-"""
+"""Transport-neutral provider bridge with a fixed dispatch boundary."""
 
 from __future__ import annotations
 
 import functools
 import json
-from typing import Any, Callable
+from collections.abc import Callable, Mapping
+from typing import Any
 
-from ..protocols.data_source import DataSource
-from ..protocols.verbs import (
-    CAPABILITY_GATED_VERBS,
-    HASATTR_GATED_VERBS,
-    UNSAFE_BRIDGE_OPTIONAL_NAMES,
-    validate_extra_method_name,
+from ..capabilities import CapabilityOutcome, SideEffect
+from ..providers import (
+    BoundSource,
+    ConfiguredSource,
+    ProviderManifest,
+    ProviderRegistration,
+    ProviderRuntime,
 )
 
-# Both halves gate against the protocols-level verb table — the same rows the
-# registry folds over — so a method the registry would never bind into the
-# sandbox can't be reached by calling the bridge directly either, by
-# construction rather than by mirrored comments. Host- or domain-specific
-# verbs (a chat archive's bulk accessors, a citations feature's ID tracking)
-# are NOT in the table (#10): the engine is domain-blind, so a source declares
-# those itself via an `extra_methods` attribute (or the host passes
-# extra_methods= to DataSourceService).
-
-# Distinguishes "attribute absent" from "attribute present with value None"
-# in extras validation — the two must behave differently (skip vs reject).
-_MISSING = object()
+BridgeCall = Callable[[str, str], Any]
 
 
-class DataSourceService:
-    """Server half: dispatches bridge calls to a real `DataSource`."""
+class ProviderService:
+    """Trusted half of a bridge for one already-bound configured source.
 
-    def __init__(self, source: DataSource, *, extra_methods: tuple[str, ...] = ()) -> None:
+    The transport publishes immutable provider metadata but deliberately does
+    not publish effects or host policy. Those remain host-owned inputs on the
+    receiving side and cannot be spoofed by a transport annotation.
+    """
+
+    def __init__(self, source: BoundSource) -> None:
+        if not isinstance(source, BoundSource):
+            raise TypeError("provider service requires a BoundSource")
         self._source = source
-        self._caps: dict[str, bool] = dict(source.capabilities())
-        # extra_methods: host-specific verbs beyond droste's own generic
-        # hasattr-gated verbs — e.g. a chat archive's bulk accessors, or a
-        # citations feature's get_retrieved_guids() — methods that are not
-        # part of the DataSource Protocol at all and mean nothing to droste.
-        # Two declaration channels, merged: the source's own `extra_methods`
-        # attribute (the #10 convention the registry also reads) and the
-        # host-passed extra_methods= parameter. Gated identically (hasattr on
-        # the wrapped source) and folded into the same describe()/dispatch
-        # machinery; describe() reports them separately so BridgeDataSource
-        # can re-expose `extra_methods` to the in-process registry.
-        declared = tuple(getattr(source, "extra_methods", ()) or ())
-        # Validate at construction, matching the registry's strictness so the
-        # same source behaves identically on every transport: a source that
-        # DECLARES an extra must implement it as a callable (config error
-        # here, not a late TypeError inside a dispatched call); a host-passed
-        # extra may be absent (speculative allowlisting is tested behavior)
-        # but must be callable when present.
-        for extra in (*declared, *extra_methods):
-            # Shared vocabulary rule (transport parity): an extra may not
-            # reuse an engine verb (dispatch checks core names first, so it
-            # would be advertised yet unreachable), a reserved global, a
-            # protocol/bridge machinery name (describe, name, capabilities,
-            # extra_methods), or any underscored attribute — an extra named
-            # `_request`/`_call` would let setattr on the bridged client
-            # clobber its own proxy machinery.
-            validate_extra_method_name(extra, source.name())
-        for extra in declared:
-            if not callable(getattr(source, str(extra), None)):
-                raise ValueError(
-                    f"extra method {str(extra)!r} declared by source "
-                    f"{source.name()!r} is not a callable"
-                )
-        for extra in extra_methods:
-            # Sentinel, not None: an attribute that exists with value None is
-            # present-but-not-callable (config error), not absent — hasattr
-            # would otherwise advertise it and the failure would surface as a
-            # late TypeError inside a dispatched call.
-            attr = getattr(source, str(extra), _MISSING)
-            if attr is _MISSING:
-                continue  # speculative host allowlisting over an absent verb is fine
-            if not callable(attr):
-                raise ValueError(
-                    f"extra method {str(extra)!r} on source {source.name()!r} is not a callable"
-                )
-        self._extra_names: tuple[str, ...] = tuple(dict.fromkeys((*declared, *extra_methods)))
-        self._optional_names: tuple[str, ...] = HASATTR_GATED_VERBS + self._extra_names
-        self._optional: set[str] = {name for name in self._optional_names if hasattr(source, name)}
 
     def describe(self) -> dict[str, Any]:
-        schema = self._source.get_schema() if self._caps.get("schema") else None
         return {
-            "name": self._source.name(),
-            "capabilities": self._caps,
-            "schema": schema,
-            "optional_methods": sorted(self._optional),
-            "extra_methods": sorted(n for n in self._extra_names if n in self._optional),
+            "source_id": self._source.source.source_id,
+            "manifest": self._source.registration.manifest.to_dict(),
+            "source_description": self._source.runtime.source_description,
         }
 
     def handle(self, method: str, params_json: str) -> str:
-        """Dispatch one bridge call; never raises — errors come back in the envelope."""
+        """Dispatch only ``describe`` or a manifest-declared operation."""
+
         try:
             result = self._dispatch(method, params_json)
-            return json.dumps({"ok": True, "result": result}, default=str)
+            return json.dumps({"ok": True, "result": result})
         except Exception as exc:
             return json.dumps(
-                {"ok": False, "error": {"type": type(exc).__name__, "message": str(exc)}}
+                {
+                    "ok": False,
+                    "error": {"type": type(exc).__name__, "message": str(exc)},
+                }
             )
 
     def _dispatch(self, method: str, params_json: str) -> Any:
         payload = json.loads(params_json) if params_json else {}
         if not isinstance(payload, dict):
             raise ValueError("bridge params must be a JSON object")
-        args = payload.get("args") or []
-        kwargs = payload.get("kwargs") or {}
-        if not isinstance(args, list) or not isinstance(kwargs, dict):
-            raise ValueError("bridge params must have an 'args' list and a 'kwargs' object")
-
         if method == "describe":
+            if payload:
+                raise ValueError("describe takes no parameters")
             return self.describe()
+        if method != "invoke":
+            raise ValueError(f"unknown bridge method: {method!r}")
 
-        gate = CAPABILITY_GATED_VERBS.get(method)
-        if gate is not None:
-            if not self._caps.get(gate):
-                raise PermissionError(f"method {method!r} is not enabled by this data source")
-            return getattr(self._source, method)(*args, **kwargs)
+        operation_id = payload.get("operation_id")
+        args = payload.get("args", [])
+        kwargs = payload.get("kwargs", {})
+        if not isinstance(operation_id, str):
+            raise ValueError("bridge invoke requires operation_id")
+        if not isinstance(args, list) or not isinstance(kwargs, dict):
+            raise ValueError("bridge invoke requires an args list and kwargs object")
+        handler = self._source.runtime.handlers.get(operation_id)
+        if handler is None:
+            raise PermissionError(f"operation {operation_id!r} is not in the provider manifest")
+        result = handler(*args, **kwargs)
+        if isinstance(result, CapabilityOutcome):
+            return {"kind": "capability_outcome", "value": result.to_dict()}
+        return {"kind": "value", "value": result}
 
-        if method in self._optional_names:
-            if method not in self._optional:
-                raise PermissionError(f"method {method!r} is not implemented by this data source")
-            return getattr(self._source, method)(*args, **kwargs)
 
-        raise ValueError(f"unknown bridge method: {method!r}")
+class BridgeProvider:
+    """Receiving half that projects one remote manifest into a registration."""
 
-
-BridgeCall = Callable[[str, str], Any]
-
-
-class BridgeDataSource:
-    """Client half: a `DataSource` that proxies every call over `bridge_call`."""
-
-    def __init__(self, bridge_call: BridgeCall, *, name: str) -> None:
+    def __init__(self, bridge_call: BridgeCall) -> None:
+        if not callable(bridge_call):
+            raise TypeError("bridge_call must be callable")
         self._call = bridge_call
-        self._name = name
         described = self._request("describe")
-        self._caps: dict[str, bool] = dict(described.get("capabilities") or {})
-        self._schema: str = described.get("schema") or ""
-        self._optional: set[str] = set(described.get("optional_methods") or [])
-        # Re-expose the service's host extras under the #10 convention so a
-        # registry wrapping THIS source binds them like any local source's.
-        self.extra_methods: tuple[str, ...] = tuple(described.get("extra_methods") or ())
-        # Both the capability-gated core verbs and the hasattr-gated optional
-        # verbs are bound as INSTANCE attributes, and only when the remote
-        # side actually reports them — never defined at class level. A
-        # class-level definition would make e.g. hasattr(bridged,
-        # "sample") true for every BridgeDataSource regardless of what the
-        # wrapped source actually supports (registry.py gates optional verbs
-        # by hasattr), so a model calling it would get a runtime bridge error
-        # instead of the method never being offered in the first place.
-        # Every enabled capability-gated verb is covered: verbs the class
-        # implements concretely (get_schema serves the describe() cache;
-        # get_stats below) keep those implementations, and every OTHER
-        # enabled row — including any future verb added to the table — gets
-        # a *args/**kwargs proxy. The dynamic default matters because
-        # real-world signatures vary by source beyond what the DataSource
-        # Protocol declares (e.g. a wrapper's search(query, filters=None,
-        # page=None) has a `page` the Protocol doesn't); forwarding verbatim
-        # is byte-identical, argument-wise, to calling the wrapped source
-        # directly, for any signature.
-        for method, capability in CAPABILITY_GATED_VERBS.items():
-            if not self._caps.get(capability):
-                continue
-            if callable(getattr(type(self), method, None)):
-                continue  # concrete client implementation wins
-            setattr(self, method, functools.partial(self._request, method))
-        for method in self._optional:
-            # Defense in depth: describe() comes from the trusted side, but a
-            # buggy or spoofed service must not be able to make this client
-            # setattr over its own machinery (_request/_call), protocol
-            # surface, or a runner-reserved global — that would silently
-            # corrupt every subsequent call.
-            if method.startswith("_") or method in UNSAFE_BRIDGE_OPTIONAL_NAMES:
-                raise ValueError(
-                    f"bridge service advertised unsafe optional method name {method!r}"
-                )
-            setattr(self, method, functools.partial(self._request, method))
+        if not isinstance(described, dict):
+            raise ValueError("bridge describe response must be an object")
+        manifest = described.get("manifest")
+        if not isinstance(manifest, Mapping):
+            raise ValueError("bridge describe response requires a manifest")
+        self.manifest = ProviderManifest.from_dict(manifest)
+        self.source_id = str(described.get("source_id") or "")
+        if not self.source_id:
+            raise ValueError("bridge describe response requires source_id")
+        self.source_description = str(described.get("source_description") or "")
 
-    def _request(self, method: str, *args: Any, **kwargs: Any) -> Any:
-        raw = self._call(method, json.dumps({"args": list(args), "kwargs": kwargs}))
-        # Awaitable tolerance: under Pyodide the bridge call may be async
-        # (mirrors BridgedLLMClient._post in droste.substrates.pyodide); block the
-        # sync RLM loop on it via run_sync. A plain string (native tests, or a
-        # synchronous in-process loopback) is used as-is.
+    def registration(
+        self,
+        *,
+        effects: Mapping[str, SideEffect],
+        policy_metadata: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> ProviderRegistration:
+        """Bind remote handlers using authoritative receiving-host policy."""
+
+        return ProviderRegistration(
+            manifest=self.manifest,
+            effects=effects,
+            binder=self._bind,
+            policy_metadata=policy_metadata or {},
+        )
+
+    def _bind(self, source: ConfiguredSource, context: Any = None) -> ProviderRuntime:
+        del context
+        if source.source_id != self.source_id:
+            raise ValueError(
+                f"bridge is bound to source {self.source_id!r}, not {source.source_id!r}"
+            )
+        return ProviderRuntime(
+            handlers={
+                operation.operation_id: functools.partial(
+                    self._request_operation, operation.operation_id
+                )
+                for operation in self.manifest.operations
+            },
+            source_description=self.source_description,
+        )
+
+    def _request_operation(self, operation_id: str, *args: Any, **kwargs: Any) -> Any:
+        result = self._request("invoke", operation_id=operation_id, args=list(args), kwargs=kwargs)
+        if not isinstance(result, Mapping):
+            raise RuntimeError("bridge invoke response must be an object")
+        kind = result.get("kind")
+        value = result.get("value")
+        if kind == "value":
+            return value
+        if kind == "capability_outcome" and isinstance(value, Mapping):
+            return CapabilityOutcome.from_dict(value)
+        raise RuntimeError("bridge invoke response has an unknown result kind")
+
+    def _request(self, method: str, **payload: Any) -> Any:
+        raw = self._call(method, json.dumps(payload))
         if hasattr(raw, "__await__"):
             from pyodide.ffi import run_sync
 
@@ -223,29 +157,11 @@ class BridgeDataSource:
         if not isinstance(envelope, dict) or not envelope.get("ok"):
             error = envelope.get("error") if isinstance(envelope, dict) else None
             error = error if isinstance(error, dict) else {}
-            err_type = error.get("type", "BridgeError")
-            err_message = error.get("message", "unknown bridge error")
-            # The validator/OperationalError message is model-facing feedback the
-            # loop iterates on — preserve type + message instead of an opaque
-            # "bridge call failed".
-            raise RuntimeError(f"{err_type}: {err_message}")
-        return envelope["result"]
+            raise RuntimeError(
+                f"{error.get('type', 'BridgeError')}: "
+                f"{error.get('message', 'unknown bridge error')}"
+            )
+        return envelope.get("result")
 
-    # -- DataSource protocol -------------------------------------------------
 
-    def name(self) -> str:
-        return self._name
-
-    def capabilities(self) -> dict[str, bool]:
-        return dict(self._caps)
-
-    def get_schema(self) -> str:
-        return self._schema
-
-    def get_stats(self) -> dict[str, Any]:
-        return self._request("get_stats")
-
-    # The remaining capability-gated verbs are bound in __init__ when the
-    # wrapped source enables them — not defined here, so calling one that
-    # isn't enabled fails the same way (AttributeError) as it would on any
-    # other DataSource that simply doesn't implement it.
+__all__ = ["BridgeCall", "BridgeProvider", "ProviderService"]

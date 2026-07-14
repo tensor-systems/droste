@@ -49,7 +49,7 @@ Pyodide version pin). Stage it in your build from the installed package:
 The wheel is already the one pinned, hash-verified artifact in your lockfile,
 so relay and engine are version-locked by construction — no separate tarball
 download, no sha pin to keep in sync. At startup the relay emits a `startup`
-event (`{engine_version, runner_protocol, source_protocol}`) so contract
+event (`{engine_version, runner_protocol, provider_protocol}`) so contract
 adoption is a structured signal, not a changelog audit. (Tagged releases
 still attach `droste-relay-vX.Y.Z.tar.gz` as a convenience for non-Python
 consumers; it is no longer the embedder path.)
@@ -103,9 +103,9 @@ These have zero third-party deps and zero knowledge of any host's product
 wiring — which is exactly what lets them import under Pyodide and be reused.
 
 The A′-2 DB-service split's generic half — `droste.sources.bridge`
-(`DataSourceService`, `BridgeDataSource`) — is likewise droste core; see
-Security model. So is `droste.sources.sql_local` (`local_sql_source_factory`,
-a read-only SQLite data source), which the reference adapter uses — though note
+(`ProviderService`, `BridgeProvider`) — is likewise droste core; see
+Security model. So is `droste.sources.sql_local` (`sqlite_provider()`,
+a read-only SQLite provider), which the reference adapter uses — though note
 its Pyodide timeout caveat under "Writing a host adapter" and Known gaps.
 
 **One honest caveat on reuse:** `BridgedLLMClient._post` and `broker.ts`'s
@@ -126,7 +126,7 @@ alongside this section.
 ### The two-function contract
 
 ```python
-def build_db_service(db_path, contacts_db_path=None) -> tuple[DataSourceService, dict]:
+def build_db_service(db_path, contacts_db_path=None) -> tuple[ProviderService, dict]:
     ...
 
 def run_for_host_pyodide(request, host_fetch, bridge_call=None, meta=None) -> dict:
@@ -160,8 +160,8 @@ through host code.
 
 - **`build_db_service(db_path, contacts_db_path=None)`** runs in the *trusted*
   DB-service interpreter (the one that boots first and actually holds the DB
-  file). It builds a `droste.sources.bridge.DataSourceService` wrapping your
-  real data source, and returns `(service, meta)`. `meta` is a plain dict of
+  file). It builds a `droste.sources.bridge.ProviderService` wrapping one
+  already-bound source, and returns `(service, meta)`. `meta` is a plain dict of
   whatever facts are only computable where the DB file is visible; it is
   **opaque to `relay.ts`** (below). The reference adapter has nothing
   host-specific to carry, so its `meta` is just `{}`; a production adapter
@@ -171,8 +171,9 @@ through host code.
   runs in the *untrusted* REPL interpreter. It wires a `BridgedLLMClient` (over
   the injected `host_fetch`) and an environment into `droste.run_rlm`, and
   returns a response dict. When `bridge_call` is non-`None` (DB-service mode,
-  the default), it reaches the DB only through a `BridgeDataSource(bridge_call)`
-  RPC — the DB never opens in this interpreter. When it's `None`
+  the default), it reaches the DB only through a `BridgeProvider(bridge_call)`
+  registration with receiving-host effect policy — the DB never opens in this
+  interpreter. When it's `None`
   (`RLM_DB_SERVICE=0`), the same function opens `request["db_path"]` directly in
   a single interpreter. `meta` is the same opaque blob `build_db_service`
   returned, ferried back verbatim.
@@ -233,7 +234,7 @@ their own adapter — the relay owns it.
 
 ### Gotcha 2 — `sql_local` timeouts under Pyodide (handled, but know the limit)
 
-`LocalSqlDataSource.query()` enforces its per-query timeout with
+`LocalSqlRuntime.query()` enforces its per-query timeout with
 `threading.Timer`, which needs real OS threads — unavailable under
 Pyodide/WASM. Since the #8 fix, the source degrades gracefully there: the
 timer is skipped with a one-time `RuntimeWarning`, and queries run normally
@@ -281,10 +282,10 @@ spawns the actual `relay.ts` subprocess with its actual async `host_fetch`.
 **A′-2 — DB-service split (`droste.sources.bridge`, wired by `relay.ts` + the
 host adapter's `build_db_service`).** The untrusted REPL interpreter never holds
 the corpus DB either. A second, trusted Pyodide interpreter boots first, holds
-a real data source behind a `DataSourceService` (a fixed method allowlist, gated
-by capabilities — never a generic `getattr` on caller-controlled strings), and
-the REPL interpreter reaches it only through a `BridgeDataSource` RPC call.
-`DataSourceService` and `BridgeDataSource` are droste-general
+a bound provider behind a `ProviderService` (a fixed operation allowlist from
+the verified manifest — never a generic `getattr` on caller-controlled strings),
+and the REPL interpreter reaches it only through a `BridgeProvider` registration.
+`ProviderService` and `BridgeProvider` are droste-general
 (`droste.sources.bridge`); the adapter's `build_db_service` is the host-specific
 step that puts a real data source behind the service.
 `bridge_source_integration_test.ts` proves the generic wire contract, and

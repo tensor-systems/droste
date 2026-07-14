@@ -33,16 +33,18 @@ from __future__ import annotations
 from typing import Any
 
 from droste import (
-    DataSourceRegistry,
+    ConfiguredSource,
     EnvironmentConfig,
+    ProviderCatalog,
     RLMConfig,
+    SideEffect,
     create_environment,
     create_environment_context,
     run_rlm,
 )
 from droste.execution.progress import emit_event, emit_progress
-from droste.sources.bridge import BridgeDataSource, DataSourceService
-from droste.sources.sql_local import local_sql_source_factory
+from droste.sources.bridge import BridgeProvider, ProviderService
+from droste.sources.sql_local import sqlite_provider
 from droste.substrates.pyodide import BridgedLLMClient, HostFetch, serialize_error
 from droste.testing import MockSubcallClient
 
@@ -52,28 +54,35 @@ from droste.testing import MockSubcallClient
 _DEFAULT_BASE_URL = "https://api.modelrelay.ai/api/v1"
 
 
-# The default SQL policy just works here: LocalSqlDataSource enforces its
+# The default SQL policy just works here: LocalSqlRuntime enforces its
 # per-query timeout with threading.Timer, and where thread creation is
 # unavailable (Pyodide/WASM) it degrades to no timer with a RuntimeWarning —
 # the host's own wall-clock kill (Deno's process timeout) is the real
 # enforcement in this substrate, exactly like the factory's Pyodide policy
 # below for exec timeouts.
-def _sql_source(db_path: str) -> Any:
-    return local_sql_source_factory({"name": "db", "sqlite_path": db_path})
+def _sql_source(db_path: str) -> ConfiguredSource:
+    return ConfiguredSource("db", "sqlite", {"sqlite_path": db_path})
+
+
+def _sql_registry(db_path: str):
+    return ProviderCatalog((sqlite_provider(),)).bind(
+        (_sql_source(db_path),),
+        default_source_id="db",
+    )
 
 
 def build_db_service(
     db_path: str, contacts_db_path: str | None = None
-) -> tuple[DataSourceService, dict[str, Any]]:
-    """Build the trusted-side `DataSourceService` for the A'-2 split.
+) -> tuple[ProviderService, dict[str, Any]]:
+    """Build the trusted-side `ProviderService` for the A'-2 split.
 
     `contacts_db_path` is accepted (matching the adapter contract's shape)
     but unused — this example has exactly one data source, a read-only SQL
     table. A real host with a second file to protect would build a second
     source here and describe it in `meta`.
     """
-    source = _sql_source(db_path)
-    service = DataSourceService(source)
+    source = _sql_registry(db_path).sources[0]
+    service = ProviderService(source)
     return service, {}
 
 
@@ -86,7 +95,7 @@ def run_for_host_pyodide(
     """The Pyodide equivalent of an in-process `run_rlm` call.
 
     `bridge_call` is the A'-2 seam: when the host wires a second,
-    trusted Pyodide interpreter running a `DataSourceService` built by
+    trusted Pyodide interpreter running a `ProviderService` built by
     `build_db_service`, it passes the resulting `bridge_call(method,
     params_json)` here instead of a raw `db_path`, and the DB never opens
     inside this (untrusted) interpreter. `bridge_call` is `None` when the
@@ -108,11 +117,19 @@ def run_for_host_pyodide(
     )
 
     if bridge_call is not None:
-        source = BridgeDataSource(bridge_call, name="db")
+        bridge = BridgeProvider(bridge_call)
+        registration = bridge.registration(
+            # Effects are deliberately supplied by this receiving host, not
+            # trusted from transport metadata.
+            effects={"query": SideEffect.READ, "schema": SideEffect.READ},
+            policy_metadata={"query": {"read_only": True}},
+        )
+        registry = ProviderCatalog((registration,)).bind(
+            (ConfiguredSource(bridge.source_id, bridge.manifest.provider_type),),
+            default_source_id=bridge.source_id,
+        )
     else:
-        source = _sql_source(request["db_path"])
-
-    registry = DataSourceRegistry([source], default_source_name=source.name())
+        registry = _sql_registry(request["db_path"])
     subcalls = MockSubcallClient()
     environment_config = EnvironmentConfig(
         kind="pyodide",

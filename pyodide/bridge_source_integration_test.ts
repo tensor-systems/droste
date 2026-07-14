@@ -1,19 +1,18 @@
-// Bridge-backed DataSource E2E (A'-2 sandbox split): two REAL Pyodide interpreters,
+// Bridge-backed provider E2E (A'-2 sandbox split): two REAL Pyodide interpreters,
 // wired the way relay.ts's eventual DB-service split will wire them, running the
 // actual droste.sources.bridge contract (not the toy validator spike_topology.ts
-// used) — proves DataSourceService <-> BridgeDataSource works over the real
+// used) — proves ProviderService <-> BridgeProvider works over the real
 // cross-interpreter transport, not just the in-process Python loopback the unit
 // tests in tests/test_bridge_source.py exercise.
 //
-// Deliberately droste-only: the "trusted" interpreter hosts a small stub
-// DataSource shaped like a real one (asymmetric capabilities: sql+schema, no
-// search/get/recent), not a host app's product-specific data source (which
-// isn't available outside that host's bundle), and not droste's own
-// LocalSqlDataSource, whose query() arms a threading.Timer for its statement
-// timeout — threading is unavailable under Pyodide/WASM, a real but SEPARATE
-// constraint tracked by #8, orthogonal to the bridge wiring under test
-// here. This validates the same wire contract a host adapter drives with a
-// different source on the other end.
+// Deliberately droste-only: the "trusted" interpreter hosts a small stub runtime
+// behind Droste's SQLite provider manifest (query+schema only), not a host app's
+// product-specific provider (which isn't available outside that host's bundle),
+// and not droste's own LocalSqlRuntime, whose query() arms a threading.Timer for
+// its statement timeout — threading is unavailable under Pyodide/WASM, a real
+// but SEPARATE constraint tracked by #8, orthogonal to the bridge wiring under
+// test here. This validates the same wire contract a host adapter drives with a
+// different provider runtime on the other end.
 //
 // Run: deno test --allow-read --allow-env --allow-ffi bridge_source_integration_test.ts
 import { assert, assertEquals } from "jsr:@std/assert@1";
@@ -40,42 +39,35 @@ async function loadWithDroste(): Promise<any> {
   return interp;
 }
 
-Deno.test("A'-2 wiring: BridgeDataSource in the REPL interpreter round-trips a real source in the DB-service interpreter", async () => {
-  // -- trusted "DB service" interpreter: holds the real DataSource. -----------
+Deno.test("A'-2 wiring: BridgeProvider in the REPL interpreter round-trips a provider runtime in the DB-service interpreter", async () => {
+  // -- trusted "DB service" interpreter: holds the live provider runtime. -----
   const dbsvc = await loadWithDroste();
   await dbsvc.runPythonAsync(`
-from droste.sources.bridge import DataSourceService
+from droste import ConfiguredSource, ProviderCatalog, ProviderRegistration, ProviderRuntime, SideEffect
+from droste.sources.bridge import ProviderService
+from droste.sources.sql_local import SQLITE_PROVIDER_MANIFEST
 
-# Asymmetric capabilities (sql+schema only, no search/get/recent) — shaped
-# like a real source (e.g. LocalSqlDataSource), so the capability-gating test
-# below exercises the same rejection path a real source would hit.
-class PeopleSource:
-    def name(self):
-        return "people"
+def _query(sql):
+    return [{"id": 1, "name": "ada"}, {"id": 2, "name": "grace"}]
 
-    def capabilities(self):
-        return {"sql": True, "search": False, "get": False, "recent": False, "schema": True, "stats": False}
+def _schema():
+    return "people(id INTEGER, name TEXT)"
 
-    def get_schema(self):
-        return "people(id INTEGER, name TEXT)"
+def _bind(source, context=None):
+    return ProviderRuntime(
+        handlers={"query": _query, "schema": _schema},
+        source_description=_schema(),
+    )
 
-    def get_stats(self):
-        return {}
-
-    def search(self, *args, **kwargs):
-        return []
-
-    def query(self, sql):
-        return [{"id": 1, "name": "ada"}, {"id": 2, "name": "grace"}]
-
-    def get(self, id):
-        return None
-
-    def get_recent(self, days=7, limit=100):
-        return []
-
-_source = PeopleSource()
-_service = DataSourceService(_source)
+_registration = ProviderRegistration(
+    manifest=SQLITE_PROVIDER_MANIFEST,
+    effects={"query": SideEffect.READ, "schema": SideEffect.READ},
+    binder=_bind,
+)
+_source = ProviderCatalog((_registration,)).bind(
+    (ConfiguredSource("db", "sqlite"),)
+).sources[0]
+_service = ProviderService(_source)
 _DBSVC_MARKER = "only visible in the DB-service interpreter"
 `);
   const handle = dbsvc.globals.get("_service").handle;
@@ -96,9 +88,19 @@ _DBSVC_MARKER = "only visible in the DB-service interpreter"
 
   const result = await repl.runPythonAsync(`
 import json
-from droste.sources.bridge import BridgeDataSource
+from droste import CapabilityBroker, ConfiguredSource, ProviderCatalog, SideEffect
+from droste.sources.bridge import BridgeProvider
 
-db = BridgeDataSource(bridge_call, name="db")
+bridge = BridgeProvider(bridge_call)
+registration = bridge.registration(
+    effects={"query": SideEffect.READ, "schema": SideEffect.READ},
+)
+registry = ProviderCatalog((registration,)).bind(
+    (ConfiguredSource(bridge.source_id, bridge.manifest.provider_type),),
+    default_source_id=bridge.source_id,
+)
+broker = CapabilityBroker(registry.capability_registrations())
+db = registry.broker_globals(broker)["db"]
 rows = db.query("SELECT * FROM people ORDER BY id")
 schema = db.get_schema()
 json.dumps({"rows": rows, "schema": schema})
@@ -124,7 +126,7 @@ json.dumps({"rows": rows, "schema": schema})
   );
   assert(
     !sourceLeaked,
-    "the real DataSource/DataSourceService must not exist in the REPL interpreter",
+    "the live provider runtime and ProviderService must not exist in the REPL interpreter",
   );
 
   // -- security: a forged/unknown method name is rejected, not getattr'd. -----
@@ -139,13 +141,17 @@ json.dumps(json.loads(raw))
   assertEquals(forgedEnvelope.error.type, "ValueError");
   assert(forgedEnvelope.error.message.includes("unknown bridge method"));
 
-  // -- security: a capability-gated method (search, disabled on this source) --
-  // is rejected by the SERVICE even when called directly, not merely absent
-  // from the BridgeDataSource-composed sandbox namespace.
+  // -- security: an operation absent from the immutable provider manifest is
+  // rejected by the SERVICE even when called directly, not merely absent from
+  // the BridgeProvider-composed sandbox namespace.
   const gated = await repl.runPythonAsync(`
 import json
 from pyodide.ffi import run_sync
-raw = run_sync(bridge_call("search", json.dumps({"args": ["anything"], "kwargs": {}})))
+raw = run_sync(bridge_call("invoke", json.dumps({
+    "operation_id": "search",
+    "args": ["anything"],
+    "kwargs": {},
+})))
 json.dumps(json.loads(raw))
 `);
   const gatedEnvelope = JSON.parse(gated);

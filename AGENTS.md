@@ -104,7 +104,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - Module ownership is strict: `run.py` orchestrates, `protocol.py` shapes both
   refusal and success envelopes, `http_clients.py` owns network clients, and
   `sources.py` owns the remote wrapper plus declarative source construction.
-  `runner.py` only re-exports compatibility names; focused modules must not
+  `runner.py` only re-exports convenience names; focused modules must not
   import that facade or each other in a cycle.
 - The generic native `RunnerEnvironment` lives in
   `droste.environments.inprocess`; `droste_runner.environment` and
@@ -147,7 +147,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
   provider usage/evidence metadata. Dispatch must consume only the normalized
   outcome convention; unexpected exceptions remain `handler_error`.
 - The guard, annotator, and observer are seams only. Budget ownership, policy
-  semantics, trace ordering/storage/retention, provider generalization, and MCP
+  semantics, trace ordering/storage/retention, and MCP
   transport belong to their own issues. Observers are observational and must
   never become an authority or alternate dispatch path. Durable traces consume
   `CapabilityResult.to_trace_dict()`, which excludes parameters, inline results,
@@ -161,6 +161,26 @@ evidence with that status rather than leaving the model to interpret prefixes.
   keyed by the immutable `call_id`; do not add a parallel finalization path.
   Provider metadata is ordered before finalizer metadata; sequence facts append,
   while conflicting singular result handles or child-run IDs fail closed.
+
+## Provider Manifests
+
+- Providers are immutable data plus a thin host-owned shell. A
+  `ProviderManifest` is reusable across sources; `ConfiguredSource` contains a
+  name and frozen configuration; `ProviderRegistration.bind` is the only edge
+  that creates live handlers. Do not add process-global provider registries.
+- `ProviderOperation.operation_id` is the transport/identity value and
+  `binding_name` is only the Python projection. Do not derive one from the
+  other. Parameter and result schemas require explicit dialect and provenance;
+  pagination, delivery, and budget class are explicit descriptor fields.
+- The host classifies every operation as read or effectful and owns policy
+  overrides. Bridges publish verified manifests, never authoritative effects.
+  Unknown or incomplete effect maps fail before binding.
+- One per-run descriptor snapshot generates the broker allowlist, prompt,
+  Python bindings, and accessor manifest. Documentation, schema, policy, or
+  manifest revision changes must not change `CapabilityId`.
+- Evidence uses structured `EvidenceLocation` values with source, path,
+  optional revision, and explicit byte/line/section ranges. Cursor pagination
+  must describe both the input cursor and output `next_cursor`.
 
 
 ## Login
