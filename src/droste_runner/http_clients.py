@@ -151,10 +151,8 @@ class HTTPSubcallClient(SubcallClient):
     def llm_query(self, prompt: str, context: str = "") -> str:
         if context:
             prompt = f"{context}\n\n{prompt}"
-        auto_depth = True
         depth = self._depth_get() + 1
-        if auto_depth:
-            self._depth_set(depth)
+        self._depth_set(depth)
         try:
             if self._max_depth >= 0 and depth > self._max_depth:
                 raise RuntimeError("max depth exceeded")
@@ -177,8 +175,7 @@ class HTTPSubcallClient(SubcallClient):
                 self._increment_successful_calls()
             return result
         finally:
-            if auto_depth:
-                self._depth_set(depth - 1)
+            self._depth_set(depth - 1)
 
     def llm_batch(self, prompts: list[str], contexts: list[str] | None = None) -> list[str]:
         results, errors = self._run_batch(prompts, contexts)

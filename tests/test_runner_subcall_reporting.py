@@ -153,6 +153,19 @@ def test_rejected_over_limit_attempt_is_not_counted() -> None:
     assert context.stats.successful_calls == 1
 
 
+def test_subcall_depth_is_restored_after_request_failure() -> None:
+    client, _ = _client(max_calls=2)
+
+    def fail(_payload: dict[str, Any]) -> str:
+        raise RuntimeError("request failed")
+
+    client._request = fail  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="request failed"):
+        client.llm_query("a")
+
+    assert client._depth_get() == 0
+
+
 def test_concurrent_batch_counts_each_issued_call() -> None:
     client, context = _client(max_calls=50)
     results = client.llm_batch([f"p{i}" for i in range(20)])
