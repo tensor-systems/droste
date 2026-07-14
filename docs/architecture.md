@@ -88,6 +88,15 @@ callback registration. A broker-owned mutable attempt controller closes the
 cancellation/finalization race; admission begins the exactly-once settlement
 boundary even when a later policy guard denies dispatch.
 
+`call_id` is an in-flight identity, not a durable idempotency key. After call
+validation, the broker atomically claims a caller-supplied ID before asking the
+attempt authority for admission and retains that claim through result delivery.
+A concurrent duplicate is rejected without admission, checkpointing, or
+settlement. The claim is released when `dispatch` returns or raises, including
+after admission refusal, so a later dispatch may deliberately reuse the ID.
+Hosts that require replay deduplication must enforce that separate policy before
+dispatch rather than turning the budget authority into an identity registry.
+
 `llm_batch` is one broker operation and invokes the subcall client's batch method
 once. It is not decomposed into nested `llm_query` calls, so ordering,
 reservation, concurrency, and provider-native batch semantics stay intact.

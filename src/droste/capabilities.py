@@ -1209,6 +1209,13 @@ class _CapabilityAttemptController:
                 self._settled = True
 
 
+@dataclass(slots=True)
+class _CapabilityAttemptSlot:
+    """One broker-owned in-flight identity, pending or admitted."""
+
+    attempt: _CapabilityAttemptController | None = None
+
+
 class CapabilityBroker:
     """Thin imperative shell around pure allowlist validation."""
 
@@ -1235,7 +1242,7 @@ class CapabilityBroker:
         self._observer = observer
         self._attempt_authority = attempt_authority
         self._clock = clock
-        self._active_attempts: dict[str, _CapabilityAttemptController] = {}
+        self._active_attempts: dict[str, _CapabilityAttemptSlot] = {}
         self._active_lock = Lock()
 
     @property
@@ -1249,7 +1256,8 @@ class CapabilityBroker:
         """Request cooperative cancellation for one currently admitted call."""
 
         with self._active_lock:
-            attempt = self._active_attempts.get(call_id)
+            slot = self._active_attempts.get(call_id)
+            attempt = slot.attempt if slot is not None else None
         return attempt.cancel() if attempt is not None else False
 
     def call(self, capability_id: CapabilityId, *args: Any, **kwargs: Any) -> CapabilityResult:
@@ -1299,8 +1307,13 @@ class CapabilityBroker:
             return self._finish(
                 call, status=CapabilityStatus.INVALID, error=validated, annotate=False
             )
+        slot = _CapabilityAttemptSlot()
         with self._active_lock:
-            duplicate = call.call_id in self._active_attempts
+            if call.call_id in self._active_attempts:
+                duplicate = True
+            else:
+                self._active_attempts[call.call_id] = slot
+                duplicate = False
         if duplicate:
             return self._finish(
                 call,
@@ -1314,81 +1327,16 @@ class CapabilityBroker:
             )
 
         try:
-            admission = (
-                self._attempt_authority.admit(call)
-                if self._attempt_authority is not None
-                else CapabilityAdmission()
-            )
-        except Exception as exc:
-            return self._finish(
-                call,
-                status=CapabilityStatus.DENIED,
-                error=CapabilityError(
-                    CapabilityErrorCode.GUARD_ERROR,
-                    _exception_type_name(exc),
-                    str(exc),
-                ),
-                annotate=False,
-            )
-        if isinstance(admission, CapabilityError):
-            return self._finish(
-                call,
-                status=CapabilityStatus.DENIED,
-                error=admission,
-                annotate=False,
-            )
-        if not isinstance(admission, CapabilityAdmission):
-            return self._finish(
-                call,
-                status=CapabilityStatus.DENIED,
-                error=CapabilityError(
-                    CapabilityErrorCode.GUARD_ERROR,
-                    "InvalidCapabilityAdmission",
-                    "attempt authority must return CapabilityAdmission or CapabilityError",
-                ),
-                annotate=False,
-            )
-        attempt = _CapabilityAttemptController(
-            call, admission, self._attempt_authority, clock=self._clock
-        )
-        with self._active_lock:
-            raced = call.call_id in self._active_attempts
-            if not raced:
-                self._active_attempts[call.call_id] = attempt
-        if raced:
-            return self._finish(
-                call,
-                status=CapabilityStatus.INVALID,
-                error=CapabilityError(
-                    CapabilityErrorCode.INVALID_CALL,
-                    "DuplicateCapabilityCall",
-                    "call_id is already active",
-                ),
-                annotate=False,
-                attempt=attempt,
-                attempted=False,
-                remove_active=False,
-            )
-
-        try:
-            attempt.check()
-        except (CapabilityCancelled, CapabilityDeadlineExceeded) as exc:
-            return self._finish(
-                call,
-                status=CapabilityStatus.CANCELLED,
-                error=self._cooperative_error(exc),
-                annotate=False,
-                attempt=attempt,
-                attempted=False,
-            )
-
-        if self._guard is not None:
             try:
-                denial = self._guard(call)
-                if denial is not None and not isinstance(denial, CapabilityError):
-                    raise TypeError("capability guard must return CapabilityError or None")
+                admission = (
+                    self._attempt_authority.admit(call)
+                    if self._attempt_authority is not None
+                    else CapabilityAdmission()
+                )
             except BaseException as exc:
-                envelope = self._finish(
+                if not isinstance(exc, Exception):
+                    raise
+                return self._finish(
                     call,
                     status=CapabilityStatus.DENIED,
                     error=CapabilityError(
@@ -1397,127 +1345,198 @@ class CapabilityBroker:
                         str(exc),
                     ),
                     annotate=False,
-                    attempt=attempt,
-                    attempted=False,
                 )
-                if not isinstance(exc, Exception):
-                    raise
-                return envelope
-            if denial is not None:
+            if isinstance(admission, CapabilityError):
                 return self._finish(
                     call,
                     status=CapabilityStatus.DENIED,
-                    error=denial,
+                    error=admission,
+                    annotate=False,
+                )
+            if not isinstance(admission, CapabilityAdmission):
+                return self._finish(
+                    call,
+                    status=CapabilityStatus.DENIED,
+                    error=CapabilityError(
+                        CapabilityErrorCode.GUARD_ERROR,
+                        "InvalidCapabilityAdmission",
+                        "attempt authority must return CapabilityAdmission or CapabilityError",
+                    ),
+                    annotate=False,
+                )
+            attempt = _CapabilityAttemptController(
+                call, admission, self._attempt_authority, clock=self._clock
+            )
+            with self._active_lock:
+                claim_lost = self._active_attempts.get(call.call_id) is not slot
+                if not claim_lost:
+                    slot.attempt = attempt
+            if claim_lost:
+                return self._finish(
+                    call,
+                    status=CapabilityStatus.ERROR,
+                    error=CapabilityError(
+                        CapabilityErrorCode.SETTLEMENT_ERROR,
+                        "CapabilityIdentityClaimLost",
+                        "capability call identity claim was lost after admission",
+                    ),
                     annotate=False,
                     attempt=attempt,
                     attempted=False,
                 )
 
-        try:
-            attempt.check()
-        except (CapabilityCancelled, CapabilityDeadlineExceeded) as exc:
-            return self._finish(
-                call,
-                status=CapabilityStatus.CANCELLED,
-                error=self._cooperative_error(exc),
-                annotate=False,
-                attempt=attempt,
-                attempted=False,
-            )
-
-        try:
-            outcome = self._handlers[validated.capability_id](
-                attempt.context,
-                *(thaw_value(item) for item in call.args),
-                **{key: thaw_value(item) for key, item in call.kwargs.items()},
-            )
-        except BaseException as exc:
-            error = (
-                self._cooperative_error(exc)
-                if isinstance(exc, (CapabilityCancelled, CapabilityDeadlineExceeded))
-                else CapabilityError(
-                    CapabilityErrorCode.HANDLER_ERROR,
-                    _exception_type_name(exc),
-                    str(exc),
+            try:
+                attempt.check()
+            except (CapabilityCancelled, CapabilityDeadlineExceeded) as exc:
+                return self._finish(
+                    call,
+                    status=CapabilityStatus.CANCELLED,
+                    error=self._cooperative_error(exc),
+                    annotate=False,
+                    attempt=attempt,
+                    attempted=False,
                 )
-            )
-            envelope = self._finish(
-                call,
-                status=(
-                    CapabilityStatus.CANCELLED
+
+            if self._guard is not None:
+                try:
+                    denial = self._guard(call)
+                    if denial is not None and not isinstance(denial, CapabilityError):
+                        raise TypeError("capability guard must return CapabilityError or None")
+                except BaseException as exc:
+                    envelope = self._finish(
+                        call,
+                        status=CapabilityStatus.DENIED,
+                        error=CapabilityError(
+                            CapabilityErrorCode.GUARD_ERROR,
+                            _exception_type_name(exc),
+                            str(exc),
+                        ),
+                        annotate=False,
+                        attempt=attempt,
+                        attempted=False,
+                    )
+                    if not isinstance(exc, Exception):
+                        raise
+                    return envelope
+                if denial is not None:
+                    return self._finish(
+                        call,
+                        status=CapabilityStatus.DENIED,
+                        error=denial,
+                        annotate=False,
+                        attempt=attempt,
+                        attempted=False,
+                    )
+
+            try:
+                attempt.check()
+            except (CapabilityCancelled, CapabilityDeadlineExceeded) as exc:
+                return self._finish(
+                    call,
+                    status=CapabilityStatus.CANCELLED,
+                    error=self._cooperative_error(exc),
+                    annotate=False,
+                    attempt=attempt,
+                    attempted=False,
+                )
+
+            try:
+                outcome = self._handlers[validated.capability_id](
+                    attempt.context,
+                    *(thaw_value(item) for item in call.args),
+                    **{key: thaw_value(item) for key, item in call.kwargs.items()},
+                )
+            except BaseException as exc:
+                error = (
+                    self._cooperative_error(exc)
                     if isinstance(exc, (CapabilityCancelled, CapabilityDeadlineExceeded))
-                    else CapabilityStatus.ERROR
-                ),
-                error=error,
-                attempt=attempt,
-                attempted=True,
-            )
-            if not isinstance(exc, Exception):
-                # Cancellation and process-control exits keep their propagation
-                # semantics, but the post-attempt finalizer still runs exactly once.
-                raise
-            return envelope
-        if not isinstance(outcome, CapabilityOutcome):
-            # Registrations normalize raw handlers, so reaching this branch
-            # indicates a broken trusted adapter rather than a provider error.
+                    else CapabilityError(
+                        CapabilityErrorCode.HANDLER_ERROR,
+                        _exception_type_name(exc),
+                        str(exc),
+                    )
+                )
+                envelope = self._finish(
+                    call,
+                    status=(
+                        CapabilityStatus.CANCELLED
+                        if isinstance(exc, (CapabilityCancelled, CapabilityDeadlineExceeded))
+                        else CapabilityStatus.ERROR
+                    ),
+                    error=error,
+                    attempt=attempt,
+                    attempted=True,
+                )
+                if not isinstance(exc, Exception):
+                    # Cancellation and process-control exits keep their propagation
+                    # semantics, but the post-attempt finalizer still runs exactly once.
+                    raise
+                return envelope
+            if not isinstance(outcome, CapabilityOutcome):
+                # Registrations normalize raw handlers, so reaching this branch
+                # indicates a broken trusted adapter rather than a provider error.
+                return self._finish(
+                    call,
+                    status=CapabilityStatus.ERROR,
+                    error=CapabilityError(
+                        CapabilityErrorCode.HANDLER_ERROR,
+                        "InvalidCapabilityOutcome",
+                        "normalized handler did not return CapabilityOutcome",
+                    ),
+                    attempt=attempt,
+                    attempted=True,
+                )
+            if outcome.error is not None:
+                if outcome.error.code == CapabilityErrorCode.CANCELLED:
+                    # A trusted transport/provider cancellation becomes a
+                    # broker-owned terminal fact before the finalization cutoff.
+                    attempt.cancel()
+                return self._finish(
+                    call,
+                    status=(
+                        CapabilityStatus.CANCELLED
+                        if outcome.error.code
+                        in {
+                            CapabilityErrorCode.CANCELLED,
+                            CapabilityErrorCode.DEADLINE_EXCEEDED,
+                        }
+                        else CapabilityStatus.ERROR
+                    ),
+                    error=outcome.error,
+                    provider_metadata=outcome.metadata,
+                    attempt=attempt,
+                    attempted=True,
+                )
+            try:
+                frozen_result = freeze_value(outcome.result)
+            except BaseException as exc:
+                envelope = self._finish(
+                    call,
+                    status=CapabilityStatus.ERROR,
+                    error=CapabilityError(
+                        CapabilityErrorCode.INVALID_RESULT,
+                        _exception_type_name(exc),
+                        str(exc),
+                    ),
+                    provider_metadata=outcome.metadata,
+                    attempt=attempt,
+                    attempted=True,
+                )
+                if not isinstance(exc, Exception):
+                    raise
+                return envelope
             return self._finish(
                 call,
-                status=CapabilityStatus.ERROR,
-                error=CapabilityError(
-                    CapabilityErrorCode.HANDLER_ERROR,
-                    "InvalidCapabilityOutcome",
-                    "normalized handler did not return CapabilityOutcome",
-                ),
-                attempt=attempt,
-                attempted=True,
-            )
-        if outcome.error is not None:
-            if outcome.error.code == CapabilityErrorCode.CANCELLED:
-                # A trusted transport/provider cancellation becomes a
-                # broker-owned terminal fact before the finalization cutoff.
-                attempt.cancel()
-            return self._finish(
-                call,
-                status=(
-                    CapabilityStatus.CANCELLED
-                    if outcome.error.code
-                    in {
-                        CapabilityErrorCode.CANCELLED,
-                        CapabilityErrorCode.DEADLINE_EXCEEDED,
-                    }
-                    else CapabilityStatus.ERROR
-                ),
-                error=outcome.error,
+                status=CapabilityStatus.OK,
+                result=frozen_result,
                 provider_metadata=outcome.metadata,
                 attempt=attempt,
                 attempted=True,
             )
-        try:
-            frozen_result = freeze_value(outcome.result)
-        except BaseException as exc:
-            envelope = self._finish(
-                call,
-                status=CapabilityStatus.ERROR,
-                error=CapabilityError(
-                    CapabilityErrorCode.INVALID_RESULT,
-                    _exception_type_name(exc),
-                    str(exc),
-                ),
-                provider_metadata=outcome.metadata,
-                attempt=attempt,
-                attempted=True,
-            )
-            if not isinstance(exc, Exception):
-                raise
-            return envelope
-        return self._finish(
-            call,
-            status=CapabilityStatus.OK,
-            result=frozen_result,
-            provider_metadata=outcome.metadata,
-            attempt=attempt,
-            attempted=True,
-        )
+        finally:
+            with self._active_lock:
+                if self._active_attempts.get(call.call_id) is slot:
+                    del self._active_attempts[call.call_id]
 
     @staticmethod
     def _cooperative_error(exc: BaseException) -> CapabilityError:
@@ -1544,7 +1563,6 @@ class CapabilityBroker:
         provider_metadata: CapabilityMetadata | None = None,
         attempt: _CapabilityAttemptController | None = None,
         attempted: bool = False,
-        remove_active: bool = True,
     ) -> CapabilityResult:
         metadata = provider_metadata or CapabilityMetadata()
         annotation_error: CapabilityError | None = None
@@ -1578,10 +1596,6 @@ class CapabilityBroker:
                     _exception_type_name(exc),
                     str(exc),
                 )
-            finally:
-                if remove_active:
-                    with self._active_lock:
-                        self._active_attempts.pop(call.call_id, None)
         delivery_error: CapabilityError | None = None
         descriptor = self._manifest.find(call.capability_id)
         if status is CapabilityStatus.OK and annotation_error is None and descriptor is not None:

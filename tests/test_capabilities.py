@@ -127,6 +127,22 @@ class _AttemptAuthority:
         return CapabilityMetadata()
 
 
+class _PermissiveAttemptAuthority(_AttemptAuthority):
+    """Records calls without enforcing call-id uniqueness itself."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.admissions: list[str] = []
+        self.admission_entered = Event()
+        self.continue_admission = Event()
+
+    def admit(self, call):
+        self.admissions.append(call.call_id)
+        self.admission_entered.set()
+        assert self.continue_admission.wait(timeout=2)
+        return super().admit(call)
+
+
 def test_manifest_and_envelopes_are_immutable_values() -> None:
     original_arg = {"nested": [1]}
     original_result = {"rows": [{"x": 1}]}
@@ -203,6 +219,178 @@ def test_deadline_before_handler_is_typed_and_releases_at_admission_boundary() -
     assert authority.settlements == [
         (False, CapabilityErrorCode.DEADLINE_EXCEEDED, CapabilityCheckpoint())
     ]
+
+
+def test_call_identity_is_claimed_before_admission() -> None:
+    authority = _PermissiveAttemptAuthority()
+    call = CapabilityCall(QUERY.capability_id, "shared-call", "run-1")
+
+    def handler(context):
+        context.checkpoint(tokens=1)
+        return "ok"
+
+    broker = CapabilityBroker(
+        (CapabilityRegistration(QUERY, handler),),
+        run_id="run-1",
+        attempt_authority=authority,
+    )
+    winner: list[CapabilityResult] = []
+    winner_thread = Thread(target=lambda: winner.append(broker.dispatch(call)))
+    winner_thread.start()
+    assert authority.admission_entered.wait(timeout=2)
+    assert broker.cancel("shared-call") is False
+
+    duplicate = broker.dispatch(call)
+
+    assert duplicate.status is CapabilityStatus.INVALID
+    assert duplicate.error is not None
+    assert duplicate.error.type == "DuplicateCapabilityCall"
+    assert authority.admissions == ["shared-call"]
+    assert authority.checkpoints == []
+    assert authority.settlements == []
+
+    authority.continue_admission.set()
+    winner_thread.join(timeout=2)
+    assert not winner_thread.is_alive()
+    assert len(winner) == 1
+    assert winner[0].ok is True
+    assert authority.checkpoints == [CapabilityCheckpoint(tokens=1)]
+    assert authority.settlements == [(True, None, CapabilityCheckpoint(tokens=1))]
+
+
+def test_call_identity_remains_claimed_through_result_delivery() -> None:
+    authority = _AttemptAuthority()
+    observer_entered = Event()
+    continue_observer = Event()
+    first_success_delivered = Event()
+
+    def observer(result):
+        if result.ok and not first_success_delivered.is_set():
+            observer_entered.set()
+            assert continue_observer.wait(timeout=2)
+            first_success_delivered.set()
+
+    call = CapabilityCall(QUERY.capability_id, "delivering-call", "run-1")
+    broker = CapabilityBroker(
+        (CapabilityRegistration(QUERY, lambda _context: "ok"),),
+        run_id="run-1",
+        attempt_authority=authority,
+        observer=observer,
+    )
+    winner: list[CapabilityResult] = []
+    winner_thread = Thread(target=lambda: winner.append(broker.dispatch(call)))
+    winner_thread.start()
+    assert observer_entered.wait(timeout=2)
+
+    duplicate = broker.dispatch(call)
+    assert duplicate.status is CapabilityStatus.INVALID
+    assert len(authority.settlements) == 1
+
+    continue_observer.set()
+    winner_thread.join(timeout=2)
+    assert not winner_thread.is_alive()
+    assert winner[0].ok is True
+    assert broker.dispatch(call).ok is True
+    assert len(authority.settlements) == 2
+
+
+@pytest.mark.parametrize("first_admission", ["denied", "exception"])
+def test_call_id_can_be_reused_after_admission_refusal(first_admission: str) -> None:
+    class RefusingOnceAuthority(_AttemptAuthority):
+        def __init__(self) -> None:
+            super().__init__()
+            self.admissions = 0
+
+        def admit(self, call):
+            self.admissions += 1
+            if self.admissions == 1:
+                if first_admission == "exception":
+                    raise RuntimeError("admission failed")
+                return CapabilityError(
+                    CapabilityErrorCode.BUDGET_EXHAUSTED,
+                    "BudgetExhausted",
+                    "not admitted",
+                )
+            return super().admit(call)
+
+    authority = RefusingOnceAuthority()
+    call = CapabilityCall(QUERY.capability_id, "reusable-call", "run-1")
+    broker = CapabilityBroker(
+        (CapabilityRegistration(QUERY, lambda _context: "ok"),),
+        run_id="run-1",
+        attempt_authority=authority,
+    )
+
+    refused = broker.dispatch(call)
+    reused = broker.dispatch(call)
+
+    assert refused.status is CapabilityStatus.DENIED
+    assert reused.ok is True
+    assert authority.admissions == 2
+    assert authority.settlements == [(True, None, CapabilityCheckpoint())]
+
+
+def test_call_id_can_be_reused_after_completed_or_failed_attempt() -> None:
+    authority = _AttemptAuthority()
+    outcomes = iter((RuntimeError("handler failed"), "ok", "ok again"))
+
+    def handler(_context):
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    call = CapabilityCall(QUERY.capability_id, "reusable-call", "run-1")
+    broker = CapabilityBroker(
+        (CapabilityRegistration(QUERY, handler),),
+        run_id="run-1",
+        attempt_authority=authority,
+    )
+
+    failed = broker.dispatch(call)
+    completed = broker.dispatch(call)
+    completed_again = broker.dispatch(call)
+
+    assert failed.status is CapabilityStatus.ERROR
+    assert completed.ok is True
+    assert completed_again.ok is True
+    assert authority.settlements == [
+        (True, CapabilityErrorCode.HANDLER_ERROR, CapabilityCheckpoint()),
+        (True, None, CapabilityCheckpoint()),
+        (True, None, CapabilityCheckpoint()),
+    ]
+
+
+def test_process_control_from_admission_releases_call_identity() -> None:
+    class Stop(BaseException):
+        pass
+
+    class InterruptingOnceAuthority(_AttemptAuthority):
+        def __init__(self) -> None:
+            super().__init__()
+            self.admissions = 0
+
+        def admit(self, call):
+            self.admissions += 1
+            if self.admissions == 1:
+                raise Stop()
+            return super().admit(call)
+
+    authority = InterruptingOnceAuthority()
+    call = CapabilityCall(QUERY.capability_id, "reusable-call", "run-1")
+    broker = CapabilityBroker(
+        (CapabilityRegistration(QUERY, lambda _context: "ok"),),
+        run_id="run-1",
+        attempt_authority=authority,
+    )
+
+    with pytest.raises(Stop):
+        broker.dispatch(call)
+    reused = broker.dispatch(call)
+
+    assert reused.ok is True
+    assert authority.admissions == 2
+    assert authority.settlements == [(True, None, CapabilityCheckpoint())]
 
 
 def test_typed_provider_deadline_uses_cancelled_status() -> None:
