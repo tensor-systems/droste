@@ -1,12 +1,12 @@
 [project]
 name = "droste"
 version = "0.10.6"
-description = "The recursive harness for your data — ask questions over files, folders, and SQLite with a recursive language model (RLM)"
+description = "Recursive analysis engine for data too large for a context window, built with Recursive Language Models (RLMs)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Tensor Systems" }]
-keywords = ["rlm", "recursive-language-model", "llm", "agents", "map-reduce", "cli"]
+keywords = ["rlm", "recursive-language-model", "recursive-analysis", "long-context", "data-analysis", "cli"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",

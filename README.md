@@ -5,25 +5,37 @@
 
 # Droste
 
-**The recursive harness for your data.**
+**A recursive analysis engine for data too large for a context window.**
 
-Droste is a [Recursive Language Model](https://alexzhang13.github.io/blog/2025/rlm/)
-(RLM) engine: instead of stuffing your data into a context window, the model
-gets it as a **variable in a sandboxed Python REPL**. It inspects the data,
-writes code over it, and fans out `llm_query` / `llm_query_batched` subcalls
-over the pieces that need semantic judgment — map-reduce, where the model
-writes both the map and the reduce.
+Droste is an open execution engine built on the
+[Recursive Language Model](https://alexzhang13.github.io/blog/2025/rlm/) (RLM)
+technique. Instead of putting an entire corpus in a prompt, Droste exposes it as
+a **variable in a sandboxed Python REPL**. The model writes programs over that
+variable and delegates bounded pieces that need semantic judgment through
+`llm_query` / `llm_query_batched`.
 
-Coding harnesses bolt a model onto a transcript. Droste harnesses it to data.
+## Not a general-purpose agent
+
+General coding and tool agents choose actions across open-ended tasks. When
+they retrieve material, the observations return through the model's
+conversation context. Droste has a narrower job: run model-written programs
+over a corpus, use Python or SQL for exact computation, and send only selected
+semantic work to model subcalls. Its program may print excerpts into context,
+but the full corpus does not have to pass through the context window.
+
+This separation keeps the mechanism explicit: code locates and aggregates;
+subcalls interpret bounded inputs; the root model assembles the answer within
+configured iteration, subcall, and output limits.
 
 ```bash
 uvx droste "which customer had a failed charge, and why?" server.log
 uvx droste "which plan has the highest refund rate vs its MRR?" shop.db
+uvx droste "how do the authentication flows differ?" ./docs
 ```
 
 ![droste answering a two-part question over a 444 kB server log, streaming its code as it works](docs/assets/demo.gif)
 
-The first example, against a 444 kB log with `gemini-3.5-flash`:
+The first example runs against a 444 kB log:
 
 ```
 $ droste "Which customer had a failed charge, for what amount, and why?
@@ -46,46 +58,38 @@ introspects your schema, writes read-only SQL, and computes over the rows;
 in the demo above it noticed the free plan makes refund-rate-vs-MRR
 undefined and answered for the paid plans instead.
 
-## Why
+## Why this structure
 
-Two things, at once: **better answers and bounded cost.**
+Mechanical work stays mechanical: regex and SQL find *where*, model subcalls
+interpret *what*, and code combines the results. The root can inspect the
+shape of the corpus, narrow it without model calls, and fan out only when a
+step requires semantic judgment.
 
-**Better answers.** Long-context models read everything and still miss
-things. Retrieval finds the right chunk but can't compute across all of
-them. An RLM does what you would do: look at the shape of the data, narrow
-mechanically (regex and SQL find *where*; subcalls understand *what*),
-delegate semantic judgment in bounded batches, and aggregate in code.
+Execution is bounded by explicit iteration, subcall, and output limits. Root
+and subcall models can be configured independently. These controls make the
+work observable and limitable; they are not a promise of a particular answer
+quality, latency, or price, which depend on the data, models, and endpoint.
 
-**Bounded cost.** The naive version of this loop is ruinous — left to
-itself, one subcall spent 62,911 thinking tokens producing a 4-token
-answer, and tasks cost $4–6 each. Subcall work is extraction, not
-reasoning: with subcall reasoning off and the default 2,048-token output
-cap, the same tasks measured **~25× cheaper** at the same accuracy. The
-cap is a client default; reasoning-off is enforced server-side on
-ModelRelay and passed through on BYOK (`--reasoning-effort none`, for
-endpoints that honor it). And because the root writes the map *and* the
-reduce, you can put a strong model at the root and a cheap one in the
-fan-out (`--model gemini-3.5-pro --subcall-model gemini-3.5-flash`) —
-a few expensive tokens where judgment happens, thousands of cheap ones
-where reading happens.
+## Reproducible evidence
 
-Measured on OOLONG (131k-token contexts, 50 tasks, `gemini-3.5-flash`
-everywhere):
+The repository ships a [versioned benchmark harness](benchmarks/README.md),
+immutable per-task artifact schemas, deterministic scorers, and report
+generation. A zero-cost smoke run checks the artifact and reporting path
+without making network calls:
 
-| approach | score | cost/task | wall/task |
-|---|---|---|---|
-| **Droste** (server defaults) | **0.84** | ~$0.37 | 27s |
-| same model, full context inline | 0.52 | ~$0.26 | 44s |
-| dspy.RLM (matched models & budgets) | 0.74 | ~$0.26 | 73s |
+```bash
+output="$(mktemp -d)/droste-benchmark-smoke"
+uv run python -m benchmarks smoke --output "$output"
+```
 
-+32 points over stuffing the window, at comparable cost. On
-[TAG-Bench](https://github.com/TAG-Research/TAG-Bench) (agentic analysis
-over SQL), Droste scores **50%** strict-match where published text-to-SQL
-baselines sit under 20% — no pipeline, just `droste` pointed at the .db file.
-
-<sub>Caveats: one dataset per benchmark, one context length, one model
-family, n=50. Per-task artifacts and cost derivations ship with the
-benchmark harness.</sub>
+The smoke run validates the machinery, not model quality. Today the
+[suite manifest](benchmarks/manifests/rlm-paper-v1.json) has one ready dataset:
+a pinned 50-task, 131K-token OOLONG slice that must be materialized from its
+public source. Its live arms remain blocked until a public model configuration
+and immutable results are published; the other named benchmark families remain
+`planned`. This README therefore does not present score, cost, or latency
+numbers as reproducible results. Publishing the configuration, artifacts, and
+reports is tracked in [#81](https://github.com/tensor-systems/droste/issues/81).
 
 ## Use it
 
@@ -133,10 +137,10 @@ answer.
 Three worked starting points live in [docs/recipes.md](docs/recipes.md)
 (logs, chat archives, SQLite).
 
-Pointing `--base-url` at ModelRelay lights up the platform features
-(validated SQL policies, server-enforced subcall cost controls, audit) —
-documented, not required. `droste` is the engine CLI; `mrl` remains the
-ModelRelay platform CLI.
+Droste is the open execution engine. Compatible hosted gateways and control
+planes can add authentication, server-enforced policy and cost limits, and
+audit around it; those services are integrations, not part of the engine.
+Use `--base-url` to select a compatible endpoint.
 
 ## Embed it
 
@@ -157,8 +161,8 @@ The engine ships built-in clients for any endpoint that speaks the OpenAI
 chat-completions shape (OpenAI, OpenRouter, Google's OpenAI-compat endpoint,
 vLLM, Ollama, ...) — plus a native client for Anthropic's Messages API
 (their compat layer is a testing shim, so Claude gets its own client).
-Bring your own key — no ModelRelay account required. The CLI detects the
-provider from facts: an `sk-ant-…` key (or `ANTHROPIC_API_KEY`) routes to
+Bring your own key — no hosted account required. The CLI detects the provider
+from facts: an `sk-ant-…` key (or `ANTHROPIC_API_KEY`) routes to
 Anthropic; an explicit `--base-url`/`OPENAI_BASE_URL` always wins.
 
 ```bash
@@ -191,14 +195,15 @@ variables. Subcall batches run with bounded concurrency (5 workers) and every
 subcall's usage block is added to `result.tokens_used`.
 
 `reasoning_effort` and `extra_body` pass through to the endpoint as-is.
-Disabling thinking per-subcall is a gateway capability: ModelRelay enforces
-it server-side; raw endpoints may ignore a client-side disable.
+Disabling thinking per-subcall is a gateway capability: a compatible gateway
+may enforce it server-side, while raw endpoints may ignore a client-side
+disable.
 
 ### Runner architecture (droste_runner)
 
 The `droste_runner` package is a thin orchestration layer that wires `droste` to
-HTTP-backed root LLM calls and subcalls. It is shared across hosts (ModelRelay's
-hosted runner, in-process embedders) so the loop logic stays in one place. For custom environments,
+HTTP-backed root LLM calls and subcalls. It is shared across hosted and
+in-process embedders so the loop logic stays in one place. For custom environments,
 set `adapter_module` in the runner request to delegate to an adapter module's
 `run(request)` function.
 

@@ -58,8 +58,9 @@ evidence with that status rather than leaving the model to interpret prefixes.
   differs from the selected manifest.
 - Store cost as integer micro-US dollars and root/subcall usage separately.
   Failures and timeouts remain typed artifacts; never omit them from aggregates.
-- The live OpenAI benchmark gate was cleared on 2026-07-13 after deployment and
-  end-to-end verification of `reasoning_effort=none`.
+- Keep unpublished live arms blocked. Enabling them requires a public model
+  configuration and an end-to-end check that response usage reflects the
+  requested reasoning settings.
 
 ## LLM Client Protocol
 
@@ -173,6 +174,14 @@ gate — a public workflow would have to enumerate the very vocabulary it
 exists to keep out. Check manually with `git grep -i` over the terms you
 know are internal before pushing prose or comments that discuss hosts or
 embedders; CI still scans for committed key material.
+
+Keep public positioning consistent across the README, package description, and
+repository description: Droste is a recursive analysis engine for data too
+large for a context window, and RLM is the technique. Explain its structure
+without naming buyers, hosts, or competitors. Quantitative claims must link to
+version-matched reports and immutable artifacts; otherwise state the evidence
+limit instead. Factual compatibility documentation may name a protocol or API
+class when readers need it to configure the engine.
 
 ## Publishing
 
