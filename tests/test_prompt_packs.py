@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import subprocess
 import sys
 import tomllib
 from dataclasses import FrozenInstanceError, replace
 from importlib.resources import files
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -18,11 +20,14 @@ from droste.prompts import (
     PromptPackBinding,
     PromptPackCatalog,
     PromptPackError,
+    PromptPackRecord,
     PromptPolicyDefaults,
     PromptSlots,
+    canonical_prompt_pack_bytes,
     load_builtin_prompt_catalog,
     load_prompt_pack,
     parse_prompt_pack,
+    prompt_pack_content_sha256,
     render_prompt_template,
     resolve_prompt_pack,
 )
@@ -34,6 +39,14 @@ from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSub
 def _artifact_data() -> dict[str, Any]:
     resource = files("droste.prompts").joinpath("packs", "generic-full-v1.toml")
     return tomllib.loads(resource.read_text(encoding="utf-8"))
+
+
+def _reverse_key_order(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _reverse_key_order(item) for key, item in reversed(tuple(value.items()))}
+    if isinstance(value, list):
+        return [_reverse_key_order(item) for item in value]
+    return value
 
 
 def _response(text: str) -> MockResponse:
@@ -168,6 +181,145 @@ def test_builtin_catalog_loads_complete_immutable_profiles_from_resources() -> N
     assert len({binding.pack.unable_sentinel for binding in catalog.bindings}) == 1
     with pytest.raises(FrozenInstanceError):
         catalog.bindings[0].pack.revision = "mutated"  # type: ignore[misc]
+
+
+def test_canonical_pack_hash_is_order_independent_and_stable_across_processes() -> None:
+    data = _artifact_data()
+    pack = parse_prompt_pack(data)
+    reordered = parse_prompt_pack(_reverse_key_order(data))
+    expected = prompt_pack_content_sha256(pack)
+
+    assert canonical_prompt_pack_bytes(pack) == canonical_prompt_pack_bytes(reordered)
+    assert prompt_pack_content_sha256(reordered) == expected
+    assert len(expected) == 64
+    assert expected == expected.lower()
+
+    check = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from droste.prompts import load_builtin_prompt_catalog, "
+            "prompt_pack_content_sha256; "
+            "print(prompt_pack_content_sha256(load_builtin_prompt_catalog().bindings[0].pack))",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert check.returncode == 0, check.stderr
+    assert check.stdout.strip() == expected
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda pack: replace(pack, pack_id=pack.pack_id + ".changed"),
+        lambda pack: replace(pack, revision=pack.revision + ".changed"),
+        lambda pack: replace(pack, profile="alternate"),
+        lambda pack: replace(pack, unable_sentinel=pack.unable_sentinel + " changed"),
+        lambda pack: replace(pack, tips=pack.tips + ("new tip",)),
+        lambda pack: replace(
+            pack,
+            templates=replace(
+                pack.templates,
+                system=pack.templates.system + "\nQuestion context: {question}",
+            ),
+        ),
+        lambda pack: replace(
+            pack,
+            policy_defaults=replace(pack.policy_defaults, enforce_contract=False),
+        ),
+        lambda pack: replace(
+            pack,
+            provenance=replace(pack.provenance, notes=pack.provenance.notes + " changed"),
+        ),
+        lambda pack: replace(
+            pack,
+            provenance=replace(pack.provenance, source=pack.provenance.source + ".changed"),
+        ),
+        lambda pack: replace(
+            pack,
+            provenance=replace(pack.provenance, benchmark="bench-v2", score="accuracy=1"),
+        ),
+    ],
+)
+def test_every_semantic_pack_value_changes_the_content_hash(mutate: Any) -> None:
+    pack = parse_prompt_pack(_artifact_data())
+
+    assert prompt_pack_content_sha256(mutate(pack)) != prompt_pack_content_sha256(pack)
+
+
+@pytest.mark.parametrize(
+    "template_name",
+    [
+        "system",
+        "user",
+        "refinement",
+        "missing_code_repair",
+        "error_repair",
+        "extract_system",
+        "extract_user",
+    ],
+)
+def test_every_template_participates_in_the_content_hash(template_name: str) -> None:
+    pack = parse_prompt_pack(_artifact_data())
+    changed_templates = replace(
+        pack.templates,
+        **{template_name: getattr(pack.templates, template_name) + "\nchanged"},
+    )
+
+    assert prompt_pack_content_sha256(
+        replace(pack, templates=changed_templates)
+    ) != prompt_pack_content_sha256(pack)
+
+
+def test_canonical_projection_fails_closed_when_semantic_shape_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack = parse_prompt_pack(_artifact_data())
+    original_fields = dataclasses.fields
+
+    def changed_fields(value: Any) -> Any:
+        result = original_fields(value)
+        if value is PromptPolicyDefaults:
+            return result + (SimpleNamespace(name="future_policy"),)
+        return result
+
+    monkeypatch.setattr("droste.prompts.pack.fields", changed_fields)
+
+    with pytest.raises(PromptPackError, match="projection is incomplete"):
+        canonical_prompt_pack_bytes(pack)
+
+
+def test_optional_declared_hash_is_validated_but_not_part_of_canonical_content() -> None:
+    data = _artifact_data()
+    expected = prompt_pack_content_sha256(parse_prompt_pack(data))
+    declared = copy.deepcopy(data)
+    declared["content_sha256"] = expected
+
+    parsed = parse_prompt_pack(declared, source="declared-pack")
+
+    assert prompt_pack_content_sha256(parsed) == expected
+    mismatched = copy.deepcopy(declared)
+    mismatched["content_sha256"] = "0" * 64
+    with pytest.raises(PromptPackError, match="does not match validated"):
+        parse_prompt_pack(mismatched, source="declared-pack")
+    uppercase = copy.deepcopy(declared)
+    uppercase["content_sha256"] = expected.upper()
+    with pytest.raises(PromptPackError, match="64 lowercase hex"):
+        parse_prompt_pack(uppercase, source="declared-pack")
+    null_digest = copy.deepcopy(data)
+    null_digest["content_sha256"] = None
+    with pytest.raises(PromptPackError, match="64 lowercase hex"):
+        parse_prompt_pack(null_digest, source="declared-pack")
+
+
+def test_direct_prompt_pack_records_preserve_compatibility_and_validate_hashes() -> None:
+    legacy_record = PromptPackRecord("pack-id", "1", "full", "caller", "generic", "test")
+
+    assert legacy_record.content_sha256 is None
+    with pytest.raises(PromptPackError, match="64 lowercase hex"):
+        replace(legacy_record, content_sha256="A" * 64)
 
 
 def test_importing_droste_does_not_materialize_legacy_prompt_projections() -> None:
@@ -314,6 +466,7 @@ def test_resolution_is_deterministic_across_every_fallback_tier() -> None:
         "consumer.openai",
         "consumer_model_family",
     )
+    assert resolved.record().content_sha256 == prompt_pack_content_sha256(consumer_family)
 
     resolved = resolve_prompt_pack(
         model="custom-model",
@@ -325,12 +478,14 @@ def test_resolution_is_deterministic_across_every_fallback_tier() -> None:
         "consumer.generic",
         "consumer_generic",
     )
+    assert resolved.record().content_sha256 == prompt_pack_content_sha256(consumer_generic)
 
     resolved = resolve_prompt_pack(model="claude-opus-4-8", profile="full", engine_catalog=engine)
     assert (resolved.pack.pack_id, resolved.tier) == (
         "engine.anthropic",
         "engine_model_family",
     )
+    assert resolved.record().content_sha256 == prompt_pack_content_sha256(engine_family)
 
     resolved = resolve_prompt_pack(
         model="unknown-model", profile="not-defined", engine_catalog=engine
@@ -340,6 +495,7 @@ def test_resolution_is_deterministic_across_every_fallback_tier() -> None:
         "full",
         "generic",
     )
+    assert resolved.record().content_sha256 == prompt_pack_content_sha256(resolved.pack)
 
     resolved = resolve_prompt_pack(
         model="gpt-5",
@@ -400,6 +556,7 @@ def test_run_uses_one_caller_pack_and_records_its_provenance() -> None:
         "provenance_source": "droste",
         "provenance_benchmark": None,
         "provenance_score": None,
+        "content_sha256": prompt_pack_content_sha256(caller),
     }
 
 

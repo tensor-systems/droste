@@ -33,7 +33,8 @@ Packs are TOML so loading needs no runtime dependency. `schema_version`, `id`,
 `revision`, `profile`, every template, a positive provenance statement, the
 unable sentinel, tips, and typed policy defaults are required. Unknown fields
 fail closed to catch misspellings. A benchmark and score are optional, but must
-appear together.
+appear together. An optional top-level `content_sha256` may declare the expected
+canonical digest; loading rejects a malformed or mismatched declaration.
 
 ```toml
 schema_version = 1
@@ -68,6 +69,24 @@ extract_user = """Question: {question}
 
 Literal braces authored in a template use normal Python-format escaping (`{{`
 and `}}`). Braces in slot values need no escaping.
+
+## Canonical content identity
+
+`canonical_prompt_pack_bytes(pack)` validates the frozen pack, projects its
+complete semantic value, and serializes that value as UTF-8 JSON. Object keys
+are sorted lexicographically, JSON separators contain no whitespace, Unicode is
+encoded directly rather than escaped, and no trailing newline is added. The
+value includes schema version, authored ID and revision, profile, unable
+sentinel, ordered tips, every template, policy defaults, and all provenance
+fields. Optional provenance fields are represented as JSON `null` when absent.
+Authored string whitespace and list order are content and therefore affect the
+digest; TOML key ordering and formatting do not.
+
+`prompt_pack_content_sha256(pack)` returns the lowercase SHA-256 hex digest of
+those canonical bytes. A declared `content_sha256` is an assertion about that
+digest, not part of the semantic pack value, so it is excluded from the bytes
+being hashed. Both functions are pure and perform no filesystem or package
+resource I/O.
 
 ## Loading and resolution
 
@@ -117,6 +136,6 @@ work; new integrations should provide a complete caller pack instead of creating
 partial combinations.
 
 Every `RLMResult` carries a frozen `PromptPackRecord` with pack ID, revision,
-profile, resolution tier, model family, and benchmark provenance. The built-in
-runner and CLI JSON expose that record as `prompt_pack`. It is an additive result
-field, not a new trace protocol.
+canonical `content_sha256`, profile, resolution tier, model family, and safe
+benchmark provenance. The built-in runner and CLI JSON expose that record as
+`prompt_pack`. It is an additive result field, not a new trace protocol.

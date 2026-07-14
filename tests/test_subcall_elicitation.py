@@ -333,6 +333,15 @@ def test_runner_complete_default_budget_allows_subcalls() -> None:
     assert response["subcalls"] == 1
     assert response["prompt_pack"]["id"] == "droste.generic.full"
     assert response["prompt_pack"]["revision"] == "1.0.2"
+    assert response["prompt_pack"]["profile"] == "full"
+    assert response["prompt_pack"]["resolution_tier"] == "generic"
+    assert response["prompt_pack"]["model_family"] == "generic"
+    assert response["prompt_pack"]["provenance_source"] == "droste"
+    assert len(response["prompt_pack"]["content_sha256"]) == 64
+    assert (
+        response["prompt_pack"]["content_sha256"]
+        == response["prompt_pack"]["content_sha256"].lower()
+    )
 
 
 def test_runner_zero_subcall_budget_is_honored() -> None:

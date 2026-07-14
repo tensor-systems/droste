@@ -13,6 +13,22 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.10.6)
 
+### Prompt-pack provenance includes canonical content identity
+
+Every resolved `PromptPackRecord` and its CLI, runner, report, and trace result
+projection now includes the additive `content_sha256` field. It is the lowercase
+SHA-256 digest of a pure canonical UTF-8 JSON serialization of the complete
+validated pack value; prompt text itself is not added to result provenance.
+Callers that construct `PromptPackRecord` directly remain source-compatible
+because the new field is optional there, while records produced by the resolver
+always populate it.
+
+Prompt-pack TOML may declare an optional top-level `content_sha256`. Loaders now
+reject malformed declarations and declarations that do not match the validated
+content. Existing artifacts without a declaration continue to load unchanged.
+See `docs/prompt-packs.md` for the canonicalization rules and public helper
+functions. The runner protocol version is unchanged.
+
 ### Capability handlers receive one execution context (breaking)
 
 Trusted capability and `ProviderRuntime` handlers now have the single required

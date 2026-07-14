@@ -78,7 +78,7 @@ jobs:
               echo "wheel is missing droste/substrates/_relay/$f"; exit 1;
             }
           done
-      - name: Wheel bundles and loads prompt packs (#78)
+      - name: Wheel bundles and hashes prompt packs (#103)
         run: |
           for f in generic-full-v1.toml generic-minimal-v1.toml generic-none-v1.toml; do
             unzip -l dist/*.whl | grep -q "droste/prompts/packs/$f" || {
@@ -88,8 +88,36 @@ jobs:
           tmp="$(mktemp -d)"
           uv venv "$tmp/venv"
           uv pip install --python "$tmp/venv/bin/python" dist/*.whl
-          "$tmp/venv/bin/python" -c \
-            'from droste.prompts.pack import load_builtin_prompt_catalog; assert len(load_builtin_prompt_catalog().bindings) == 3'
+          "$tmp/venv/bin/python" - "$PWD/src/droste/prompts/packs" <<'PY'
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          from droste.prompts import (
+              load_builtin_prompt_catalog,
+              parse_prompt_pack,
+              prompt_pack_content_sha256,
+          )
+
+          source_dir = Path(sys.argv[1])
+          catalog = load_builtin_prompt_catalog()
+          assert len(catalog.bindings) == 3
+          wheel_packs = {binding.pack.pack_id: binding.pack for binding in catalog.bindings}
+          assert len(wheel_packs) == len(catalog.bindings)
+          filenames = (
+              "generic-full-v1.toml",
+              "generic-minimal-v1.toml",
+              "generic-none-v1.toml",
+          )
+          for filename in filenames:
+              source = parse_prompt_pack(
+                  tomllib.loads((source_dir / filename).read_text(encoding="utf-8")),
+                  source=str(source_dir / filename),
+              )
+              assert prompt_pack_content_sha256(source) == prompt_pack_content_sha256(
+                  wheel_packs[source.pack_id]
+              )
+          PY
 
   deno:
     name: deno (pyodide substrate)
