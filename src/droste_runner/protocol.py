@@ -3,11 +3,33 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
+from droste.execution.manifest import ScaffoldCompatibilityError
 from droste.execution.report import project_result
+from droste.loop.rlm import RLMPreflight
 
-RUNNER_PROTOCOL_VERSION = 3
+RUNNER_PROTOCOL_VERSION = 4
+
+
+class RunnerOperation(str, Enum):
+    """The explicit operation selected at the runner boundary."""
+
+    RUN = "run"
+    PREFLIGHT = "preflight"
+
+
+def resolve_operation(request: dict[str, Any]) -> RunnerOperation:
+    """Resolve the additive operation field; absence preserves normal execution."""
+
+    raw = request.get("operation", RunnerOperation.RUN.value)
+    if not isinstance(raw, str):
+        raise ValueError("request.operation must be 'run' or 'preflight'")
+    try:
+        return RunnerOperation(raw)
+    except ValueError as exc:
+        raise ValueError("request.operation must be 'run' or 'preflight'") from exc
 
 
 @dataclass(frozen=True)
@@ -28,6 +50,7 @@ def build_response(
     requested_model: str = "",
     data_source_requests: int | None = None,
     status: str | None = None,
+    operation: RunnerOperation | None = RunnerOperation.RUN,
 ) -> dict[str, Any]:
     """Build both refusal and completed-run envelopes from one field list."""
     root_metadata = metadata or RootResponseMetadata()
@@ -49,6 +72,7 @@ def build_response(
         "run_record": None,
         "run_id": None,
         "status": status or "error",
+        "operation": operation.value if operation is not None else None,
         "protocol_version": RUNNER_PROTOCOL_VERSION,
         "provider": root_metadata.provider,
         "response_id": root_metadata.response_id,
@@ -75,6 +99,59 @@ def build_response(
     return response
 
 
+def build_preflight_response(
+    *,
+    result: RLMPreflight | None = None,
+    error: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the content-free, versioned response for scaffold preflight."""
+
+    if (result is None) == (error is None):
+        raise ValueError("preflight response requires exactly one of result or error")
+    return {
+        "protocol_version": RUNNER_PROTOCOL_VERSION,
+        "operation": RunnerOperation.PREFLIGHT.value,
+        "status": "success" if result is not None else "refusal",
+        "preflight": result.as_dict() if result is not None else None,
+        "error": error,
+    }
+
+
+def build_scaffold_refusal(exc: ScaffoldCompatibilityError) -> dict[str, Any]:
+    """Project the public compatibility error without requiring prose parsing."""
+
+    return build_preflight_response(
+        error={
+            "type": "ScaffoldCompatibilityError",
+            "code": "scaffold_incompatible",
+            "message": str(exc),
+            "details": {"mismatches": [item.as_dict() for item in exc.mismatches]},
+        }
+    )
+
+
+def build_operation_refusal(
+    message: str,
+    *,
+    operation: RunnerOperation | None = None,
+    code: str = "operation_invalid",
+) -> dict[str, Any]:
+    """Reject an invalid operation before request-specific work starts."""
+
+    return {
+        "protocol_version": RUNNER_PROTOCOL_VERSION,
+        "operation": operation.value if operation is not None else None,
+        "status": "refusal",
+        "preflight": None,
+        "error": {
+            "type": "RunnerOperationError",
+            "code": code,
+            "message": message,
+            "details": {"supported": [item.value for item in RunnerOperation]},
+        },
+    }
+
+
 def _protocol_error_response(requested: object, error_type: str) -> dict[str, Any]:
     """The versioned refusal: minimal envelope, structured error, no work done."""
     if error_type == "protocol_version_missing":
@@ -90,6 +167,7 @@ def _protocol_error_response(requested: object, error_type: str) -> dict[str, An
         )
     return build_response(
         status="refusal",
+        operation=None,
         error={
             "type": error_type,
             "message": message,
@@ -115,6 +193,7 @@ def build_exception_response(exc: Exception, traceback_text: str) -> dict[str, A
     """Build the version-stamped worker exception envelope."""
     return build_response(
         status="error",
+        operation=None,
         error={
             "type": exc.__class__.__name__,
             "message": str(exc),

@@ -181,6 +181,52 @@ HTTP clients, remote source transport, envelope helpers, and orchestration in
 Both successful and refused envelopes are shaped by
 `protocol.build_response`, so their shared fields cannot drift.
 
+### Scaffold preflight
+
+Hosts may set `"operation": "preflight"` to resolve and validate the exact
+effective scaffold before authorizing inference. Omitting `operation` preserves
+the normal `"run"` behavior. Preflight requires the same budget, model,
+rollout, PromptPack selector, provider configuration, sandbox configuration,
+and optional `checkpoint_scaffold_requirements` as execution, but it does not
+require root/subcall endpoints or a token.
+
+The engine and runner share one resolver for PromptPack selection, policy
+defaults, environment globals, capability manifest, rollout configuration,
+scaffold construction, and `ScaffoldCompatibilityError`. A successful response
+is intentionally a separate, content-free envelope:
+
+```json
+{
+  "protocol_version": 4,
+  "operation": "preflight",
+  "status": "success",
+  "preflight": {
+    "schema_version": 1,
+    "scaffold_manifest": {"schema_version": 1, "id": "sha256:..."}
+  },
+  "error": null
+}
+```
+
+The abbreviated manifest above is illustrative; the actual response carries
+the complete `ScaffoldManifest`. It never carries the question, context,
+rendered prompt prose, answer, trajectory, trace, run identity, or usage. A
+checkpoint mismatch returns `status: "refusal"`, no preflight result, and a
+typed `ScaffoldCompatibilityError` with code `scaffold_incompatible` and
+structured mismatch paths. Hosts can therefore distinguish a policy refusal
+from worker or transport failure without parsing an error message. Preflight
+installs no event sink and uses a fail-if-called capability placeholder; root,
+subcall, and configured-provider callbacks cannot be dispatched.
+
+Configured providers are projected from their immutable registration manifest,
+effect policy, source type, and source name. Preflight deliberately does not
+invoke live provider binders: binders may open files, databases, or network
+connections, while those runtime resources and task data do not participate in
+the scaffold identity. Normal execution binds the same descriptors to their
+live handlers for the run. Refusals or worker errors that occur before
+an operation result is produced carry `operation: null`; successful runs and
+typed preflight compatibility refusals carry their accepted discriminant.
+
 Completed responses also carry the policy-resolved
 [Trace ABI v1](trace-abi.md) `run_record`. Live events and terminal records use
 the same strict envelope and projection. Persistence remains a host I/O
@@ -201,7 +247,7 @@ unchanged; it does not choose another concurrency policy.
 **Versioned boundary**: the request/response schema and provider contract
 are versioned, each by a single integer:
 
-- `RUNNER_PROTOCOL_VERSION` (currently 3) governs the request/response
+- `RUNNER_PROTOCOL_VERSION` (currently 4) governs the request/response
   envelope. Every request **must** carry `protocol_version` — requests are
   self-describing, the same discipline as JSON-RPC's mandatory `"jsonrpc"`
   field. A missing or mismatched version is answered with a structured
@@ -210,8 +256,13 @@ are versioned, each by a single integer:
   failing on a missing field. Responses carry `protocol_version`: the
   engine stamps its own everywhere except an `adapter_module` response
   that already claimed one (adapters own their response shape).
-  Protocol v3 also requires one exact six-field `budget` object; missing,
+  Protocol v4 requires one exact six-field `budget` object; missing,
   unknown, or invalid fields fail before endpoint dispatch.
+  Protocol v4 adds the `operation` discriminant and typed preflight response.
+  The bump is required for safety: a v3 runner could ignore an unknown
+  `operation` field and execute a request that a v4 host intended only to
+  inspect. Old runners instead reject v4 at the version gate before endpoints,
+  credentials, provider binding, or work.
 - `PROVIDER_PROTOCOL_VERSION` (currently 4) governs manifest parsing,
   context-first provider binding, and bridge invocation facts. A mismatched
   manifest fails before a source is live.

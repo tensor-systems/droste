@@ -9,11 +9,13 @@ from droste import (
     Budget,
     EngineIdentity,
     RLMConfig,
+    RLMPreflight,
     RolloutConfiguration,
     SandboxLimits,
     ScaffoldCompatibilityError,
     ScaffoldManifest,
     ScaffoldRequirements,
+    preflight_rlm,
     run_rlm,
 )
 from droste.capabilities import (
@@ -203,6 +205,41 @@ def test_partial_compatibility_mismatch_is_typed_and_actionable() -> None:
     assert exc_info.value.mismatches[0].actual == "root-rev"
 
 
+def test_preflight_value_round_trips_strictly() -> None:
+    value = RLMPreflight(_manifest())
+
+    assert RLMPreflight.from_dict(value.as_dict()) == value
+    with pytest.raises(ValueError, match="unknown host_metadata"):
+        RLMPreflight.from_dict({**value.as_dict(), "host_metadata": {}})
+
+
+def test_preflight_closes_environment_once_on_success_and_mismatch() -> None:
+    class CloseTrackingEnvironment(MockEnvironment):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_count = 0
+
+        def close(self) -> None:
+            self.close_count += 1
+
+    success_environment = CloseTrackingEnvironment()
+    preflight_rlm(environment=success_environment, config=RLMConfig(root_model="root-model"))
+    assert success_environment.close_count == 1
+
+    mismatch_environment = CloseTrackingEnvironment()
+    with pytest.raises(ScaffoldCompatibilityError):
+        preflight_rlm(
+            environment=mismatch_environment,
+            config=RLMConfig(
+                root_model="root-model",
+                checkpoint_requirements=ScaffoldRequirements(
+                    required={"prompt_pack": {"revision": "not-this-revision"}}
+                ),
+            ),
+        )
+    assert mismatch_environment.close_count == 1
+
+
 def test_checkpoint_manifest_id_requires_lowercase_sha256_hex() -> None:
     for invalid in (
         "sha256:" + "g" * 64,
@@ -275,7 +312,7 @@ def test_run_exposes_manifest_but_durable_terminal_keeps_identity_only() -> None
     assert marker not in str(result.run_record.as_dict())
 
 
-def test_native_and_pyodide_resolve_the_same_scaffold() -> None:
+def test_native_and_pyodide_preflight_matches_execution_without_subcalls() -> None:
     budget = Budget()
     sandbox = SandboxLimits(execution_timeout_ms=0)
     rollout = RolloutConfiguration(
@@ -297,30 +334,64 @@ def test_native_and_pyodide_resolve_the_same_scaffold() -> None:
             host_managed_timeout=kind == "pyodide",
             host_managed_isolation=kind == "pyodide",
         )
-        context = create_environment_context(config)
-        subcalls = MockSubcallClient()
-        environment = create_environment(
+        preflight_context = create_environment_context(config)
+
+        class CountingSubcalls(MockSubcallClient):
+            calls = 0
+
+            def llm_query(self, prompt: str, context: str = "") -> str:
+                self.calls += 1
+                return super().llm_query(prompt, context)
+
+            def llm_batch(self, prompts: list[str], contexts: list[str] | None = None) -> list[str]:
+                self.calls += 1
+                return super().llm_batch(prompts, contexts)
+
+        preflight_subcalls = CountingSubcalls()
+        preflight_environment = create_environment(
             config,
-            context={"records": []},
+            context={"private": "PREVIEW_MUST_NOT_APPEAR"},
             registry=None,
-            subcalls=subcalls,
-            execution_context=context,
+            subcalls=preflight_subcalls,
+            execution_context=preflight_context,
         )
-        result = run_rlm(
-            "q",
-            environment=environment,
-            root_llm=MockLLMClient([_ready_response()]),
-            subcalls=subcalls,
+        preflight = preflight_rlm(
+            environment=preflight_environment,
             config=RLMConfig(
                 budget=budget,
                 sandbox=sandbox,
                 root_model="root-model",
                 rollout=rollout,
             ),
-            context=context,
+        )
+        assert preflight_subcalls.calls == 0
+        assert "PREVIEW_MUST_NOT_APPEAR" not in str(preflight.as_dict())
+
+        execution_context = create_environment_context(config)
+        execution_subcalls = MockSubcallClient()
+        execution_environment = create_environment(
+            config,
+            context={"records": []},
+            registry=None,
+            subcalls=execution_subcalls,
+            execution_context=execution_context,
+        )
+        result = run_rlm(
+            "q",
+            environment=execution_environment,
+            root_llm=MockLLMClient([_ready_response()]),
+            subcalls=execution_subcalls,
+            config=RLMConfig(
+                budget=budget,
+                sandbox=sandbox,
+                root_model="root-model",
+                rollout=rollout,
+            ),
+            context=execution_context,
         )
         assert result.scaffold_manifest is not None
-        manifests.append(result.scaffold_manifest)
+        assert preflight.scaffold_manifest == result.scaffold_manifest
+        manifests.append(preflight.scaffold_manifest)
 
     assert manifests[0].manifest_id == manifests[1].manifest_id
     assert manifests[0].as_dict() == manifests[1].as_dict()

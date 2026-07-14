@@ -65,12 +65,7 @@ def project_result(
         ),
         "run_record": run_record.as_dict() if run_record is not None else None,
         "scaffold_manifest": (
-            {
-                **scaffold_manifest.as_dict(),
-                "id": scaffold_manifest.manifest_id,
-            }
-            if scaffold_manifest is not None
-            else None
+            scaffold_manifest.as_wire_dict() if scaffold_manifest is not None else None
         ),
         "stdout_chars": int(getattr(result, "stdout_chars", 0)),
     }

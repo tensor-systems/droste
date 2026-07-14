@@ -314,7 +314,7 @@ def test_runner_complete_default_budget_allows_subcalls() -> None:
     try:
         response = run(
             {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "model": "test-model",
                 "question": "q",
                 "budget": Budget().as_dict(),
@@ -382,7 +382,7 @@ def test_runner_zero_subcall_budget_is_honored() -> None:
     try:
         response = run(
             {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "model": "test-model",
                 "question": "q",
                 "budget": Budget(subcalls=0).as_dict(),

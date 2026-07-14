@@ -6,18 +6,60 @@ import importlib
 import json
 import os
 import sys
-from typing import Any
+from typing import Any, NoReturn
 
 from droste.environments import EnvironmentConfig, create_environment, create_environment_context
 from droste.execution.budget import Budget
 from droste.execution.config import DEFAULT_SUBCALL_CONCURRENCY, SandboxLimits
-from droste.execution.manifest import RolloutConfiguration, ScaffoldRequirements
-from droste.loop.rlm import RLMConfig, run_rlm
+from droste.execution.manifest import (
+    RolloutConfiguration,
+    ScaffoldCompatibilityError,
+    ScaffoldRequirements,
+)
+from droste.loop.rlm import RLMConfig, preflight_rlm, run_rlm
 from droste.providers import ProviderCatalog
 
 from .http_clients import HTTPSubcallClient, RootLLMClient
-from .protocol import RUNNER_PROTOCOL_VERSION, _check_protocol_version, build_response
-from .sources import build_provider_registry, default_provider_catalog
+from .protocol import (
+    RUNNER_PROTOCOL_VERSION,
+    RunnerOperation,
+    _check_protocol_version,
+    build_operation_refusal,
+    build_preflight_response,
+    build_response,
+    build_scaffold_refusal,
+    resolve_operation,
+)
+from .sources import (
+    build_preflight_provider_registry,
+    build_provider_registry,
+    default_provider_catalog,
+)
+
+
+class _PreflightSubcallClient:
+    """A capability-shape placeholder that fails if preflight ever dispatches."""
+
+    def __init__(self, output_token_limit: int, subcall_concurrency: int) -> None:
+        self.output_token_limit = output_token_limit
+        self.subcall_concurrency = subcall_concurrency
+
+    @staticmethod
+    def _refuse() -> NoReturn:
+        raise RuntimeError("preflight cannot dispatch subcalls")
+
+    def llm_query(self, prompt: str, context: str = "") -> str:
+        self._refuse()
+
+    def llm_batch(self, prompts: list[str], contexts: list[str] | None = None) -> list[str]:
+        self._refuse()
+
+    def llm_batch_with_errors(
+        self,
+        prompts: list[str],
+        contexts: list[str] | None = None,
+    ) -> tuple[list[str], list[dict[str, object]]]:
+        self._refuse()
 
 
 def _read_request(path: str | None = None) -> dict[str, Any]:
@@ -132,8 +174,19 @@ def _run_valid_request(
 ) -> dict[str, Any]:
     """Run an already version-checked request."""
 
+    try:
+        operation = resolve_operation(request)
+    except ValueError as exc:
+        return build_operation_refusal(str(exc))
+
     adapter_module = request.get("adapter_module")
     if isinstance(adapter_module, str) and adapter_module.strip():
+        if operation is not RunnerOperation.RUN:
+            return build_operation_refusal(
+                "adapter_module is only supported for operation 'run'",
+                operation=operation,
+                code="adapter_unsupported",
+            )
         # Adapters own their response shape; the envelope version is stamped
         # only when the adapter didn't claim one itself.
         response = _run_adapter(request)
@@ -143,10 +196,14 @@ def _run_valid_request(
     context = _build_context(request)
     # source_ctx is a host-supplied live edge passed only to explicit provider
     # binders. The request cannot name Python code or mutate the catalog.
-    registry = build_provider_registry(
-        request,
-        catalog=provider_catalog,
-        context=source_ctx,
+    registry = (
+        build_preflight_provider_registry(request, catalog=provider_catalog)
+        if operation is RunnerOperation.PREFLIGHT
+        else build_provider_registry(
+            request,
+            catalog=provider_catalog,
+            context=source_ctx,
+        )
     )
 
     raw_budget = request.get("budget")
@@ -164,12 +221,6 @@ def _run_valid_request(
         )
     sandbox = SandboxLimits(**raw_sandbox)
 
-    token = str(request.get("token") or "")
-    root_endpoint = str(request.get("root_endpoint") or "")
-    subcall_endpoint = str(request.get("subcall_endpoint") or "")
-    session = str(request.get("session") or "")
-    session_index = int(request.get("session_index") or 0)
-
     from droste.execution.progress import emit_event  # type: ignore
     from droste.execution.trace import (  # type: ignore
         DataUseAuthorization,
@@ -184,10 +235,9 @@ def _run_valid_request(
     exec_context = create_environment_context(
         environment_config,
         verbose=False,
-        # NDJSON on stderr is the runner's event contract — the relay's
-        # forwarding filter and native hosts read it there. Attached
-        # explicitly now that a bare engine call emits nothing (#35).
-        on_event=emit_event,
+        # Preflight deliberately has no live event surface. Normal execution
+        # retains the runner's NDJSON-on-stderr event contract.
+        on_event=emit_event if operation is RunnerOperation.RUN else None,
         run_id=str(request.get("run_id") or "") or None,
         parent_run_id=str(request.get("parent_run_id") or "") or None,
         trace_depth=(int(request["trace_depth"]) if request.get("trace_depth") is not None else 0),
@@ -216,25 +266,6 @@ def _run_valid_request(
     provider = str(request.get("provider") or "") or None
     temperature = request.get("temperature")
     stop = request.get("stop")
-
-    if not token or not root_endpoint or not subcall_endpoint:
-        raise RuntimeError("missing endpoints or token")
-    root_client = RootLLMClient(
-        endpoint=root_endpoint,
-        token=token,
-        default_model=model,
-        provider=provider,
-        max_output_tokens=budget.root_output_tokens,
-        temperature=temperature,
-        stop=stop,
-        session=session,
-        session_index=session_index,
-    )
-    # Subcall cost controls: optional per-run overrides forwarded in
-    # every subcall payload; unset values are omitted so the server applies
-    # its defaults (bounded output + no thinking for subcalls). An explicit
-    # zero/negative budget is rejected: a subcall cannot answer in 0 tokens,
-    # and silently treating it as unset would mask a caller bug.
     subcall_model = str(request.get("subcall_model") or "")
     subcall_reasoning_effort = str(request.get("subcall_reasoning_effort") or "")
     root_sampling = _optional_object(request, "root_sampling")
@@ -248,28 +279,17 @@ def _run_valid_request(
     )
     assert subcall_concurrency is not None
 
-    subcalls = HTTPSubcallClient(
-        endpoint=subcall_endpoint,
-        token=token,
-        session=session,
-        session_index=session_index,
-        context=exec_context,
-        max_output_tokens=budget.subcall_output_tokens,
-        model=subcall_model,
-        reasoning_effort=subcall_reasoning_effort,
-        max_parallel=subcall_concurrency,
-    )
+    token = str(request.get("token") or "")
+    root_endpoint = str(request.get("root_endpoint") or "")
+    subcall_endpoint = str(request.get("subcall_endpoint") or "")
+    session = str(request.get("session") or "")
+    session_index = int(request.get("session_index") or 0)
+    if operation is RunnerOperation.RUN and (
+        not token or not root_endpoint or not subcall_endpoint
+    ):
+        raise RuntimeError("missing endpoints or token")
 
-    environment = create_environment(
-        environment_config,
-        context=context,
-        registry=registry,
-        subcalls=subcalls,
-        execution_context=exec_context,
-        capability_run_id=exec_context.trace.run_id,
-        capability_parent_run_id=exec_context.trace.parent_run_id,
-        capability_observer=exec_context.observe_capability,
-    )
+    resolved_subcall_model = subcall_model or model
 
     config = RLMConfig(
         budget=budget,
@@ -279,7 +299,7 @@ def _run_valid_request(
         verbose=False,
         rollout=RolloutConfiguration(
             root_revision=_optional_text(request, "root_model_revision"),
-            subcall_model=subcall_model or model,
+            subcall_model=resolved_subcall_model,
             subcall_revision=_optional_text(request, "subcall_model_revision"),
             root_sampling=(
                 root_sampling
@@ -304,6 +324,65 @@ def _run_valid_request(
     if isinstance(system_prompt_raw, str) and system_prompt_raw.strip():
         system_prompt = system_prompt_raw
     system_prompt_additions = str(request.get("system_prompt_additions") or "")
+
+    if operation is RunnerOperation.PREFLIGHT:
+        preflight_subcalls = _PreflightSubcallClient(
+            budget.subcall_output_tokens,
+            subcall_concurrency,
+        )
+        environment = create_environment(
+            environment_config,
+            context=context,
+            registry=registry,
+            subcalls=preflight_subcalls,
+            execution_context=exec_context,
+            capability_run_id=exec_context.trace.run_id,
+            capability_parent_run_id=exec_context.trace.parent_run_id,
+            capability_observer=exec_context.observe_capability,
+        )
+        try:
+            result = preflight_rlm(
+                environment=environment,
+                config=config,
+                system_prompt=system_prompt,
+                system_prompt_additions=system_prompt_additions,
+            )
+        except ScaffoldCompatibilityError as exc:
+            return build_scaffold_refusal(exc)
+        return build_preflight_response(result=result)
+
+    root_client = RootLLMClient(
+        endpoint=root_endpoint,
+        token=token,
+        default_model=model,
+        provider=provider,
+        max_output_tokens=budget.root_output_tokens,
+        temperature=temperature,
+        stop=stop,
+        session=session,
+        session_index=session_index,
+    )
+    subcalls = HTTPSubcallClient(
+        endpoint=subcall_endpoint,
+        token=token,
+        session=session,
+        session_index=session_index,
+        context=exec_context,
+        max_output_tokens=budget.subcall_output_tokens,
+        model=subcall_model,
+        reasoning_effort=subcall_reasoning_effort,
+        max_parallel=subcall_concurrency,
+    )
+    environment = create_environment(
+        environment_config,
+        context=context,
+        registry=registry,
+        subcalls=subcalls,
+        execution_context=exec_context,
+        capability_run_id=exec_context.trace.run_id,
+        capability_parent_run_id=exec_context.trace.parent_run_id,
+        capability_observer=exec_context.observe_capability,
+    )
 
     result = run_rlm(
         str(request.get("question") or ""),

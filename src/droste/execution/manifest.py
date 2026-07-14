@@ -400,6 +400,11 @@ class ScaffoldManifest:
     def as_dict(self) -> dict[str, Any]:
         return {"schema_version": self.schema_version, **_thaw_json(self.body)}
 
+    def as_wire_dict(self) -> dict[str, Any]:
+        """Return the complete transport value, including its derived identity."""
+
+        return {**self.as_dict(), "id": self.manifest_id}
+
     def identity_dict(self) -> dict[str, Any]:
         return {"schema_version": self.schema_version, "id": self.manifest_id}
 
@@ -446,6 +451,9 @@ class ScaffoldMismatch:
     path: str
     expected: Any
     actual: Any
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"path": self.path, "expected": self.expected, "actual": self.actual}
 
 
 class ScaffoldCompatibilityError(ValueError):

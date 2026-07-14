@@ -91,7 +91,7 @@ def test_run_reports_actual_subcall_count(monkeypatch) -> None:
     try:
         response = run(
             {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "model": "test-model",
                 "question": "is it spam?",
                 "budget": _budget(subcalls=10, depth=2),
@@ -137,7 +137,7 @@ def test_run_reports_actual_subcall_count(monkeypatch) -> None:
         "concurrency": 2,
         "seed": 17,
     }
-    assert manifest["abis"]["runner"] == 3
+    assert manifest["abis"]["runner"] == 4
     assert manifest["engine"]["source_revision"] == "commit-a"
     assert manifest["id"].startswith("sha256:")
     assert "trajectory" not in response
@@ -210,7 +210,7 @@ def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> 
     monkeypatch.setattr(import_module("droste_runner.run"), "run_rlm", fake_run_rlm)
     response = runner_module.run(
         {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "model": "test-model",
             "question": "q",
             "budget": _budget(),
@@ -383,7 +383,7 @@ def _run_with_capture(request_extra: dict[str, Any]) -> list[dict[str, Any]]:
     base = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         request: dict[str, Any] = {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "model": "test-model",
             "question": "is it spam?",
             "budget": _budget(subcalls=10, depth=2),
@@ -435,7 +435,7 @@ def test_zero_subcall_output_budget_is_rejected() -> None:
         budget["subcall_output_tokens"] = 0
         run(
             {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "model": "m",
                 "question": "q",
                 "budget": budget,

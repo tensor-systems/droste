@@ -6,7 +6,7 @@ from droste.providers import PROVIDER_PROTOCOL_VERSION, ProviderCatalog
 from .http_clients import HTTPSubcallClient, RootLLMClient
 from .http_clients import _http_error_excerpt as _http_error_excerpt
 from .http_clients import _redact_secrets as _redact_secrets
-from .protocol import RUNNER_PROTOCOL_VERSION, RootResponseMetadata, build_response
+from .protocol import RUNNER_PROTOCOL_VERSION, RootResponseMetadata, RunnerOperation, build_response
 from .protocol import _check_protocol_version as _check_protocol_version
 from .protocol import _protocol_error_response as _protocol_error_response
 from .run import _build_context as _build_context
@@ -31,6 +31,7 @@ __all__ = [
     "RUNNER_PROTOCOL_VERSION",
     "RootLLMClient",
     "RootResponseMetadata",
+    "RunnerOperation",
     "RunnerEnvironment",
     "WRAPPER_PROVIDER_MANIFEST",
     "WrapperTransport",

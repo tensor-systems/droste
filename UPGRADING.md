@@ -30,8 +30,26 @@ Runner requests may set the positive integer `subcall_concurrency`; omitted
 values resolve once to 5. Native CLI `--rollout-config` values now configure
 the client as well as the scaffold manifest. The Pyodide relay preserves the
 field unchanged. The effective value remains content-free provenance at
-`scaffold_manifest.inference.concurrency`. The runner protocol remains v3
-because the request field is optional and additive.
+`scaffold_manifest.inference.concurrency`. The request field is additive; this
+release uses runner protocol v4 for the preflight safety boundary below.
+
+### Runner protocol v4 adds safe, content-free scaffold preflight
+
+`RUNNER_PROTOCOL_VERSION` is now 4. Requests accept an explicit `operation`
+discriminant: `run` (the default within v4) or `preflight`. Preflight resolves
+the exact effective PromptPack, environment globals, capability manifest,
+rollout configuration, and scaffold, then checks checkpoint requirements
+without model or provider calls. It does not require endpoints or credentials.
+Success returns the complete scaffold in a separately versioned, content-free
+preflight value. Compatibility refusal preserves the public
+`ScaffoldCompatibilityError` mismatch paths and has stable code
+`scaffold_incompatible`.
+
+Upgrade request writers and runners atomically. The version bump is necessary:
+an older v3 runner may ignore an unknown `operation` field and execute a request
+that a newer host intended only to inspect. A v3 runner instead refuses the v4
+envelope before work. In-process hosts may call `preflight_rlm(...)`; it and
+`run_rlm(...)` share one scaffold resolver.
 
 ## 0.12.0 (from 0.11.0)
 

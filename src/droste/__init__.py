@@ -92,7 +92,14 @@ from .execution.trace import (
     parse_event,
 )
 from .loop.code_extractor import extract_code_block
-from .loop.rlm import RLMConfig, RLMResult, run_rlm
+from .loop.rlm import (
+    RLM_PREFLIGHT_SCHEMA_VERSION,
+    RLMConfig,
+    RLMPreflight,
+    RLMResult,
+    preflight_rlm,
+    run_rlm,
+)
 from .policy import PolicyHints
 from .prompts.builder import SystemPromptBuilder
 from .prompts.pack import (
@@ -139,8 +146,11 @@ from .structured import aggregate_json_counts, structured_batch, validate_json
 
 __all__ = [
     "run_rlm",
+    "preflight_rlm",
     "RLMConfig",
+    "RLMPreflight",
     "RLMResult",
+    "RLM_PREFLIGHT_SCHEMA_VERSION",
     "extract_code_block",
     "DEFAULT_TOKEN_BUDGET",
     "DEFAULT_SUBCALL_BUDGET",
