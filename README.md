@@ -245,7 +245,7 @@ flowchart LR
 ```
 
 **Runner Inputs**
-- `protocol_version`: **required** on every request (currently `3`) — a
+- `protocol_version`: **required** on every request (currently `4`) — a
   missing or mismatched version gets a structured refusal, so hosts detect
   incompatibility instead of failing on a missing field. See
   [docs/architecture.md](docs/architecture.md) for the compatibility rules and
@@ -253,6 +253,8 @@ flowchart LR
 - `budget`: **required** complete six-field compute authorization object.
 - `subcall_concurrency`: optional positive batch limit (default: `5`), recorded
   in the returned scaffold manifest.
+- `operation`: `run` (default) or `preflight`; preflight resolves and checks the
+  content-free scaffold without model/provider calls or endpoint credentials.
 - `root_endpoint` + `subcall_endpoint` + `token`: required for HTTP-backed runs.
 - `adapter_module`: optional Python module path to override the runner entirely.
 

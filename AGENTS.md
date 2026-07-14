@@ -141,9 +141,13 @@ evidence with that status rather than leaving the model to interpret prefixes.
   They are assertions that the Deno/WASM host supplies those boundaries, not
   Python-side enforcement. Never weaken them or silently accept a native
   signal timeout for Pyodide.
-- Every request MUST carry `"protocol_version": 3` and one complete `budget`
+- Every request MUST carry `"protocol_version": 4` and one complete `budget`
   object. Missing/mismatched versions or incomplete budgets fail before work.
   See docs/architecture.md, "The runner protocol".
+- `operation` is the explicit `run | preflight` control value and defaults to
+  `run` for compatibility. Preflight must use the same scaffold resolver as a
+  real run, must not dispatch root/subcall/provider calls, and its
+  response must remain content-free.
 - The runner wraps `droste` and supplies an HTTP `LLMClient` + `SubcallClient` plus a sandboxed `RunnerEnvironment`.
 - Timeouts in `RunnerEnvironment.execute` use `signal.setitimer` and restore the previous handler (`old_handler`) after each execution to avoid clobbering host signal handlers.
 - `droste_runner` expects HTTP endpoints for root and subcall execution (`root_endpoint`/`subcall_endpoint` + `token`).

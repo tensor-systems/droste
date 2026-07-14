@@ -241,7 +241,7 @@ Deno.test({
         .map((l) => JSON.parse(l))
         .find((e) => e.type === "startup");
       assert(startup, `no startup handshake event on stderr:\n${stderrText}`);
-      assertEquals(startup.runner_protocol, 3);
+      assertEquals(startup.runner_protocol, 4);
       assertEquals(startup.provider_protocol, 4);
       assert(
         typeof startup.engine_version === "string" &&

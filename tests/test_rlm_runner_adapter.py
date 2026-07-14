@@ -3,7 +3,8 @@ import sys
 import types
 from importlib import import_module
 
-from droste import Budget
+from droste import Budget, ProviderCatalog
+from droste.sources.sql_local import sqlite_provider
 from droste_runner import runner
 
 
@@ -19,7 +20,7 @@ def test_rlm_runner_adapter_delegates() -> None:
 
     try:
         result = runner.run(
-            {"adapter_module": module_name, "answer": "hello", "protocol_version": 3}
+            {"adapter_module": module_name, "answer": "hello", "protocol_version": 4}
         )
     finally:
         sys.modules.pop(module_name, None)
@@ -40,7 +41,7 @@ def test_adapter_claimed_protocol_version_is_not_overwritten() -> None:
     module.run = run  # type: ignore[attr-defined]
     sys.modules[module_name] = module
     try:
-        result = runner.run({"adapter_module": module_name, "protocol_version": 3})
+        result = runner.run({"adapter_module": module_name, "protocol_version": 4})
     finally:
         sys.modules.pop(module_name, None)
     assert result["protocol_version"] == 99
@@ -154,6 +155,35 @@ def test_worker_exception_envelope_is_version_stamped(tmp_path) -> None:
     assert "missing endpoints" in payload["error"]["message"]
 
 
+def test_worker_preflight_validation_error_has_no_false_operation(tmp_path) -> None:
+    import json
+    import subprocess
+    import sys as _sys
+
+    req = tmp_path / "preflight-request.json"
+    req.write_text(
+        json.dumps(
+            {
+                "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
+                "operation": "preflight",
+            }
+        )
+    )
+    proc = subprocess.run(
+        [_sys.executable, "-m", "droste_runner"],
+        cwd=tmp_path,
+        env={**os.environ, "RLM_RUNNER_REQUEST_PATH": str(req)},
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 1
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "error"
+    assert payload["operation"] is None
+    assert "budget" in payload["error"]["message"]
+
+
 def test_version_gate_runs_before_adapter_dispatch() -> None:
     # A bad envelope must be refused even when the request names an adapter —
     # the version gate precedes everything, and the adapter must not run on a
@@ -188,6 +218,222 @@ def _manifest_request(**overrides: object) -> dict[str, object]:
     }
     request.update(overrides)
     return request
+
+
+def test_runner_preflight_is_content_free_and_constructs_no_http_clients(monkeypatch) -> None:
+    import json
+    import urllib.request
+
+    run_module = import_module("droste_runner.run")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("preflight constructed an HTTP model client")
+
+    monkeypatch.setattr(run_module, "RootLLMClient", forbidden)
+    monkeypatch.setattr(run_module, "HTTPSubcallClient", forbidden)
+    monkeypatch.setattr(urllib.request, "urlopen", forbidden)
+    marker = "PRIVATE_REQUEST_CONTENT_MUST_NOT_APPEAR"
+    response = runner.run(
+        {
+            "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
+            "operation": "preflight",
+            "model": "root-model",
+            "question": marker,
+            "context": {"text": marker},
+            "conversation_context": marker,
+            "system_prompt": marker,
+            "budget": Budget().as_dict(),
+            "data_sources": [
+                {
+                    "type": "wrapper_v1",
+                    "name": "remote",
+                    "base_url": "https://example.com",
+                    "token": "unused",
+                }
+            ],
+        }
+    )
+
+    assert set(response) == {"protocol_version", "operation", "status", "preflight", "error"}
+    assert response["operation"] == "preflight"
+    assert response["status"] == "success"
+    assert response["error"] is None
+    assert response["preflight"]["schema_version"] == 1
+    manifest = response["preflight"]["scaffold_manifest"]
+    assert manifest["id"].startswith("sha256:")
+    assert marker not in json.dumps(response)
+
+
+def test_runner_preflight_returns_typed_scaffold_refusal_without_dispatch(monkeypatch) -> None:
+    run_module = import_module("droste_runner.run")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("preflight constructed an HTTP model client")
+
+    monkeypatch.setattr(run_module, "RootLLMClient", forbidden)
+    monkeypatch.setattr(run_module, "HTTPSubcallClient", forbidden)
+    response = runner.run(
+        {
+            "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
+            "operation": "preflight",
+            "model": "root-model",
+            "budget": Budget().as_dict(),
+            "checkpoint_scaffold_requirements": {
+                "required": {"prompt_pack": {"revision": "not-this-revision"}}
+            },
+        }
+    )
+
+    assert response["status"] == "refusal"
+    assert response["preflight"] is None
+    assert response["error"]["type"] == "ScaffoldCompatibilityError"
+    assert response["error"]["code"] == "scaffold_incompatible"
+    assert response["error"]["details"]["mismatches"] == [
+        {
+            "path": "prompt_pack.revision",
+            "expected": "not-this-revision",
+            "actual": "1.0.2",
+        }
+    ]
+
+
+def test_runner_operation_defaults_to_run_and_invalid_values_are_typed() -> None:
+    import pytest
+
+    with pytest.raises(RuntimeError, match="missing endpoints"):
+        runner.run(
+            {
+                "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
+                "budget": Budget().as_dict(),
+            }
+        )
+
+    refusal = runner.run(
+        {
+            "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
+            "operation": "inspect",
+        }
+    )
+    assert refusal["status"] == "refusal"
+    assert refusal["error"]["code"] == "operation_invalid"
+
+
+def test_runner_preflight_and_run_reject_the_same_unresolved_model_identity() -> None:
+    import pytest
+
+    common = {
+        "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
+        "budget": Budget().as_dict(),
+        "model": "",
+        "subcall_model": "",
+    }
+    with pytest.raises(ValueError, match="rollout subcall_model"):
+        runner.run({**common, "operation": "preflight"})
+    with pytest.raises(ValueError, match="rollout subcall_model"):
+        runner.run(
+            {
+                **common,
+                "operation": "run",
+                "token": "unused",
+                "root_endpoint": "https://example.com/root",
+                "subcall_endpoint": "https://example.com/subcall",
+            }
+        )
+
+
+def test_v3_preflight_intent_is_refused_before_any_runner_resolution(monkeypatch) -> None:
+    run_module = import_module("droste_runner.run")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("version gate allowed preflight work")
+
+    monkeypatch.setattr(run_module, "default_provider_catalog", forbidden)
+    monkeypatch.setattr(run_module, "RootLLMClient", forbidden)
+    monkeypatch.setattr(run_module, "HTTPSubcallClient", forbidden)
+    refusal = runner.run(
+        {
+            "protocol_version": 3,
+            "operation": "preflight",
+            "token": "must-not-be-read",
+            "root_endpoint": "https://example.com/root",
+            "subcall_endpoint": "https://example.com/subcall",
+        }
+    )
+
+    assert refusal["status"] == "refusal"
+    assert refusal["operation"] is None
+    assert refusal["error"]["code"] == "protocol_version_mismatch"
+    assert refusal["error"]["details"] == {"requested": 3, "supported": 4}
+
+
+def test_preflight_never_binds_or_connects_configured_providers(monkeypatch) -> None:
+    import sqlite3
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("preflight opened a provider connection")
+
+    monkeypatch.setattr(sqlite3, "connect", forbidden)
+    response = runner.run(
+        {
+            "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
+            "operation": "preflight",
+            "model": "root-model",
+            "budget": Budget().as_dict(),
+            "data_sources": [
+                {
+                    "type": "sqlite",
+                    "name": "db",
+                    "sqlite_path": "/path/that/must/not/be-opened.db",
+                }
+            ],
+            "default_source": "db",
+        },
+        provider_catalog=ProviderCatalog((sqlite_provider(),)),
+    )
+
+    assert response["status"] == "success"
+    assert response["preflight"]["scaffold_manifest"]["capabilities"]["model_visible_globals"] == [
+        "aggregate_json_counts",
+        "answer",
+        "batch_llm_query",
+        "context",
+        "db",
+        "get_schema",
+        "llm_batch",
+        "llm_batch_json",
+        "llm_query",
+        "llm_query_batched",
+        "llm_query_batched_json",
+        "query",
+    ]
+
+
+def test_preflight_rejects_adapter_without_dispatching_it() -> None:
+    module_name = "tests_dummy_preflight_adapter_never_called"
+    module = types.ModuleType(module_name)
+    calls: list[dict] = []
+
+    def run(req: dict) -> dict:
+        calls.append(req)
+        return {"answer": "must not happen"}
+
+    module.run = run  # type: ignore[attr-defined]
+    sys.modules[module_name] = module
+    try:
+        refusal = runner.run(
+            {
+                "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
+                "operation": "preflight",
+                "adapter_module": module_name,
+            }
+        )
+    finally:
+        sys.modules.pop(module_name, None)
+
+    assert calls == []
+    assert refusal["operation"] == "preflight"
+    assert refusal["status"] == "refusal"
+    assert refusal["error"]["code"] == "adapter_unsupported"
 
 
 def test_manifest_objects_refuse_malformed_runner_values() -> None:

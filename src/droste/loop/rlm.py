@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any
+from typing import Any, Mapping
 
 from ..capabilities import CapabilityManifest
 from ..exceptions import PolicyError, RLMError
@@ -33,7 +33,9 @@ from ..prompts.pack import (
     EXTRACT_OUTPUT_CONTRACT,
     PromptPack,
     PromptPackCatalog,
+    PromptPackRecord,
     PromptSlots,
+    ResolvedPromptPack,
     load_builtin_prompt_catalog,
     render_prompt_template,
     render_system_prompt,
@@ -63,7 +65,17 @@ from .step import (
 )
 from .trajectory import ExecutionStatus, IterationRecord
 
-__all__ = ["RLMConfig", "RLMResult", "run_rlm", "EMPTY_OUTPUT_NUDGE"]
+__all__ = [
+    "RLMConfig",
+    "RLMPreflight",
+    "RLMResult",
+    "RLM_PREFLIGHT_SCHEMA_VERSION",
+    "preflight_rlm",
+    "run_rlm",
+    "EMPTY_OUTPUT_NUDGE",
+]
+
+RLM_PREFLIGHT_SCHEMA_VERSION = 1
 
 DEFAULT_USER_PROMPT_TEMPLATE = "Question: {question}"
 
@@ -94,6 +106,145 @@ _UNKNOWN_SUBCALL_CONCURRENCY = object()
 
 
 ProgressCallback = Any
+
+
+@dataclass(frozen=True, slots=True)
+class RLMPreflight:
+    """Content-free result of resolving and checking one effective scaffold."""
+
+    scaffold_manifest: ScaffoldManifest
+    schema_version: int = RLM_PREFLIGHT_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if self.schema_version != RLM_PREFLIGHT_SCHEMA_VERSION:
+            raise ValueError(f"unsupported RLM preflight version: {self.schema_version}")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "scaffold_manifest": self.scaffold_manifest.as_wire_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "RLMPreflight":
+        """Strictly parse the public preflight value."""
+
+        if not isinstance(value, Mapping):
+            raise TypeError("RLM preflight must be an object")
+        missing = {"schema_version", "scaffold_manifest"} - value.keys()
+        unknown = value.keys() - {"schema_version", "scaffold_manifest"}
+        if missing or unknown:
+            details: list[str] = []
+            if missing:
+                details.append("missing " + ", ".join(sorted(missing)))
+            if unknown:
+                details.append("unknown " + ", ".join(sorted(unknown)))
+            raise ValueError("RLM preflight has " + "; ".join(details))
+        schema_version = value["schema_version"]
+        if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+            raise TypeError("RLM preflight schema_version must be an integer")
+        manifest = value["scaffold_manifest"]
+        if not isinstance(manifest, Mapping):
+            raise TypeError("RLM preflight scaffold_manifest must be an object")
+        return cls(
+            scaffold_manifest=ScaffoldManifest.from_dict(manifest),
+            schema_version=schema_version,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedRLMScaffold:
+    """Immutable facts shared by preflight and execution after environment snapshotting."""
+
+    config: RLMConfig
+    prompt_pack: ResolvedPromptPack
+    prompt_pack_record: PromptPackRecord
+    scaffold_manifest: ScaffoldManifest
+
+
+def _prepare_rlm_scaffold(
+    *,
+    environment: RLMEnvironment,
+    config: RLMConfig | None,
+    system_prompt: str | None,
+    system_prompt_additions: str | None,
+    user_prompt_template: str | None,
+    refinement_prompt_template: str | None,
+    prompt_pack: PromptPack | None,
+    consumer_prompt_catalog: PromptPackCatalog | None,
+) -> tuple[_ResolvedRLMScaffold, dict[str, Any]]:
+    """Resolve the one scaffold authority used by both preflight and execution."""
+
+    cfg = config or RLMConfig()
+    requested_profile = cfg.prompt_profile or cfg.tips_profile or DEFAULT_PROMPT_PROFILE
+    resolved_prompt_pack = resolve_prompt_pack(
+        model=cfg.root_model or "",
+        profile=requested_profile,
+        caller_pack=prompt_pack,
+        consumer_catalog=consumer_prompt_catalog,
+        engine_catalog=load_builtin_prompt_catalog(),
+    )
+    if cfg.enforce_contract is None:
+        cfg = replace(
+            cfg,
+            enforce_contract=resolved_prompt_pack.pack.policy_defaults.enforce_contract,
+        )
+
+    env_globals = environment.globals()
+    scaffold_manifest = build_scaffold_manifest(
+        engine=_engine_identity(cfg.rollout.source_revision),
+        prompt_pack=resolved_prompt_pack.pack,
+        capability_manifest=_capability_manifest(environment),
+        provider_protocol=PROVIDER_PROTOCOL_VERSION,
+        model_visible_globals=tuple(env_globals),
+        root_model=cfg.root_model,
+        rollout=cfg.rollout,
+        budget=cfg.budget,
+        sandbox=cfg.sandbox,
+        system_prompt_override=system_prompt,
+        system_prompt_additions=system_prompt_additions,
+        user_prompt_override=user_prompt_template,
+        refinement_prompt_override=refinement_prompt_template,
+    )
+    require_scaffold_compatibility(scaffold_manifest, cfg.checkpoint_requirements)
+    return (
+        _ResolvedRLMScaffold(
+            config=cfg,
+            prompt_pack=resolved_prompt_pack,
+            prompt_pack_record=resolved_prompt_pack.record(),
+            scaffold_manifest=scaffold_manifest,
+        ),
+        env_globals,
+    )
+
+
+def preflight_rlm(
+    *,
+    environment: RLMEnvironment,
+    config: RLMConfig | None = None,
+    system_prompt: str | None = None,
+    system_prompt_additions: str | None = None,
+    user_prompt_template: str | None = None,
+    refinement_prompt_template: str | None = None,
+    prompt_pack: PromptPack | None = None,
+    consumer_prompt_catalog: PromptPackCatalog | None = None,
+) -> RLMPreflight:
+    """Resolve and check a run scaffold without model or provider execution."""
+
+    try:
+        resolved, _ = _prepare_rlm_scaffold(
+            environment=environment,
+            config=config,
+            system_prompt=system_prompt,
+            system_prompt_additions=system_prompt_additions,
+            user_prompt_template=user_prompt_template,
+            refinement_prompt_template=refinement_prompt_template,
+            prompt_pack=prompt_pack,
+            consumer_prompt_catalog=consumer_prompt_catalog,
+        )
+        return RLMPreflight(resolved.scaffold_manifest)
+    finally:
+        environment.close()
 
 
 def _engine_identity(source_revision: str | None) -> EngineIdentity:
@@ -425,31 +576,33 @@ def run_rlm(
     prompt_pack: PromptPack | None = None,
     consumer_prompt_catalog: PromptPackCatalog | None = None,
 ) -> RLMResult:
-    cfg = config or RLMConfig()
-    reported_concurrency = _reported_subcall_concurrency(subcalls)
-    if (
-        reported_concurrency is not _UNKNOWN_SUBCALL_CONCURRENCY
-        and reported_concurrency != cfg.rollout.concurrency
-    ):
-        raise ValueError(
-            "rollout concurrency does not match the subcall client: "
-            f"{cfg.rollout.concurrency} != {reported_concurrency}"
+    try:
+        cfg = config or RLMConfig()
+        reported_concurrency = _reported_subcall_concurrency(subcalls)
+        if (
+            reported_concurrency is not _UNKNOWN_SUBCALL_CONCURRENCY
+            and reported_concurrency != cfg.rollout.concurrency
+        ):
+            raise ValueError(
+                "rollout concurrency does not match the subcall client: "
+                f"{cfg.rollout.concurrency} != {reported_concurrency}"
+            )
+        resolved_scaffold, env_globals = _prepare_rlm_scaffold(
+            environment=environment,
+            config=cfg,
+            system_prompt=system_prompt,
+            system_prompt_additions=system_prompt_additions,
+            user_prompt_template=user_prompt_template,
+            refinement_prompt_template=refinement_prompt_template,
+            prompt_pack=prompt_pack,
+            consumer_prompt_catalog=consumer_prompt_catalog,
         )
-    system_prompt_override = system_prompt
-    requested_profile = cfg.prompt_profile or cfg.tips_profile or DEFAULT_PROMPT_PROFILE
-    resolved_prompt_pack = resolve_prompt_pack(
-        model=cfg.root_model or "",
-        profile=requested_profile,
-        caller_pack=prompt_pack,
-        consumer_catalog=consumer_prompt_catalog,
-        engine_catalog=load_builtin_prompt_catalog(),
-    )
-    if cfg.enforce_contract is None:
-        cfg = replace(
-            cfg,
-            enforce_contract=resolved_prompt_pack.pack.policy_defaults.enforce_contract,
-        )
-    prompt_pack_record = resolved_prompt_pack.record()
+    except Exception:
+        environment.close()
+        raise
+    cfg = resolved_scaffold.config
+    resolved_prompt_pack = resolved_scaffold.prompt_pack
+    prompt_pack_record = resolved_scaffold.prompt_pack_record
     if context is None:
         context = create_execution_context(
             budget=cfg.budget,
@@ -472,7 +625,6 @@ def run_rlm(
     if callable(bind_context):
         bind_context(context)
 
-    env_globals = environment.globals()
     # The environment contract owns one brokered subcall surface. The host's
     # raw client remains trusted loop state for context binding/accounting.
     sandbox_subcalls = environment.sandbox_subcalls(subcalls, context.ledger)
@@ -553,7 +705,7 @@ def run_rlm(
     last_execution_status: ExecutionStatus | None = None
     error: RLMError | None = None
     answer_metadata: dict[str, Any] = {}
-    scaffold_manifest: ScaffoldManifest | None = None
+    scaffold_manifest: ScaffoldManifest | None = resolved_scaffold.scaffold_manifest
     terminal_budget_handoff = False
     finalization_base_messages: list[dict[str, str]] = []
     finalization_base_code = ""
@@ -589,22 +741,6 @@ def run_rlm(
         )
 
     try:
-        scaffold_manifest = build_scaffold_manifest(
-            engine=_engine_identity(cfg.rollout.source_revision),
-            prompt_pack=resolved_prompt_pack.pack,
-            capability_manifest=_capability_manifest(environment),
-            provider_protocol=PROVIDER_PROTOCOL_VERSION,
-            model_visible_globals=tuple(env_globals),
-            root_model=cfg.root_model,
-            rollout=cfg.rollout,
-            budget=cfg.budget,
-            sandbox=cfg.sandbox,
-            system_prompt_override=system_prompt_override,
-            system_prompt_additions=system_prompt_additions,
-            user_prompt_override=user_prompt_template,
-            refinement_prompt_override=refinement_prompt_template,
-        )
-        require_scaffold_compatibility(scaffold_manifest, cfg.checkpoint_requirements)
         context.emit_event(
             {
                 "type": "startup",

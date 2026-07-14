@@ -25,7 +25,7 @@ inference facts.
   "engine": {"version": "0.10.6", "source_revision": null},
   "abis": {
     "kernel": 1, "capability": 1, "trace": 1,
-    "prompt_pack": 1, "provider": 3, "runner": 3
+    "prompt_pack": 1, "provider": 4, "runner": 4
   },
   "prompt_pack": {
     "id": "droste.generic.full", "revision": "1.0.2",
@@ -90,6 +90,14 @@ read-only metadata remain source-compatible and must honor the declared value.
 or raises `ScaffoldCompatibilityError` containing typed path/expected/actual
 mismatches. `run_rlm` performs this check before its first model call when
 `RLMConfig.checkpoint_requirements` is set.
+
+Hosts that need this decision before inference authorization can call the
+public `preflight_rlm(...)` API, or send `operation: "preflight"` through
+`droste_runner`. Preflight and `run_rlm(...)` share the same PromptPack,
+environment, capability, rollout, manifest, and compatibility resolver. The
+typed preflight result contains the exact full manifest and no task or model
+content; runner mismatch responses preserve the public
+`ScaffoldCompatibilityError` mismatch fields.
 
 The full manifest is returned live as `RLMResult.scaffold_manifest` and in the
 runner/CLI result. Durable default-retention terminal records store only its

@@ -18,6 +18,7 @@ from droste.capabilities import (
 from droste.clients.errors import http_error_excerpt
 from droste.clients.useragent import USER_AGENT
 from droste.providers import (
+    BoundSource,
     ConfiguredSource,
     ProviderCatalog,
     ProviderManifest,
@@ -298,14 +299,9 @@ def default_provider_catalog() -> ProviderCatalog:
     return ProviderCatalog((wrapper_provider(),))
 
 
-def build_provider_registry(
+def _configured_sources(
     request: dict[str, Any],
-    *,
-    catalog: ProviderCatalog,
-    context: Any = None,
-) -> ProviderRegistry | None:
-    """Bind explicit configured sources through an explicit host catalog."""
-
+) -> tuple[tuple[ConfiguredSource, ...], str | None]:
     if "data_source" in request:
         raise ValueError("legacy data_source is removed; use data_sources")
     raw = request.get("data_sources", [])
@@ -316,11 +312,51 @@ def build_provider_registry(
         if not isinstance(spec, dict):
             raise ValueError("each data_sources entry must be an object")
         sources.append(ConfiguredSource.from_spec(spec))
+    default_source = request.get("default_source")
+    return tuple(sources), str(default_source) if default_source is not None else None
+
+
+def build_provider_registry(
+    request: dict[str, Any],
+    *,
+    catalog: ProviderCatalog,
+    context: Any = None,
+) -> ProviderRegistry | None:
+    """Bind explicit configured sources through an explicit host catalog."""
+
+    sources, default_source = _configured_sources(request)
     if not sources:
         return None
-    default_source = request.get("default_source")
     return catalog.bind(
-        tuple(sources),
+        sources,
         context=context,
-        default_source_id=str(default_source) if default_source is not None else None,
+        default_source_id=default_source,
     )
+
+
+def build_preflight_provider_registry(
+    request: dict[str, Any],
+    *,
+    catalog: ProviderCatalog,
+) -> ProviderRegistry | None:
+    """Project provider descriptors without invoking any live binder."""
+
+    sources, default_source = _configured_sources(request)
+    if not sources:
+        return None
+
+    def unavailable(*args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        raise RuntimeError("preflight cannot dispatch provider operations")
+
+    projected: list[BoundSource] = []
+    for source in sources:
+        registration = catalog.registration(source.provider_type)
+        runtime = ProviderRuntime(
+            handlers={
+                operation.operation_id: unavailable
+                for operation in registration.manifest.operations
+            }
+        )
+        projected.append(BoundSource(source, registration, runtime))
+    return ProviderRegistry(tuple(projected), default_source_id=default_source)
