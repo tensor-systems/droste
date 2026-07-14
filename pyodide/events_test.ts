@@ -62,6 +62,7 @@ Deno.test("vocabulary matches the engine's emitters", () => {
       "done",
       "execution_error",
       "extract_error",
+      "finalization_error",
       "iteration_start",
       "llm_response",
       "output",

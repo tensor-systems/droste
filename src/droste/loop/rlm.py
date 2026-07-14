@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from ..exceptions import BatchLLMError, RLMError
+from ..exceptions import BatchLLMError, PolicyError, RLMError, SubcallBudgetExceeded
 from ..execution.context import ExecutionContext, create_execution_context
 from ..execution.progress import (
     EventCallback,
     extract_error_event,
+    finalization_error_event,
     iteration_start_event,
     llm_response_event,
 )
@@ -78,6 +79,41 @@ _EXTRACT_UNABLE = "unable to determine from the work so far"
 
 
 ProgressCallback = Any
+
+
+class _SubcallGate:
+    """Run-scoped subcall bindings that can be revoked before delegation."""
+
+    def __init__(self, subcalls: SubcallClient) -> None:
+        self._subcalls = subcalls
+        self._blocked = False
+
+    def _check(self) -> None:
+        if self._blocked:
+            raise SubcallBudgetExceeded("subcalls are disabled during terminal finalization")
+
+    def llm_query(self, prompt: str, context: str = "") -> str:
+        self._check()
+        return self._subcalls.llm_query(prompt, context)
+
+    def llm_batch(self, prompts: list[str], contexts: list[str] | None = None) -> list[str]:
+        self._check()
+        return self._subcalls.llm_batch(prompts, contexts)
+
+    def llm_batch_with_errors(
+        self,
+        prompts: list[str],
+        contexts: list[str] | None = None,
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        self._check()
+        batch_with_errors = getattr(self._subcalls, "llm_batch_with_errors", None)
+        if callable(batch_with_errors):
+            return batch_with_errors(prompts, contexts)
+        return self._subcalls.llm_batch(prompts, contexts), []
+
+    def block(self) -> None:
+        """Permanently revoke this run's model-visible subcall bindings."""
+        self._blocked = True
 
 
 def _accessor_manifest(environment: RLMEnvironment) -> AccessorManifest:
@@ -330,25 +366,37 @@ def run_rlm(
         answer = {"content": "", "ready": False}
         env_globals["answer"] = answer
 
-    env_globals.setdefault("llm_query", subcalls.llm_query)
-    env_globals.setdefault("llm_batch", subcalls.llm_batch)
-    env_globals.setdefault("batch_llm_query", subcalls.llm_batch)
-    # llm_query_batched is the name models primed on RLM conventions reach
-    # for first, so the sandbox must answer to it.
-    env_globals.setdefault("llm_query_batched", subcalls.llm_batch)
     semantic_evidence = (
         _StructuredBatchEvidence()
         if cfg.enforce_contract and cfg.policy_hints is not None and cfg.policy_hints.semantic
         else None
     )
-    structured_batch = bind_structured_batch(subcalls, semantic_evidence)
+    subcall_gate = _SubcallGate(subcalls)
+    sandbox_subcalls: SubcallClient = subcall_gate if semantic_evidence is not None else subcalls
+    if semantic_evidence is not None:
+        # Every model-visible subcall binding goes through the run-scoped gate.
+        # In particular, code may save one in a persistent variable; the saved
+        # wrapper must still be revocable during terminal finalization.
+        env_globals["llm_query"] = subcall_gate.llm_query
+        env_globals["llm_batch"] = subcall_gate.llm_batch
+        env_globals["batch_llm_query"] = subcall_gate.llm_batch
+        env_globals["llm_query_batched"] = subcall_gate.llm_batch
+    else:
+        env_globals.setdefault("llm_query", subcalls.llm_query)
+        env_globals.setdefault("llm_batch", subcalls.llm_batch)
+        env_globals.setdefault("batch_llm_query", subcalls.llm_batch)
+        # llm_query_batched is the name models primed on RLM conventions reach
+        # for first, so the sandbox must answer to it.
+        env_globals.setdefault("llm_query_batched", subcalls.llm_batch)
+
+    structured_batch = bind_structured_batch(sandbox_subcalls, semantic_evidence)
     # These two aliases are one core helper, so bind Droste's version even when
     # an environment pre-populated a custom helper during setup. Semantic runs
     # use the evidence-tracked form selected above.
     env_globals["llm_batch_json"] = structured_batch
     env_globals["llm_query_batched_json"] = structured_batch
     env_globals.setdefault("aggregate_json_counts", aggregate_json_counts)
-    _apply_batch_error_guard(subcalls, env_globals)
+    _apply_batch_error_guard(sandbox_subcalls, env_globals)
 
     manifest = _accessor_manifest(environment)
     data_accessor_names = set(manifest.flat)
@@ -397,6 +445,8 @@ def run_rlm(
     error: RLMError | None = None
     answer_metadata: dict[str, Any] = {}
     terminal_budget_handoff = False
+    finalization_base_messages: list[dict[str, str]] = []
+    finalization_base_code = ""
 
     messages: list[dict[str, str]] = []
     code = ""
@@ -514,6 +564,8 @@ def run_rlm(
             context.emit_progress(f"Iteration {iterations}/{cfg.max_iterations}: Executing...")
             context.emit_event(build_code_event(iterations, code))
 
+            finalization_base_messages = messages
+            finalization_base_code = code
             outcome = execute_step(code, **step_kwargs())
             answer = outcome.answer
             last_output = outcome.output
@@ -591,6 +643,8 @@ def run_rlm(
                 # it too, or event consumers see only the failed first attempt
                 # and miss the code/output that produced the answer.
                 context.emit_event(build_code_event(iterations, repaired_code))
+                finalization_base_messages = repair_messages
+                finalization_base_code = repaired_code
                 outcome = execute_step(repaired_code, **step_kwargs())
                 answer = outcome.answer
                 last_output = outcome.output
@@ -623,6 +677,73 @@ def run_rlm(
                 terminal_budget_handoff = True
                 break
 
+        # A fail-closed budget handoff can strand useful values in the
+        # persistent REPL even when no answer draft was retained. Give that
+        # state one root-generated code attempt to populate answer['content'].
+        # There is deliberately no missing-code or execution repair, and every
+        # model-visible subcall callable (including saved aliases) is revoked
+        # before the code runs.
+        if terminal_budget_handoff:
+            subcall_gate.block()
+
+        if (
+            terminal_budget_handoff
+            and error is not None
+            and not str(answer.get("content") or "").strip()
+        ):
+            context.emit_progress(
+                "Exact semantic retry cannot fit: finalizing from persistent state..."
+            )
+            terminal_history = f"type={error.type}\nmessage={error.message}"
+            finalization_prompt = render_prompt_template(
+                resolved_prompt_pack.pack.templates.error_repair,
+                PromptSlots(
+                    question=question,
+                    history=terminal_history,
+                    output_contract=CODE_OUTPUT_CONTRACT,
+                ),
+            )
+            finalization_messages = build_error_repair_messages(
+                finalization_base_messages,
+                finalization_base_code,
+                PolicyError(error.message),
+                repair_prompt=finalization_prompt,
+            )
+            finalization_response, finalization_usage, finalization_root_error = call_root(
+                root_llm,
+                finalization_messages,
+                model=cfg.root_model or "",
+                context=context,
+            )
+            if finalization_root_error is None:
+                last_response = finalization_response
+                context.emit_event(llm_response_event(iterations, finalization_response))
+                finalization_code = extract_code_block(finalization_response, "python")
+                if finalization_code:
+                    context.emit_event(build_code_event(iterations, finalization_code))
+                    finalization_outcome = execute_step(finalization_code, **step_kwargs())
+                    answer = finalization_outcome.answer
+                    last_output = finalization_outcome.output
+                    last_execution_status = finalization_outcome.execution_status
+                    answer_metadata = finalization_outcome.answer_metadata
+                    trajectory.append(
+                        record_iteration(
+                            iteration=iterations,
+                            messages=finalization_messages,
+                            response=finalization_response,
+                            code=finalization_code,
+                            outcome=finalization_outcome,
+                            usage=finalization_usage,
+                        )
+                    )
+            else:
+                context.emit_event(
+                    finalization_error_event(
+                        finalization_root_error.type,
+                        finalization_root_error.message,
+                    )
+                )
+
         # If extraction cannot recover an outstanding PolicyError, do not
         # present the gated draft as a normal answer. A successful extraction
         # below may use it as evidence, but remains explicitly unconfirmed and
@@ -636,10 +757,11 @@ def run_rlm(
             final_answer = _best_answer(answer, last_output, last_response, last_execution_status)
 
         # Extract fallback: the loop exhausted its iteration budget or reached
-        # a fail-closed terminal handoff without answer['ready']. Reaching here
-        # means the root client survived every prior call (root failures return
-        # early above), so one more extract call is affordable. Failed terminal
-        # attempts are trajectory evidence too: they can mutate
+        # a fail-closed terminal handoff without answer['ready']. All main-loop
+        # root failures return early. A failed terminal finalization is the
+        # sole exception: its event is emitted above while the original
+        # terminal error remains authoritative.
+        # Failed terminal attempts are trajectory evidence too: they can mutate
         # answer['content'] before raising, and their code/error explain how
         # trustworthy that draft is.
         was_extracted = False

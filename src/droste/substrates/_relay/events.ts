@@ -16,6 +16,7 @@ export const RLM_EVENT_TYPES = new Set<string>([
   "execution_error", // {iteration, error_type, message} — a step failed; repair may follow (#35)
   "subcall", // {depth, seq, ...} (future)
   "reasoning_delta", // {text} — emitted relay-side from streamed /responses
+  "finalization_error", // {error_type, message} — terminal root finalization failed
   "extract_error", // {error_type, message} — post-exhaustion extract pass failed; answer is raw loop output
   "done", // final HostResponse mirror (future)
 ]);
