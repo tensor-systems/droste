@@ -13,6 +13,14 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.10.6)
 
+### Trajectory execution status is explicit
+
+`IterationRecord` and each built-in runner trajectory entry now include the
+additive string field `execution_status`, currently `"success"` or `"error"`.
+Use it instead of interpreting the text in `execution_result`: successful
+stdout may legitimately begin with `ERROR:`. The existing `execution_result`
+field and runner protocol version are unchanged.
+
 ### ModelRelay root request accounting
 
 `ModelRelayClient.root_requests_issued` exposes a thread-safe cumulative count

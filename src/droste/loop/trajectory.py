@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+EXECUTION_STATUS_SUCCESS = "success"
+EXECUTION_STATUS_ERROR = "error"
+
 
 @dataclass
 class IterationRecord:
@@ -16,3 +19,6 @@ class IterationRecord:
     code_executed: str
     execution_result: str
     tokens_used: int
+    # Additive structured status: execution_result remains the exact feedback
+    # text for compatibility and must never be parsed to recover this state.
+    execution_status: str = EXECUTION_STATUS_SUCCESS

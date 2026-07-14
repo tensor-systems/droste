@@ -79,6 +79,9 @@ file (question, budgets, endpoints or context, declarative data sources) and
 reads a response (answer, `ready`, `extracted`, iterations, attempted and
 successful subcalls,
 trajectory, usage). This is how non-Python hosts embed the engine.
+Each trajectory entry carries `execution_status` (`success` or `error`) beside
+the unchanged `execution_result` text; consumers must not infer status from an
+output prefix.
 
 **Compatibility window**: the request/response schema and the source
 protocol are versioned, each by a single integer:

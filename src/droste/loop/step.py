@@ -26,7 +26,7 @@ from ..execution.progress import execution_error_event, output_event
 from ..policy import PolicyHints, contract_violations, ready_violations
 from ..protocols.environment import ExecutionResult, RLMEnvironment
 from ..protocols.llm_client import LLMClient, total_tokens_from_usage
-from .trajectory import IterationRecord
+from .trajectory import EXECUTION_STATUS_ERROR, EXECUTION_STATUS_SUCCESS, IterationRecord
 
 # Fed back instead of an empty string when executed code prints nothing, so the
 # model learns that only stdout is visible.
@@ -102,6 +102,11 @@ class StepOutcome:
     exception: Exception | None = None
     answer_metadata: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def execution_status(self) -> str:
+        """Structured execution state derived from the typed outcome, not stdout."""
+        return EXECUTION_STATUS_ERROR if self.error is not None else EXECUTION_STATUS_SUCCESS
+
 
 def _execution_output(result: ExecutionResult | str) -> str:
     if isinstance(result, ExecutionResult):
@@ -133,10 +138,15 @@ def _resolved_output(answer: dict[str, Any], last_output: str) -> str:
     return last_output
 
 
-def _best_answer(answer: dict[str, Any], last_output: str, last_response: str) -> str:
+def _best_answer(
+    answer: dict[str, Any],
+    last_output: str,
+    last_response: str,
+    last_execution_status: str | None,
+) -> str:
     if answer.get("content"):
         return str(answer.get("content", ""))
-    if last_output and not last_output.startswith("ERROR:"):
+    if last_output and last_execution_status == EXECUTION_STATUS_SUCCESS:
         return last_output
     if last_response:
         return last_response
@@ -495,6 +505,7 @@ def record_iteration(
     code: str,
     output: str,
     usage: Any,
+    execution_status: str = EXECUTION_STATUS_SUCCESS,
 ) -> IterationRecord:
     """The one place iteration records are built: a structured message-list
     snapshot (deep-copied — the live list keeps growing), nudge-normalized
@@ -506,6 +517,7 @@ def record_iteration(
         code_executed=code,
         execution_result=_feedback_output(output),
         tokens_used=total_tokens_from_usage(usage),
+        execution_status=execution_status,
     )
 
 

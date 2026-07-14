@@ -15,6 +15,7 @@ from droste.loop.step import (
     finalize,
     record_iteration,
 )
+from droste.loop.trajectory import IterationRecord
 from droste.policy import PolicyHints, contract_violations, ready_violations
 
 
@@ -121,6 +122,7 @@ def test_record_iteration_snapshots_messages() -> None:
     messages[0]["content"] = "mutated"
     assert record.llm_input == [{"role": "user", "content": "Q"}]
     assert record.execution_result == "1"
+    assert record.execution_status == "success"
 
 
 def test_record_iteration_normalizes_empty_output_to_nudge() -> None:
@@ -128,6 +130,26 @@ def test_record_iteration_normalizes_empty_output_to_nudge() -> None:
         iteration=2, messages=[], response="R", code="pass", output="", usage=None
     )
     assert record.execution_result == EMPTY_OUTPUT_NUDGE
+
+
+def test_record_iteration_keeps_error_text_and_status_separate() -> None:
+    record = record_iteration(
+        iteration=2,
+        messages=[],
+        response="R",
+        code="raise ValueError('boom')",
+        output="ERROR: boom",
+        usage=None,
+        execution_status="error",
+    )
+    assert record.execution_result == "ERROR: boom"
+    assert record.execution_status == "error"
+
+
+def test_iteration_record_positional_construction_remains_compatible() -> None:
+    record = IterationRecord(1, [], "R", "pass", "legacy output", 2)
+    assert record.execution_result == "legacy output"
+    assert record.execution_status == "success"
 
 
 def test_finalize_reads_stats_and_readiness() -> None:

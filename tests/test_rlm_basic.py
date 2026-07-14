@@ -233,6 +233,7 @@ def test_run_rlm_rebound_answer_in_repaired_code_registers_ready():
     assert result.ready
     assert result.answer == "fixed"
     assert result.iterations == 1  # repair happened within iteration 1
+    assert [entry.execution_status for entry in result.trajectory] == ["success"]
 
 
 def test_failed_rebound_answer_cannot_confirm_through_noop_repair():

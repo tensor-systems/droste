@@ -281,6 +281,7 @@ def run_rlm(
     iterations = 0
     last_output = ""
     last_response = ""
+    last_execution_status: str | None = None
     error: RLMError | None = None
     answer_metadata: dict[str, Any] = {}
 
@@ -301,7 +302,7 @@ def run_rlm(
 
     def early_result(run_error: RLMError | None) -> RLMResult:
         return finalize(
-            answer_text=_best_answer(answer, last_output, last_response),
+            answer_text=_best_answer(answer, last_output, last_response, last_execution_status),
             answer=answer,
             iterations=iterations,
             context=context,
@@ -364,7 +365,10 @@ def run_rlm(
                     usage = repair_usage
                 else:
                     context.emit_progress("No code block found, returning response as answer")
-                    final_answer = _best_answer(answer, last_output, last_response) or response
+                    final_answer = (
+                        _best_answer(answer, last_output, last_response, last_execution_status)
+                        or response
+                    )
                     return finalize(
                         answer_text=final_answer,
                         answer=answer,
@@ -381,6 +385,7 @@ def run_rlm(
             outcome = execute_step(code, **step_kwargs())
             answer = outcome.answer
             last_output = outcome.output
+            last_execution_status = outcome.execution_status
             error = outcome.error
             answer_metadata = outcome.answer_metadata
             if outcome.error is None:
@@ -393,6 +398,7 @@ def run_rlm(
                         code=code,
                         output=last_output,
                         usage=usage,
+                        execution_status=outcome.execution_status,
                     )
                 )
                 continue
@@ -404,6 +410,7 @@ def run_rlm(
                 code=code,
                 output=last_output,
                 usage=usage,
+                execution_status=outcome.execution_status,
             )
 
             context.emit_progress(
@@ -432,6 +439,7 @@ def run_rlm(
                 outcome = execute_step(repaired_code, **step_kwargs())
                 answer = outcome.answer
                 last_output = outcome.output
+                last_execution_status = outcome.execution_status
                 error = outcome.error
                 answer_metadata = outcome.answer_metadata
                 if outcome.error is None:
@@ -449,6 +457,7 @@ def run_rlm(
                         code=repaired_code,
                         output=last_output,
                         usage=repair_usage,
+                        execution_status=outcome.execution_status,
                     )
                 )
             else:
@@ -464,7 +473,7 @@ def run_rlm(
             withheld_content = str(answer.get("content") or "")
             final_answer = ""
         else:
-            final_answer = _best_answer(answer, last_output, last_response)
+            final_answer = _best_answer(answer, last_output, last_response, last_execution_status)
 
         # Extract fallback: the loop exhausted its iteration budget
         # without answer['ready']. Reaching here means the root client survived
