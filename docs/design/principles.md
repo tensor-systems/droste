@@ -2,8 +2,7 @@
 
 *The north star for droste's evolution. `architecture.md` describes what is; this
 describes what everything should converge toward, and the test every new piece of
-structure must pass. Grounded in the 2026-07 architecture review and its
-topology spike.*
+structure must pass.*
 
 ## The test: structure must be removable
 
@@ -29,7 +28,7 @@ structure we do ship divides into two kinds:
   improve.
 
 The failure modes this guards against are all live in the current code: a validator
-that is convention rather than boundary (since hardened by the A′ sandbox split),
+that is convention rather than boundary (since hardened by the sandbox split),
 recursion capped at depth 1 by an
 architectural constant (#2), and orchestration strategy welded into the engine as
 Python string constants (`prompts/tips.py`).
@@ -54,7 +53,7 @@ Python string constants (`prompts/tips.py`).
 ## 1. One capability protocol, location- and language-transparent
 
 `query()`, `search()`, `llm_query()`, a future `rlm_query()`, host tools, and
-partner APIs are all the same thing: **untrusted code emitting a capability
+remote APIs are all the same thing: **untrusted code emitting a capability
 request, and something trusted answering it.** One wire shape (JSON-RPC 2.0 with a
 `register` step; descriptors shaped like tool schemas, because models are trained
 on that shape). The sandbox cannot tell — and must not care — whether the provider
@@ -105,12 +104,11 @@ never force a core rewrite:
 - **HTTP** (`wrapper_v1` demotes to this) — remains possible; keeps its
   budget/SSRF guards, relocated into the broker.
 
-What the MCP default buys: **every existing MCP server is a droste data source
-for free** — "integrate droste" becomes "point it at your MCP server" — and the
-registry stops being a Python-only abstraction: manifests auto-generate both
-the sandbox bindings *and* the prompt's `{capabilities}` fragment, so the prompt
-can never lie about the API surface. But MCP is how capabilities are *populated*,
-not what droste *is*.
+Compatible MCP servers can be adapted without adding MCP-specific bindings to
+the sandbox. The registry stops being a Python-only abstraction: manifests
+generate both the sandbox bindings and the prompt's `{capabilities}` fragment,
+so the prompt describes the actual API surface. MCP is how capabilities are
+*populated*, not what droste *is*.
 
 The security posture is ours regardless of transport: **the REPL never speaks
 MCP.** The sandbox calls generated Python functions; those functions go through
@@ -124,8 +122,8 @@ handle, no credential, no raw tool — only the ability to make requests.
 ## 3. Define little, but define it sharply: the five ABIs
 
 "Define as little as possible" is half the discipline; the other half is that what
-we *do* define, we define precisely — these are the boundaries products will
-otherwise reinvent, badly and divergently. Five, each small, versioned, and
+we *do* define, we define precisely — these are boundaries embedders need to
+share consistently. Five, each small, versioned, and
 consumer-validated before frozen:
 
 1. **Kernel ABI** — the REPL contract: the `answer` dict, stdout-as-feedback,
@@ -139,19 +137,17 @@ consumer-validated before frozen:
 4. **PromptPack ABI** — the stable slots, `(model, profile)` resolution,
    provenance fields.
 5. **Trace ABI** — the run record: code executed, outputs, capability calls,
-   usage, policy events, final answer. This unifies what already exists piecemeal
-   (`trajectory`/`IterationRecord`, `retrieved_guids`, the #1 event stream) into
-   one named boundary — it is what benchmarking, citations, replay, and billing
-   all consume, and none of them should parse ad-hoc internals.
+   usage, policy events, final answer. This unifies trajectory and event paths
+   into one named boundary — it is what benchmarking, citations, replay, and
+   billing all consume, and none of them should parse ad-hoc internals.
 
 ## 4. Compute is a budget, not an architectural constant
 
 An architectural depth constant is a hard cap on how much compute the method
 may spend on a hard problem — exactly the ceiling the Bitter Lesson forbids.
-The paper's OOLONG-Pairs
-ablation (58 → 76 at depth 3) is the lesson restated in our own benchmark: more
-search buys more accuracy, and a depth-1 architecture forbids the spend even when
-it would pay.
+A fixed depth bound constrains available search regardless of task difficulty.
+Depth therefore belongs in caller-authorized compute, and any claim about its
+quality effect requires version-matched benchmark artifacts.
 
 The replacement is **one budget object**, set by the caller, metered by the broker:
 
@@ -174,9 +170,8 @@ authorization when they close.
 Depth, breadth, and iteration count stop being engine constants and become
 emergent consequences of how much compute the caller authorized. Child runs
 (`rlm_query`) draw from the **parent's** ledger — recursion is metered, not gated.
-This reconciles Sutton with the P&L: the architecture has no ceiling on
-intelligence; the *invoice* has a caller-set ceiling with conservative defaults.
-Scaling a hard problem means handing it a bigger budget, nothing else.
+This keeps the architecture flexible while retaining caller-set resource
+ceilings with conservative defaults.
 
 ## 5. Strategy is data: prompt packs + RLM skills
 
@@ -184,7 +179,7 @@ All human strategy lives above the engine in two artifact kinds, both versioned
 data, neither code:
 
 **Prompt packs** — deterministic harness configuration, resolved at run start by
-`(model, profile)` with a fallback chain (caller pack → product pack → droste
+`(model, profile)` with a fallback chain (caller pack → consumer pack → droste
 default for the model family → generic). A pack carries the base prompt, the
 refinement/repair/extract templates, and policy defaults. The **slot contract is
 the only stable API**: the engine guarantees each template a fixed variable set —
@@ -195,16 +190,16 @@ because they carry the machinery that must be deterministic (the repair path fir
 when the model is already misbehaving; that is the worst moment for model-chosen
 strategy).
 
-**RLM skills** — additive, composable strategy in the skills format the agent
-ecosystems (Claude Code and similar agent tools) already converged on: markdown +
-frontmatter. The difference in genre: agent skills teach *tool workflows*; RLM
+**RLM skills** — additive, composable strategy in a portable
+Markdown-plus-frontmatter format. The difference in genre: agent skills teach
+*tool workflows*; RLM
 skills teach *code-writing under a metered budget* — chunking budgets,
 fat-prompts-small-batches, "string matching finds WHERE, llm_query understands
-WHAT." Today's `tips.py` profiles become the first skills. Two properties agent
-ecosystems lack:
+WHAT." Today's `tips.py` profiles become the first skills. Two optional
+properties distinguish these artifacts:
 
-- **Benchmarked**: every skill can carry a provenance line — which bench, what
-  delta. "This skill helps" is a measured claim.
+- **Evidence provenance**: a skill can cite immutable, version-matched benchmark
+  artifacts. Without that evidence, it makes no effectiveness claim.
 - **Loadable mid-run through the bridge**: a `skills.*` provider lets the model
   fetch strategy when it discovers it needs it, costed against the same budget.
   Progressive disclosure fits RLM economics better than agent sessions: root
@@ -215,16 +210,14 @@ The exit ramp is built in: the pack for a strong-enough model is three lines
 ("REPL. Capabilities: `{capabilities}`. Budget: `{budget}`.") and the default
 skill set shrinks toward empty. Deleting strategy is swapping a data file.
 
-An embedder's own extension formats (connectors, recipes) map onto this substrate:
-connectors are providers, recipes are RLM skills. A product-specific extension
-format is a branded profile of the packs/skills mechanism, not a parallel system.
+Consumer extensions use the same provider, pack, and skill contracts rather
+than parallel engine mechanisms.
 
 ## 6. Trust topology
 
-Settled by spike (2026-07-06): the untrusted REPL and the trusted side are
-separate interpreter contexts bridged by `call`/`emit` (Option A, phased **A′ →
-A″**; a second Pyodide context costs ~+42 MB, not 2×). One rule governs every
-future topology change, including nested recursion and the Worker evolution:
+The untrusted REPL and the trusted side are separate interpreter contexts
+bridged by `call`/`emit`. One rule governs every future topology change,
+including nested recursion and remote execution:
 
 > **Never re-enter a suspended interpreter. Every concurrently-active role gets
 > its own context.**
@@ -234,22 +227,21 @@ future topology change, including nested recursion and the Worker evolution:
 - **Don't over-unify.** The pull to make everything a skill (base prompt, repair
   templates) trades determinism away where the harness needs it most. Two layers —
   one deterministic, one discoverable — is the right amount of structure.
-- **Don't strip strategy prematurely.** Today's models measurably need the tips;
-  the discipline is removability, not asceticism. Ship defaults; measure; shrink.
+- **Don't strip strategy prematurely.** Compatibility profiles retain the
+  current guidance until versioned evidence supports changing it. The discipline
+  is removability, not asceticism.
 - **The engine stays intent-blind.** It never infers what the caller wants from
   question text (existing policy-hints rule). Callers pass policy; packs carry
   defaults; the core enforces mechanics only.
-- **Python stays the REPL language** — not from partisanship but because it is the
-  language models know most deeply, which is itself a Bitter Lesson call: use the
-  substrate the model already learned rather than inventing a DSL it must be
-  taught.
+- **Python is the current REPL compatibility surface.** An alternative runtime
+  requires comparative evidence before adoption.
 
 ## Where the work lands
 
 | principle | issue |
 |---|---|
-| bridge (`call`/`emit`, JSON-RPC 2.0, register) + A′ split | shipped; typed brokered path across native + Pyodide |
-| providers are MCP; registry unification; wrapper_v1 demotion | shipped; MCP spike: #5 |
+| bridge (`call`/`emit`, JSON-RPC 2.0, register) | shipped; typed brokered path across native + Pyodide |
+| providers are MCP; registry unification; wrapper_v1 demotion | shipped; transport exploration: #5 |
 | one budget object; recursion as metered provider | #4 (budget) + #2 (recursion) |
 | event stream over `emit` | #1 |
 | prompt packs + RLM skills | #3 |

@@ -7,12 +7,11 @@
 
 **A recursive analysis engine for data too large for a context window.**
 
-Droste is an open execution engine built on the
-[Recursive Language Model](https://alexzhang13.github.io/blog/2025/rlm/) (RLM)
-technique. Instead of putting an entire corpus in a prompt, Droste exposes it as
-a **variable in a sandboxed Python REPL**. The model writes programs over that
-variable and delegates bounded pieces that need semantic judgment through
-`llm_query` / `llm_query_batched`.
+Droste implements the Recursive Language Model (RLM) technique. Rather than
+placing an entire corpus in the root model's context, it exposes the corpus
+through a sandboxed Python REPL. The model writes programs over that data and
+delegates bounded semantic judgments through `llm_query` and
+`llm_query_batched`.
 
 ## Not a general-purpose agent
 
@@ -163,15 +162,13 @@ uv add droste        # or: pip install droste
 Using is asking over *your* data; embedding is building RLM answers into a
 product for *your users*.
 
-### BYOK: OpenAI-compatible endpoints, and Anthropic natively
+### BYOK: compatible endpoints
 
-The engine ships built-in clients for any endpoint that speaks the OpenAI
-chat-completions shape (OpenAI, OpenRouter, Google's OpenAI-compat endpoint,
-vLLM, Ollama, ...) — plus a native client for Anthropic's Messages API
-(their compat layer is a testing shim, so Claude gets its own client).
-Bring your own key — no hosted account required. The CLI detects the provider
-from facts: an `sk-ant-…` key (or `ANTHROPIC_API_KEY`) routes to
-Anthropic; an explicit `--base-url`/`OPENAI_BASE_URL` always wins.
+The engine includes an OpenAI-compatible client and an Anthropic Messages
+client. Configure the corresponding API key and model identifier; an explicit
+base URL selects a compatible endpoint. Bring your own key — no hosted account
+required. The CLI detects the protocol from credential and endpoint
+configuration, and an explicit `--base-url`/`OPENAI_BASE_URL` always wins.
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...

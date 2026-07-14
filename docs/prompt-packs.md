@@ -37,17 +37,15 @@ appear together.
 
 ```toml
 schema_version = 1
-id = "my-product.analysis.full"
+id = "example.analysis.full"
 revision = "2026-07-14.1"
 profile = "full"
 unable_sentinel = "unable to determine from the work so far"
 tips = []
 
 [provenance]
-source = "my-product"
-notes = "Prompt revision selected for the local analysis harness."
-benchmark = "private-eval-v3"
-score = "accuracy=0.84"
+source = "example"
+notes = "Prompt revision selected for this analysis harness."
 
 [policy_defaults]
 enforce_contract = true
