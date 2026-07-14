@@ -104,14 +104,31 @@ subcall count plus unresolved recorded-request and item counts. Provider errors
 do not trigger this handoff while enough budget for the recorded exact retries
 remains.
 
-To make this completeness check enforceable, `run_rlm` now replaces any
+When that terminal handoff has no retained `answer["content"]`, the loop now
+makes one root finalization request and executes at most one returned code block
+in the existing persistent REPL. No missing-code or execution repair is made.
+All model-visible subcall bindings are disabled before that code executes, so
+the step cannot spend further subcall budget and can synthesize already retained
+work; any resulting draft still passes through the normal unconfirmed extraction
+path. Incomplete exact semantic evidence continues to revoke readiness, and a
+finalization that retains no draft leaves the original typed policy failure
+fatal.
+
+To make this completeness check enforceable, `run_rlm` continues to replace any
 `llm_batch_json` and `llm_query_batched_json` entries in the mapping returned by
 `environment.globals()` with Droste's tracked bindings before sandbox execution.
-Embedders must treat those two names as reserved: expose custom structured
-helpers under different names, or customize the `SubcallClient` passed to
-`run_rlm` instead. The replacement happens for every run so both aliases remain
-consistent; completeness evidence is collected only while semantic contract
-enforcement is active.
+While semantic contract enforcement is active, it now also replaces
+`llm_query`, `llm_batch`, `batch_llm_query`, and `llm_query_batched` with
+revocable bindings so saved aliases can be disabled during terminal
+finalization. Embedders that enable semantic enforcement must treat all six
+names as reserved: expose custom helpers under different names, or customize
+the `SubcallClient` passed to `run_rlm` instead. Runs without semantic
+enforcement retain the prior direct-binding behavior.
+
+The three built-in prompt packs are revised from `1.0.0` to `1.0.1` to describe
+the bounded terminal mode in their error-repair templates. Caller-provided packs
+remain valid without changes; the engine still enforces the no-subcall boundary
+even when a custom template does not describe it.
 
 ### ModelRelay root request accounting
 
