@@ -60,8 +60,13 @@ class RecordingLLMClient(MockLLMClient):
 class SyntheticClassificationSubcalls:
     """Deterministic structured responses for semantic completeness tests."""
 
-    def __init__(self, batches: list[list[str]]) -> None:
+    def __init__(
+        self,
+        batches: list[list[str]],
+        errors: list[list[dict[str, object]]] | None = None,
+    ) -> None:
         self.batches = list(batches)
+        self.errors = list(errors) if errors is not None else [[] for _ in batches]
         self.context = None
 
     def bind_context(self, context) -> None:
@@ -83,8 +88,10 @@ class SyntheticClassificationSubcalls:
         if stats.calls_made + count > self.context.max_calls:
             raise SubcallBudgetExceeded("max subcalls exceeded")
         stats.calls_made += count
-        stats.successful_calls += count
-        return self.batches.pop(0), []
+        errors = self.errors.pop(0)
+        failed = {int(item["index"]) for item in errors}
+        stats.successful_calls += count - len(failed)
+        return self.batches.pop(0), errors
 
 
 def _runner_env(context: Any) -> RunnerEnvironment:
@@ -679,11 +686,8 @@ labels = [label for value in result['values'] if value for label in value['label
 answer['content'] = ','.join(labels)
 answer['ready'] = True
 ```"""
-    repair = """```python
-answer['ready'] = True
-```"""
     llm = RecordingLLMClient(
-        _responses(root_code, repair, "Best-effort classification from partial evidence.")
+        _responses(root_code, "Best-effort classification from partial evidence.")
     )
     subcalls = SyntheticClassificationSubcalls(
         [['{"labels":["red","blue"]}', '{"labels":["green"]}']]
@@ -716,12 +720,10 @@ answer['ready'] = True
     assert result.error is None
     assert result.recovered_error is not None
     assert result.recovered_error.type == "PolicyError"
-    assert "incomplete structured semantic batch" in result.recovered_error.message
-    assert len(result.trajectory) == 2
-    assert all(
-        "incomplete structured semantic batch" in item.execution_result
-        for item in result.trajectory
-    )
+    assert result.recovered_error.details is not None
+    assert result.recovered_error.details["reason"] == "semantic_exact_retry_budget_exhausted"
+    assert len(result.trajectory) == 1
+    assert "incomplete structured semantic batch" in result.trajectory[0].execution_result
     assert "red,blue" in llm.calls[-1][-1]["content"]
     assert (
         environment.globals()["llm_batch_json"] is environment.globals()["llm_query_batched_json"]
@@ -730,7 +732,261 @@ answer['ready'] = True
     assert environment.globals()["llm_query_batched_json"] is not environment_batched_json
 
 
-def test_exact_complete_structured_semantic_retry_recovers_normally() -> None:
+def test_impossible_exact_retry_hands_off_early_with_extraction_provenance() -> None:
+    incomplete = """```python
+prompts = ['classify red blue', 'classify green yellow']
+schema = {'type': 'object', 'required': ['label'], 'properties': {'label': {'type': 'string'}}}
+result = llm_batch_json(prompts, schema, max_repair_attempts=0)
+answer['content'] = 'red,blue,green'
+answer['ready'] = True
+```"""
+    llm = RecordingLLMClient(
+        _responses(incomplete, "Best-effort classification from retained evidence.")
+    )
+    subcalls = SyntheticClassificationSubcalls([['{"label":"red,blue"}', "not json"]])
+
+    result = run_rlm(
+        question="Assign labels to four synthetic records.",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=subcalls,
+        config=RLMConfig(
+            max_iterations=5,
+            max_calls=3,
+            policy_hints=PolicyHints(semantic=True),
+        ),
+    )
+
+    assert result.iterations == 1
+    assert len(llm.calls) == 2  # initial work, then bounded extraction; no repair call
+    assert result.sub_calls_made == 2
+    assert result.ready is False
+    assert result.extracted is True
+    assert result.answer == "Best-effort classification from retained evidence."
+    assert result.error is None
+    assert result.recovered_error is not None
+    assert result.recovered_error.type == "PolicyError"
+    assert result.recovered_error.details == {
+        "reason": "semantic_exact_retry_budget_exhausted",
+        "required_subcalls": 2,
+        "remaining_subcalls": 1,
+        "unresolved_batches": 1,
+        "unresolved_items": 1,
+    }
+    assert len(result.trajectory) == 1
+    assert result.trajectory[0].execution_status == "error"
+    assert "incomplete structured semantic batch" in result.trajectory[0].execution_result
+
+
+def test_successful_step_terminal_handoff_preserves_extract_failure_provenance() -> None:
+    incomplete_without_ready = """```python
+prompts = ['classify red blue', 'classify green yellow']
+schema = {'type': 'object', 'required': ['label'], 'properties': {'label': {'type': 'string'}}}
+llm_batch_json(prompts, schema, max_repair_attempts=0)
+answer['content'] = 'retained successful-step draft'
+```"""
+    llm = RecordingLLMClient(
+        _responses(incomplete_without_ready, "Unable to determine from the work so far.")
+    )
+    subcalls = SyntheticClassificationSubcalls([['{"label":"red,blue"}', "not json"]])
+
+    result = run_rlm(
+        question="Assign labels to four synthetic records.",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=subcalls,
+        config=RLMConfig(
+            max_iterations=5,
+            max_calls=3,
+            policy_hints=PolicyHints(semantic=True),
+        ),
+    )
+
+    assert result.iterations == 1
+    assert len(llm.calls) == 2  # successful step, then bounded extraction
+    assert result.sub_calls_made == 2
+    assert result.ready is False
+    assert result.extracted is False
+    assert result.recovered_error is None
+    assert result.extract_error is not None
+    assert result.extract_error.type == "InsufficientEvidence"
+    assert result.error is not None
+    assert result.error.type == "PolicyError"
+    assert result.error.details is not None
+    assert result.error.details["reason"] == "semantic_exact_retry_budget_exhausted"
+    assert result.error.details["withheld_content"] == "retained successful-step draft"
+    assert len(result.trajectory) == 1
+    assert result.trajectory[0].execution_status == "success"
+
+
+def test_post_repair_terminal_handoff_preserves_recovered_failure_provenance() -> None:
+    initial_failure = """```python
+raise ValueError('initial failure before structured work')
+```"""
+    incomplete_repair = """```python
+prompts = ['classify red blue', 'classify green yellow']
+schema = {'type': 'object', 'required': ['label'], 'properties': {'label': {'type': 'string'}}}
+llm_batch_json(prompts, schema, max_repair_attempts=0)
+answer['content'] = 'draft retained by failed repair'
+answer['ready'] = True
+```"""
+    llm = RecordingLLMClient(
+        _responses(
+            initial_failure,
+            incomplete_repair,
+            "Best-effort classification after failed repair.",
+        )
+    )
+    subcalls = SyntheticClassificationSubcalls([['{"label":"red,blue"}', "not json"]])
+
+    result = run_rlm(
+        question="Assign labels to four synthetic records.",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=subcalls,
+        config=RLMConfig(
+            max_iterations=5,
+            max_calls=3,
+            policy_hints=PolicyHints(semantic=True),
+        ),
+    )
+
+    assert result.iterations == 1
+    assert len(llm.calls) == 3  # initial attempt, repair, then bounded extraction
+    assert result.sub_calls_made == 2
+    assert result.ready is False
+    assert result.extracted is True
+    assert result.answer == "Best-effort classification after failed repair."
+    assert result.error is None
+    assert result.extract_error is None
+    assert result.recovered_error is not None
+    assert result.recovered_error.type == "PolicyError"
+    assert result.recovered_error.details is not None
+    assert result.recovered_error.details["reason"] == ("semantic_exact_retry_budget_exhausted")
+    assert len(result.trajectory) == 2
+    assert [record.execution_status for record in result.trajectory] == ["error", "error"]
+    assert "initial failure before structured work" in result.trajectory[0].execution_result
+    assert "incomplete structured semantic batch" in result.trajectory[1].execution_result
+
+
+def test_impossible_exact_retry_without_extraction_evidence_stays_fatal() -> None:
+    incomplete = """```python
+prompts = ['classify red blue', 'classify green yellow']
+schema = {'type': 'object', 'required': ['label'], 'properties': {'label': {'type': 'string'}}}
+llm_batch_json(prompts, schema, max_repair_attempts=0)
+answer['ready'] = True
+```"""
+    llm = RecordingLLMClient(_responses(incomplete))
+    subcalls = SyntheticClassificationSubcalls([['{"label":"red,blue"}', "not json"]])
+
+    result = run_rlm(
+        question="Assign labels to four synthetic records.",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=subcalls,
+        config=RLMConfig(
+            max_iterations=5,
+            max_calls=3,
+            policy_hints=PolicyHints(semantic=True),
+        ),
+    )
+
+    assert result.iterations == 1
+    assert len(llm.calls) == 1
+    assert result.ready is False
+    assert result.extracted is False
+    assert result.extract_error is None
+    assert result.recovered_error is None
+    assert result.error is not None
+    assert result.error.type == "PolicyError"
+    assert result.error.details is not None
+    assert result.error.details["reason"] == "semantic_exact_retry_budget_exhausted"
+    assert len(result.trajectory) == 1
+    assert result.trajectory[0].execution_status == "error"
+
+
+def test_rejected_oversized_untracked_batch_does_not_force_terminal_handoff() -> None:
+    oversized = """```python
+try:
+    llm_batch(['too', 'large', 'for budget'])
+except Exception:
+    pass
+```"""
+    later_semantic_work = """```python
+schema = {'type': 'object', 'required': ['label'], 'properties': {'label': {'type': 'string'}}}
+result = llm_batch_json(['small enough'], schema, max_repair_attempts=0)
+answer['content'] = result['values'][0]['label']
+answer['ready'] = True
+```"""
+    llm = RecordingLLMClient(_responses(oversized, later_semantic_work))
+    subcalls = SyntheticClassificationSubcalls([['{"label":"verified"}']])
+
+    result = run_rlm(
+        question="q",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=subcalls,
+        config=RLMConfig(
+            max_iterations=2,
+            max_calls=2,
+            policy_hints=PolicyHints(semantic=True),
+        ),
+    )
+
+    assert result.iterations == 2
+    assert len(llm.calls) == 2
+    assert result.sub_calls_made == 1
+    assert result.ready is True
+    assert result.answer == "verified"
+    assert result.error is None
+
+
+def test_non_budget_structured_error_continues_to_exact_retry() -> None:
+    incomplete = """```python
+prompts = ['classify red blue', 'classify green yellow']
+schema = {'type': 'object', 'required': ['label'], 'properties': {'label': {'type': 'string'}}}
+result = llm_batch_json(prompts, schema, max_repair_attempts=0)
+answer['content'] = 'partial'
+answer['ready'] = True
+```"""
+    complete_retry = """```python
+result = llm_batch_json(prompts, schema, max_repair_attempts=0)
+answer['content'] = ','.join(value['label'] for value in result['values'])
+answer['ready'] = True
+```"""
+    llm = RecordingLLMClient(_responses(incomplete, complete_retry))
+    subcalls = SyntheticClassificationSubcalls(
+        [
+            ["", '{"label":"green,yellow"}'],
+            ['{"label":"red,blue"}', '{"label":"green,yellow"}'],
+        ],
+        errors=[
+            [{"index": 0, "type": "provider_error", "error": "temporarily unavailable"}],
+            [],
+        ],
+    )
+
+    result = run_rlm(
+        question="Assign labels to four synthetic records.",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=subcalls,
+        config=RLMConfig(
+            max_iterations=1,
+            max_calls=4,
+            policy_hints=PolicyHints(semantic=True),
+        ),
+    )
+
+    assert len(llm.calls) == 2
+    assert result.sub_calls_made == 4
+    assert result.ready is True
+    assert result.answer == "red,blue,green,yellow"
+    assert result.error is None
+    assert result.recovered_error is None
+
+
+def test_enough_budget_allows_exact_complete_structured_semantic_retry() -> None:
     incomplete = """```python
 prompts = ['classify red blue', 'classify green yellow']
 schema = {
@@ -787,6 +1043,8 @@ answer['ready'] = True
     assert result.answer == "red,blue,green,yellow"
     assert result.error is None
     assert result.recovered_error is None
+    assert len(llm.calls) == 2
+    assert result.sub_calls_made == 4
 
 
 def test_incomplete_structured_batch_without_semantic_hint_skips_tracking(monkeypatch) -> None:

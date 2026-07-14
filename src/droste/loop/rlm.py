@@ -168,6 +168,35 @@ def _has_extractable_work(answer: dict[str, Any], has_successful_step: bool) -> 
     return has_successful_step
 
 
+def _terminal_semantic_budget_error(
+    evidence: _StructuredBatchEvidence | None,
+    context: ExecutionContext,
+) -> RLMError | None:
+    """Return a fail-closed policy error when exact recovery is impossible."""
+    if evidence is None or context.max_calls < 0:
+        return None
+    required = evidence.minimum_exact_retry_calls
+    remaining = max(context.max_calls - context.stats.calls_made, 0)
+    if required <= remaining:
+        return None
+    return RLMError(
+        type="PolicyError",
+        message=(
+            "Policy violation: incomplete structured semantic batch evidence "
+            "cannot be cleared within the subcall budget: clearing all "
+            f"{evidence.unresolved_batches} unresolved recorded exact request(s) "
+            f"requires at least {required} call(s), but only {remaining} remain."
+        ),
+        details={
+            "reason": "semantic_exact_retry_budget_exhausted",
+            "required_subcalls": required,
+            "remaining_subcalls": remaining,
+            "unresolved_batches": evidence.unresolved_batches,
+            "unresolved_items": evidence.unresolved_items,
+        },
+    )
+
+
 def _extract_final_answer(
     question: str,
     draft: str,
@@ -367,6 +396,7 @@ def run_rlm(
     last_execution_status: ExecutionStatus | None = None
     error: RLMError | None = None
     answer_metadata: dict[str, Any] = {}
+    terminal_budget_handoff = False
 
     messages: list[dict[str, str]] = []
     code = ""
@@ -502,6 +532,11 @@ def run_rlm(
                         usage=usage,
                     )
                 )
+                terminal_error = _terminal_semantic_budget_error(semantic_evidence, context)
+                if terminal_error is not None:
+                    error = terminal_error
+                    terminal_budget_handoff = True
+                    break
                 continue
 
             failed_record = record_iteration(
@@ -512,6 +547,13 @@ def run_rlm(
                 outcome=outcome,
                 usage=usage,
             )
+
+            terminal_error = _terminal_semantic_budget_error(semantic_evidence, context)
+            if terminal_error is not None:
+                trajectory.append(failed_record)
+                error = terminal_error
+                terminal_budget_handoff = True
+                break
 
             context.emit_progress(
                 f"Iteration {iterations}/{cfg.max_iterations}: Retrying with error feedback..."
@@ -575,6 +617,12 @@ def run_rlm(
             else:
                 trajectory.append(failed_record)
 
+            terminal_error = _terminal_semantic_budget_error(semantic_evidence, context)
+            if terminal_error is not None:
+                error = terminal_error
+                terminal_budget_handoff = True
+                break
+
         # If extraction cannot recover an outstanding PolicyError, do not
         # present the gated draft as a normal answer. A successful extraction
         # below may use it as evidence, but remains explicitly unconfirmed and
@@ -587,18 +635,19 @@ def run_rlm(
         else:
             final_answer = _best_answer(answer, last_output, last_response, last_execution_status)
 
-        # Extract fallback: the loop exhausted its iteration budget
-        # without answer['ready']. Reaching here means the root client survived
-        # every prior call (root failures return early above), so one more
-        # extract call is affordable. Failed terminal attempts are trajectory
-        # evidence too: they can mutate answer['content'] before raising, and
-        # their code/error explain how trustworthy that draft is.
+        # Extract fallback: the loop exhausted its iteration budget or reached
+        # a fail-closed terminal handoff without answer['ready']. Reaching here
+        # means the root client survived every prior call (root failures return
+        # early above), so one more extract call is affordable. Failed terminal
+        # attempts are trajectory evidence too: they can mutate
+        # answer['content'] before raising, and their code/error explain how
+        # trustworthy that draft is.
         was_extracted = False
         extract_error: RLMError | None = None
         recovered_error: RLMError | None = None
         if (
             not answer.get("ready")
-            and iterations >= cfg.max_iterations
+            and (iterations >= cfg.max_iterations or terminal_budget_handoff)
             and trajectory
             and _has_extractable_work(answer, has_successful_step)
         ):

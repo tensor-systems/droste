@@ -99,6 +99,18 @@ class _StructuredBatchEvidence:
     def unresolved_items(self) -> int:
         return sum(len(errors) for errors in self._incomplete.values())
 
+    @property
+    def minimum_exact_retry_calls(self) -> int:
+        """Full-batch call count across unresolved recorded exact requests.
+
+        Completion evidence requires replaying every full recorded request, not
+        only its failed items. Validator object identity is part of a request,
+        so otherwise-identical calls recorded with distinct validator objects
+        contribute separately. This is a lower bound: validation repairs may
+        consume more calls, but no successful clearing path can consume fewer.
+        """
+        return sum(len(request.prompts) for request in self._incomplete)
+
 
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)

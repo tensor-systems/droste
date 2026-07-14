@@ -120,6 +120,38 @@ def test_structured_evidence_requires_an_exact_validated_retry() -> None:
     )
     assert evidence.unresolved_batches == 0
     assert evidence.unresolved_items == 0
+    assert evidence.minimum_exact_retry_calls == 0
+
+
+def test_structured_evidence_retry_cost_counts_each_recorded_exact_request() -> None:
+    evidence = _StructuredBatchEvidence()
+
+    def first_validator(value: Any, index: int) -> None:
+        return None
+
+    def second_validator(value: Any, index: int) -> None:
+        return None
+
+    evidence.record(
+        prompts=["a", "b", "c"],
+        schema=SCHEMA,
+        contexts=None,
+        validator=first_validator,
+        errors=[{"index": 2, "type": "provider_error", "error": "temporary"}],
+    )
+    evidence.record(
+        prompts=["a", "b", "c"],
+        schema=SCHEMA,
+        contexts=None,
+        validator=second_validator,
+        errors=[{"index": 0, "type": "validation_error", "error": "bad"}],
+    )
+
+    # Validator identity participates in exactness. These otherwise-identical
+    # calls are two recorded requests, each requiring its full three-item batch.
+    assert evidence.unresolved_batches == 2
+    assert evidence.unresolved_items == 2
+    assert evidence.minimum_exact_retry_calls == 6
 
 
 def test_structured_batch_repairs_only_malformed_items_once() -> None:
