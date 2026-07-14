@@ -49,9 +49,6 @@ from .run import (
     main,
     run,
 )
-from .run import (
-    run_rlm as run_rlm,
-)
 from .sources import (
     DataSourceWrapper as DataSourceWrapper,
 )

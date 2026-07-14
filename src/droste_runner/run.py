@@ -56,13 +56,18 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
     if refusal is not None:
         return refusal
 
+    return _run_valid_request(request, source_ctx=source_ctx)
+
+
+def _run_valid_request(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
+    """Run an already version-checked request."""
+
     adapter_module = request.get("adapter_module")
     if isinstance(adapter_module, str) and adapter_module.strip():
         # Adapters own their response shape; the envelope version is stamped
         # only when the adapter didn't claim one itself.
         response = _run_adapter(request)
-        if isinstance(response, dict):
-            response.setdefault("protocol_version", RUNNER_PROTOCOL_VERSION)
+        response.setdefault("protocol_version", RUNNER_PROTOCOL_VERSION)
         return response
 
     context = _build_context(request)
@@ -226,5 +231,5 @@ def main() -> None:
             "adapter_module is not accepted from the request file; register "
             "source types via register_source_type() in the runner entrypoint"
         )
-    response = run(request)
+    response = _run_valid_request(request)
     sys.stdout.write(json.dumps(response, ensure_ascii=True))

@@ -25,6 +25,7 @@ def test_legacy_runner_facade_reexports_canonical_implementations() -> None:
     assert runner.WrapperV1DataSource is WrapperV1DataSource
     assert runner.build_data_sources is build_data_sources
     assert runner.run is run_module.run
+    assert not hasattr(runner, "run_rlm")
 
 
 def test_focused_runner_modules_import_independently() -> None:
