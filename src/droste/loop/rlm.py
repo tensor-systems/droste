@@ -248,10 +248,15 @@ def run_rlm(
     # llm_query_batched is the name models primed on RLM conventions reach
     # for first, so the sandbox must answer to it.
     env_globals.setdefault("llm_query_batched", subcalls.llm_batch)
-    semantic_evidence = _StructuredBatchEvidence()
+    semantic_evidence = (
+        _StructuredBatchEvidence()
+        if cfg.enforce_contract and cfg.policy_hints is not None and cfg.policy_hints.semantic
+        else None
+    )
     structured_batch = bind_structured_batch(subcalls, semantic_evidence)
-    # These two aliases are one core helper, so bind the tracked version even
-    # when an environment pre-populated the untracked helper during setup.
+    # These two aliases are one core helper, so bind Droste's version even when
+    # an environment pre-populated a custom helper during setup. Semantic runs
+    # use the evidence-tracked form selected above.
     env_globals["llm_batch_json"] = structured_batch
     env_globals["llm_query_batched_json"] = structured_batch
     env_globals.setdefault("aggregate_json_counts", aggregate_json_counts)

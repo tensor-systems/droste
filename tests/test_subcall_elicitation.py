@@ -589,7 +589,7 @@ def test_terminal_subcall_budget_error_extracts_partial_answer() -> None:
 # --- policy violation stays corrective and falls back to extraction -------
 
 
-def test_incomplete_structured_semantic_batch_is_not_confirmed() -> None:
+def test_environment_structured_bindings_are_replaced_for_semantic_tracking() -> None:
     root_code = """```python
 prompts = ['classify red blue', 'classify green yellow']
 schema = {
@@ -619,10 +619,19 @@ answer['ready'] = True
     subcalls = SyntheticClassificationSubcalls(
         [['{"labels":["red","blue"]}', '{"labels":["green"]}']]
     )
+    environment_batch_json = object()
+    environment_batched_json = object()
+    environment = MockEnvironment(
+        {
+            "answer": {"content": "", "ready": False},
+            "llm_batch_json": environment_batch_json,
+            "llm_query_batched_json": environment_batched_json,
+        }
+    )
 
     result = run_rlm(
         question="Assign one color label to each of four synthetic records.",
-        environment=MockEnvironment(),
+        environment=environment,
         root_llm=llm,
         subcalls=subcalls,
         config=RLMConfig(
@@ -645,6 +654,11 @@ answer['ready'] = True
         for item in result.trajectory
     )
     assert "red,blue" in llm.calls[-1][-1]["content"]
+    assert (
+        environment.globals()["llm_batch_json"] is environment.globals()["llm_query_batched_json"]
+    )
+    assert environment.globals()["llm_batch_json"] is not environment_batch_json
+    assert environment.globals()["llm_query_batched_json"] is not environment_batched_json
 
 
 def test_exact_complete_structured_semantic_retry_recovers_normally() -> None:
@@ -706,7 +720,7 @@ answer['ready'] = True
     assert result.recovered_error is None
 
 
-def test_incomplete_structured_batch_without_semantic_hint_is_unchanged() -> None:
+def test_incomplete_structured_batch_without_semantic_hint_skips_tracking(monkeypatch) -> None:
     root_code = """```python
 prompts = ['classify red blue', 'classify green yellow']
 schema = {
@@ -727,6 +741,13 @@ labels = [label for value in result['values'] if value for label in value['label
 answer['content'] = ','.join(labels)
 answer['ready'] = True
 ```"""
+
+    def unexpected_evidence_construction() -> None:
+        raise AssertionError("non-semantic runs must not allocate semantic evidence")
+
+    monkeypatch.setattr(
+        "droste.loop.rlm._StructuredBatchEvidence", unexpected_evidence_construction
+    )
     result = run_rlm(
         question="Assign one color label to each of four synthetic records.",
         environment=MockEnvironment(),

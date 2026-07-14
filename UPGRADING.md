@@ -27,6 +27,15 @@ batch is not completion evidence for earlier partial work. This is a behavior
 change only for callers that explicitly enable semantic policy; runs without
 that hint are unchanged.
 
+To make this completeness check enforceable, `run_rlm` now replaces any
+`llm_batch_json` and `llm_query_batched_json` entries in the mapping returned by
+`environment.globals()` with Droste's tracked bindings before sandbox execution.
+Embedders must treat those two names as reserved: expose custom structured
+helpers under different names, or customize the `SubcallClient` passed to
+`run_rlm` instead. The replacement happens for every run so both aliases remain
+consistent; completeness evidence is collected only while semantic contract
+enforcement is active.
+
 ### ModelRelay root request accounting
 
 `ModelRelayClient.root_requests_issued` exposes a thread-safe cumulative count
