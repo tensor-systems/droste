@@ -13,6 +13,26 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.10.6)
 
+### Subcall output limits are visible to the root model
+
+The built-in ModelRelay, OpenAI-compatible, Anthropic, and HTTP-backed subcall
+clients now expose a read-only `output_token_limit`. The root authorized-compute
+prompt renders positive limits as bounded, `None` as deliberately unbounded,
+and clients without the property as unknown. This keeps custom
+`SubcallClient` implementations compatible: the base protocol has no new
+required member.
+
+Custom clients may opt in by implementing the additive
+`SubcallOutputTokenLimitProvider` companion protocol. Return a positive integer
+for the effective per-call ceiling or `None` only when the client deliberately
+leaves output unbounded. Do not report an endpoint default unless the client can
+identify its effective value. The runner envelope and protocol version are
+unchanged.
+
+The built-in generic prompt packs are revised to `1.0.2`; they distinguish
+subcall input capacity from output capacity when planning structured and
+map-reduce work.
+
 ### Built-in sandbox capabilities use one brokered ABI
 
 `RunnerEnvironment` and `PyodideEnvironment` now generate their existing

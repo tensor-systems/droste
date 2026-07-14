@@ -1,12 +1,12 @@
 schema_version = 1
 id = "droste.generic.minimal"
-revision = "1.0.1"
+revision = "1.0.2"
 profile = "minimal"
 unable_sentinel = "unable to determine from the work so far"
 
 tips = [
   '''You are an orchestrator, not a solver: push long-context reading, summarizing, and classifying into llm_query / llm_query_batched, and keep your own tokens for planning and combining results. String matching finds WHERE things are; llm_query understands WHAT things mean.''',
-  '''Inspect `context` (type, size, sample) before processing; do not finalize on turn 1. Budget: ~100K characters per subcall prompt, at most ~20 prompts per batch — fat prompts, small batches. If a simple search already pins the answer, just read it directly.''',
+  '''Inspect `context` (type, size, sample) before processing; do not finalize on turn 1. Budget input and output separately: roughly ~100K characters per subcall prompt does not enlarge the per-call output-token limit. Keep structured or map-reduce responses within that reported limit and use at most ~20 prompts per batch. If a simple search already pins the answer, just read it directly.''',
 ]
 
 [provenance]
@@ -26,6 +26,7 @@ You are in a Python REPL. Each turn, produce a single ```python code block```. I
 - Use the `answer` dict to accumulate output: set `answer["content"]`, then `answer["ready"] = True` when done.
 - Prefer concise, deterministic logic over large outputs.
 - For semantic judgments or large-scale analysis, use llm_query / llm_query_batched on chunks.
+- Plan subcalls against both input capacity and the reported per-call output-token limit; structured and map-reduce responses must fit the latter.
 - When chunk outputs must be JSON, use llm_batch_json(prompts, schema, max_repair_attempts=N, validator=optional_function).
   The optional validator is called as validator(value, index), where index is the original prompt index; raise ValueError to reject that value and request repair.
   It validates locally and returns {{"values": [...], "errors": [...], "attempts": [...], "repairs_made": N}}; inspect errors before using values. Under semantic policy, unresolved errors block answer confirmation; rerun the exact request successfully before setting ready.

@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from droste import RLMConfig, run_rlm
+from droste import PolicyHints, RLMConfig, run_rlm
 from droste.exceptions import PolicyError
 from droste.loop.step import error_repair_history
 from droste.prompts import (
@@ -64,6 +64,86 @@ class RecordingLLMClient(MockLLMClient):
             temperature=temperature,
             return_usage=return_usage,
         )
+
+
+class ReportingSubcalls(MockSubcallClient):
+    def __init__(self, output_token_limit: int | None, *, successful: bool = False) -> None:
+        super().__init__()
+        self._output_token_limit = output_token_limit
+        self._successful = successful
+
+    @property
+    def output_token_limit(self) -> int | None:
+        return self._output_token_limit
+
+    def llm_query(self, prompt: str, context: str = "") -> str:
+        result = super().llm_query(prompt, context)
+        if self._successful and self._context is not None:
+            self._context.stats.successful_calls += 1
+            return "ok"
+        return result
+
+
+class UnknownCustomSubcalls(MockSubcallClient):
+    """A compatible custom client that does not opt into limit metadata."""
+
+
+def _root_system_prompt(
+    subcalls: MockSubcallClient,
+    *,
+    semantic: bool = False,
+) -> str:
+    code = "value = llm_query('q')\n" if semantic else ""
+    code += "answer['content'] = 'ok'\nanswer['ready'] = True"
+    llm = RecordingLLMClient([_response(f"```python\n{code}\n```")])
+    run_rlm(
+        "q",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=subcalls,
+        config=RLMConfig(
+            max_iterations=1,
+            max_calls=7,
+            max_depth=2,
+            max_output_chars=99,
+            policy_hints=PolicyHints(semantic=True) if semantic else None,
+        ),
+    )
+    return str(llm.calls[0][0]["content"])
+
+
+@pytest.mark.parametrize(
+    ("subcalls", "rendered_limit"),
+    [
+        (ReportingSubcalls(512), "512 (bounded)"),
+        (ReportingSubcalls(None), "unbounded (deliberate)"),
+        (UnknownCustomSubcalls(), "unknown (client did not report)"),
+    ],
+)
+def test_root_authorized_compute_renders_output_limit_states_exactly(
+    subcalls: MockSubcallClient,
+    rendered_limit: str,
+) -> None:
+    expected = (
+        "## Authorized compute\n"
+        "iterations=1; subcalls=7; depth=2; output_chars_per_iteration=99\n"
+        f"subcall_output_tokens_per_call={rendered_limit}"
+    )
+
+    system_prompt = _root_system_prompt(subcalls)
+    actual = (
+        "## Authorized compute\n"
+        + system_prompt.split("## Authorized compute\n", 1)[1].split("\n\n## Tips", 1)[0]
+    )
+
+    assert actual == expected
+    assert system_prompt.count("subcall_output_tokens_per_call=") == 1
+
+
+def test_semantic_subcall_gate_forwards_output_limit_to_root_prompt() -> None:
+    system_prompt = _root_system_prompt(ReportingSubcalls(768, successful=True), semantic=True)
+
+    assert "subcall_output_tokens_per_call=768 (bounded)" in system_prompt
 
 
 def test_builtin_catalog_loads_complete_immutable_profiles_from_resources() -> None:

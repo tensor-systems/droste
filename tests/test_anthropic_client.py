@@ -263,6 +263,7 @@ def test_subcall_accounting_and_cap(stub):
     sub = AnthropicSubcallClient(
         model="sub-model", context=ctx, base_url=stub.base_url, api_key="sk-ant-k"
     )
+    assert sub.output_token_limit == 2048
     assert sub.llm_query("alpha") == "echo: alpha"
     assert sub.llm_query("beta") == "echo: beta"
     assert ctx.stats.calls_made == 2

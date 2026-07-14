@@ -151,7 +151,10 @@ class RunnerEnvironment(RLMEnvironment):
             annotator=capability_annotator,
             observer=capability_observer,
         )
-        self._sandbox_subcalls = BrokeredSubcallClient(self._broker)
+        self._sandbox_subcalls = BrokeredSubcallClient(
+            self._broker,
+            metadata_source=subcalls,
+        )
         llm_query = self._sandbox_subcalls.llm_query
         llm_batch = self._sandbox_subcalls.llm_batch
         self._globals: dict[str, Any] = {

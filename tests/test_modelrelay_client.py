@@ -365,6 +365,7 @@ def test_subcall_accounting_and_cost_defaults(stub_native):
         base_url=stub_native.base_url,
         api_key="mr_sk_t",
     )
+    assert client.output_token_limit == 2048
     assert client.llm_query("first") == "echo: first"
     assert context.stats.calls_made == 1
     assert context.stats.successful_calls == 1
@@ -388,6 +389,18 @@ def test_subcall_accounting_and_cost_defaults(stub_native):
     with pytest.raises(SubcallBudgetExceeded, match="max subcalls exceeded"):
         client.llm_query("over budget")
     assert context.stats.calls_made == 3  # rejected attempt not counted
+
+
+def test_subcall_reports_deliberately_unbounded_output() -> None:
+    context = create_execution_context(max_calls=1, max_iterations=1)
+    client = ModelRelaySubcallClient(
+        model="sub-model",
+        context=context,
+        api_key="mr_sk_t",
+        max_output_tokens=0,
+    )
+
+    assert client.output_token_limit is None
 
 
 def test_subcall_requires_api_key():

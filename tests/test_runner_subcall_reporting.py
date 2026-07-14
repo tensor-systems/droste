@@ -31,6 +31,22 @@ ROOT_REPLY = (
 )
 
 
+def test_http_subcall_reports_explicit_and_callback_default_output_limits() -> None:
+    context = create_execution_context(max_calls=1, max_depth=1)
+    kwargs = {
+        "endpoint": "https://example.invalid/subcall",
+        "token": "t",
+        "session": "s",
+        "session_index": 0,
+        "max_calls": 1,
+        "max_depth": 1,
+        "context": context,
+    }
+
+    assert HTTPSubcallClient(**kwargs).output_token_limit == 2048
+    assert HTTPSubcallClient(**kwargs, max_output_tokens=512).output_token_limit == 512
+
+
 class _StubHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 (http.server API)
         length = int(self.headers.get("Content-Length") or 0)

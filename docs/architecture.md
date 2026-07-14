@@ -102,6 +102,14 @@ passthrough. Subcall usage is added to `result.tokens_used`. The defaults
 encode a measured lesson: unbounded subcall output (thinking tokens
 especially) is where RLM runs go from cents to dollars.
 
+The root prompt reports the effective per-call subcall output ceiling separately
+from input capacity. Built-in clients implement the optional
+`SubcallOutputTokenLimitProvider` companion protocol: a positive
+`output_token_limit` is bounded, `None` is deliberately unbounded, and absence
+on a custom `SubcallClient` is rendered as unknown rather than guessed. The
+base `SubcallClient` protocol is unchanged, and semantic-policy wrappers forward
+the optional metadata.
+
 ## Data sources (registry)
 
 Hosts register source *types* at startup — never from a request:

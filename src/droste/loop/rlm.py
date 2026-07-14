@@ -76,6 +76,7 @@ _EXTRACT_SUMMARY_CHARS = 60000
 # conversational nudge shown to the in-loop model must not read as real output.
 _EXTRACT_EMPTY_OUTPUT = "<empty stdout>"
 _EXTRACT_UNABLE = "unable to determine from the work so far"
+_UNKNOWN_OUTPUT_TOKEN_LIMIT = object()
 
 
 ProgressCallback = Any
@@ -110,6 +111,11 @@ class _SubcallGate:
         if callable(batch_with_errors):
             return batch_with_errors(prompts, contexts)
         return self._subcalls.llm_batch(prompts, contexts), []
+
+    @property
+    def output_token_limit(self) -> int | None:
+        """Forward optional planning metadata without changing the base protocol."""
+        return getattr(self._subcalls, "output_token_limit")
 
     def block(self) -> None:
         """Permanently revoke this run's model-visible subcall bindings."""
@@ -148,11 +154,31 @@ def _is_unable_extraction(text: str, sentinel: str = _EXTRACT_UNABLE) -> bool:
     return normalize(text) == normalize(sentinel)
 
 
-def _budget_prompt(cfg: "RLMConfig") -> str:
+def _reported_output_token_limit(subcalls: SubcallClient) -> int | None | object:
+    try:
+        limit = getattr(subcalls, "output_token_limit")
+    except Exception:
+        return _UNKNOWN_OUTPUT_TOKEN_LIMIT
+    if limit is None:
+        return None
+    if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
+        return limit
+    return _UNKNOWN_OUTPUT_TOKEN_LIMIT
+
+
+def _budget_prompt(cfg: "RLMConfig", subcalls: SubcallClient) -> str:
+    limit = _reported_output_token_limit(subcalls)
+    if limit is _UNKNOWN_OUTPUT_TOKEN_LIMIT:
+        rendered_limit = "unknown (client did not report)"
+    elif limit is None:
+        rendered_limit = "unbounded (deliberate)"
+    else:
+        rendered_limit = f"{limit} (bounded)"
     return (
         "## Authorized compute\n"
         f"iterations={cfg.max_iterations}; subcalls={cfg.max_calls}; "
-        f"depth={cfg.max_depth}; output_chars_per_iteration={cfg.max_output_chars}"
+        f"depth={cfg.max_depth}; output_chars_per_iteration={cfg.max_output_chars}\n"
+        f"subcall_output_tokens_per_call={rendered_limit}"
     )
 
 
@@ -394,7 +420,7 @@ def run_rlm(
             resolved_prompt_pack.pack,
             PromptSlots(
                 capabilities=prompt_additions,
-                budget=_budget_prompt(cfg),
+                budget=_budget_prompt(cfg, model_subcalls),
                 question=question,
                 output_contract=CODE_OUTPUT_CONTRACT,
             ),
