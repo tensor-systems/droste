@@ -44,11 +44,16 @@ class RawExecutor:
     # narrow its query. Pre-truncating here made oversized output pass that
     # check and handed the model silently incomplete data (unlike the native
     # path, which raises).
-    def __init__(self, db: Any, max_output_chars: int = 0) -> None:
+    def __init__(
+        self,
+        db: Any,
+        max_output_chars: int = 0,
+        namespace: dict[str, Any] | None = None,
+    ) -> None:
         self._db = db
         self._max_output_chars = max_output_chars
         # Persistent namespace so variables/imports/answer survive across iterations.
-        self._namespace: dict[str, Any] = {}
+        self._namespace = namespace if namespace is not None else {}
 
     def execute(self, code: str, extra_globals: dict[str, Any] | None = None) -> str:
         if extra_globals:

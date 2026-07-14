@@ -8,7 +8,7 @@ import os
 import sys
 from typing import Any
 
-from droste.environments.inprocess import RunnerEnvironment
+from droste.environments import EnvironmentConfig, create_environment, create_environment_context
 from droste.execution.config import DEFAULT_MAX_CALLS, DEFAULT_MAX_ITERATIONS
 from droste.loop.rlm import RLMConfig, run_rlm
 from droste.registry import DataSourceRegistry
@@ -100,14 +100,18 @@ def _run_valid_request(request: dict[str, Any], *, source_ctx: Any = None) -> di
     session = str(request.get("session") or "")
     session_index = int(request.get("session_index") or 0)
 
-    from droste.execution.context import create_execution_context  # type: ignore
     from droste.execution.progress import emit_event, emit_progress  # type: ignore
 
-    exec_context = create_execution_context(
+    environment_config = EnvironmentConfig(
+        kind="native",
         max_depth=max_depth,
         max_calls=max_subcalls,
         max_iterations=max_iterations,
         max_output_chars=max_output_chars,
+        exec_timeout_ms=exec_timeout_ms,
+    )
+    exec_context = create_environment_context(
+        environment_config,
         verbose=False,
         # NDJSON on stderr is the runner's event contract — the relay's
         # forwarding filter and native hosts read it there. Attached
@@ -155,27 +159,26 @@ def _run_valid_request(request: dict[str, Any], *, source_ctx: Any = None) -> di
         token=token,
         session=session,
         session_index=session_index,
-        max_calls=max_subcalls,
-        max_depth=max_depth,
+        max_calls=environment_config.max_calls,
+        max_depth=environment_config.max_depth,
         context=exec_context,
         max_output_tokens=subcall_max_output_tokens,
         model=subcall_model,
         reasoning_effort=subcall_reasoning_effort,
     )
 
-    environment = RunnerEnvironment(
+    environment = create_environment(
+        environment_config,
         context=context,
         registry=registry,
         subcalls=subcalls,
-        max_output_chars=max_output_chars,
-        exec_timeout_ms=exec_timeout_ms,
     )
 
     config = RLMConfig(
-        max_iterations=max_iterations,
-        max_depth=max_depth,
-        max_calls=max_subcalls,
-        max_output_chars=max_output_chars,
+        max_iterations=environment_config.max_iterations,
+        max_depth=environment_config.max_depth,
+        max_calls=environment_config.max_calls,
+        max_output_chars=environment_config.max_output_chars,
         root_model=str(request.get("model") or ""),
         prompt_profile=str(request.get("prompt_profile") or "") or None,
         verbose=False,

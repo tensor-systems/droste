@@ -79,6 +79,12 @@ gets these for free, nothing to stage separately):
   `RestrictedExecutor`. The Deno/WASM jail *is* the sandbox here, so
   RestrictedPython would be redundant; `RawExecutor` is also Pyodide-safe (no
   signals, no threads).
+- `EnvironmentConfig(kind="pyodide", ...)` + `create_environment(...)` — the
+  supported host-wiring path. It selects `RawExecutor`, shares one immutable
+  budget record with the loop execution context, rejects native signal
+  timeouts, and requires the adapter to declare that its host owns both WASM
+  isolation and the wall-clock deadline. The declarations are loud contract
+  checks, not substitutes for the actual Deno boundary.
 - `BridgedLLMClient` — an `LLMClient` (droste's protocol) that calls ModelRelay
   over a host-injected `host_fetch` callable instead of a real socket
   (Pyodide has no sockets). Implements `responses_create`,
@@ -126,6 +132,31 @@ def build_db_service(db_path, contacts_db_path=None) -> tuple[DataSourceService,
 def run_for_host_pyodide(request, host_fetch, bridge_call=None, meta=None) -> dict:
     ...
 ```
+
+Inside `run_for_host_pyodide`, build one frozen config and use it for both
+pieces of loop wiring:
+
+```python
+config = EnvironmentConfig(
+    kind="pyodide",
+    max_calls=max_calls,
+    max_iterations=max_iterations,
+    max_output_chars=max_output_chars,
+    host_managed_timeout=True,
+    host_managed_isolation=True,
+)
+execution_context = create_environment_context(config, on_event=emit_event)
+environment = create_environment(
+    config,
+    context=data,
+    registry=registry,
+    subcalls=subcalls,
+)
+```
+
+Do not instantiate the native `RunnerEnvironment` in a Pyodide adapter. That
+silently selects the wrong executor and leaves substrate assumptions scattered
+through host code.
 
 - **`build_db_service(db_path, contacts_db_path=None)`** runs in the *trusted*
   DB-service interpreter (the one that boots first and actually holds the DB
@@ -209,8 +240,8 @@ timer is skipped with a one-time `RuntimeWarning`, and queries run normally
 under the **default** policy. The thing to know is what that means: the
 policy's `timeout_ms` is simply **not enforced** in this substrate — the
 host's own wall-clock kill (Deno's process timeout) is the real enforcement,
-exactly as `RunnerEnvironment(exec_timeout_ms=0, ...)` already is for exec
-timeouts. Make sure your host actually has one.
+exactly as the Pyodide environment factory requires for exec timeouts. Make
+sure your host actually has one.
 
 ## Configuration flags
 
