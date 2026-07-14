@@ -200,6 +200,17 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - Establish the broker's finalization cutoff before post-attempt annotation.
   The annotator and settlement authority must receive the same terminal
   result/error, and cancellation requested after that cutoff is rejected.
+- Never call an attempt authority or its observational event sinks while
+  holding the attempt state lock. Serialize checkpoint/final transitions with
+  a separate gate so a checkpoint event may reentrantly request cancellation
+  without deadlocking; retain an accepted checkpoint before surfacing that
+  cancellation.
+- Provider bridge v2 is an explicit host-selected, per-call message pump over
+  the same provider protocol 4 values. Pull one frame into the receiving
+  interpreter, apply it through the broker context, then acknowledge it. Never
+  re-enter a suspended Pyodide interpreter, expose a provider ledger/callback,
+  or create transport-owned accounting. Remote loss is one typed terminal
+  outcome through the existing settlement path.
 
 ## Provider Manifests
 

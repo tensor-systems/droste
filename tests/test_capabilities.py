@@ -262,6 +262,47 @@ def test_cancellation_during_handler_is_observed_cooperatively() -> None:
     assert broker.cancel("call-1") is False
 
 
+def test_checkpoint_authority_can_reentrantly_cancel_without_deadlock() -> None:
+    """Accounting event delivery must not run under the attempt state lock."""
+
+    broker = None
+
+    class CancellingAuthority(_AttemptAuthority):
+        def checkpoint(self, call, cumulative):
+            assert broker is not None
+            assert broker.cancel(call.call_id) is True
+            return super().checkpoint(call, cumulative)
+
+    authority = CancellingAuthority()
+
+    def handler(context: CapabilityExecutionContext) -> str:
+        context.checkpoint(tokens=10, subcalls=1)
+        return "unreachable"
+
+    broker = CapabilityBroker(
+        (CapabilityRegistration(QUERY, handler),),
+        run_id="run-1",
+        attempt_authority=authority,
+    )
+    result = []
+    worker = Thread(
+        target=lambda: result.append(
+            broker.dispatch(CapabilityCall(QUERY.capability_id, "call-1", "run-1"))
+        )
+    )
+    worker.start()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert len(result) == 1
+    assert result[0].error is not None
+    assert result[0].error.code == CapabilityErrorCode.CANCELLED
+    assert authority.checkpoints == [CapabilityCheckpoint(10, 1)]
+    assert authority.settlements == [
+        (True, CapabilityErrorCode.CANCELLED, CapabilityCheckpoint(10, 1))
+    ]
+
+
 def test_cancellation_after_admission_stops_before_handler_dispatch() -> None:
     authority = _AttemptAuthority()
     guarding = Event()

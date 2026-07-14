@@ -17,6 +17,7 @@
 // Run: deno test --allow-read --allow-env --allow-ffi bridge_source_integration_test.ts
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { loadPyodide } from "../src/droste/substrates/_relay/deps.ts";
+import { startProviderDuplex } from "../src/droste/substrates/_relay/provider_duplex.ts";
 
 const SRC_DIR = new URL("../src", import.meta.url).pathname;
 const quiet = { stdout: () => {}, stderr: () => {} };
@@ -169,4 +170,174 @@ json.dumps(json.loads(raw))
   const gatedEnvelope = JSON.parse(gated);
   assertEquals(gatedEnvelope.ok, false);
   assertEquals(gatedEnvelope.error.type, "PermissionError");
+});
+
+Deno.test("bridge v2 pumps cancellation, checkpoints, terminal races, and loss across two Pyodide interpreters", async () => {
+  const dbsvc = await loadWithDroste();
+  await dbsvc.runPythonAsync(`
+from droste import ConfiguredSource, ProviderCatalog, ProviderRegistration, ProviderRuntime, SideEffect
+from droste.sources.bridge import ProviderService
+from droste.sources.sql_local import SQLITE_PROVIDER_MANIFEST
+
+def _query(execution, scenario):
+    if scenario == "checkpoints":
+        execution.checkpoint(tokens=1, subcalls=1)
+        execution.checkpoint(tokens=1, subcalls=1)
+        execution.checkpoint(tokens=3, subcalls=2)
+    elif scenario in {"cancel", "loss", "cancel_terminal"}:
+        execution.checkpoint(tokens=2, subcalls=1)
+        if scenario != "cancel_terminal":
+            execution.check()
+    return [{"scenario": scenario}]
+
+def _schema(execution):
+    execution.check()
+    return "scenarios(name TEXT)"
+
+def _bind(source, context=None):
+    return ProviderRuntime(
+        handlers={"query": _query, "schema": _schema},
+        source_description="scenarios(name TEXT)",
+    )
+
+_registration = ProviderRegistration(
+    manifest=SQLITE_PROVIDER_MANIFEST,
+    effects={"query": SideEffect.READ, "schema": SideEffect.READ},
+    binder=_bind,
+)
+_source = ProviderCatalog((_registration,)).bind(
+    (ConfiguredSource("db", "sqlite"),)
+).sources[0]
+_service = ProviderService(_source)
+`);
+  const unaryHandle = dbsvc.globals.get("_service").handle;
+  let busy = false;
+  const terminalFrames: Record<string, number> = {};
+
+  const unaryCall = async (
+    method: string,
+    paramsJson: string,
+  ): Promise<string> => unaryHandle(method, paramsJson) as string;
+
+  const duplexCall = (method: string, paramsJson: string): any => {
+    const payload = JSON.parse(paramsJson);
+    const scenario = payload.args[0] as string;
+    let providerCheckpointAcked = false;
+    const pump = startProviderDuplex(async (emit) => {
+      if (busy) throw new Error("test provider interpreter is busy");
+      busy = true;
+      dbsvc.globals.set("_duplex_method", method);
+      dbsvc.globals.set("_duplex_params", paramsJson);
+      const providerEmit = async (frameJson: string): Promise<string> => {
+        if (scenario === "loss" && providerCheckpointAcked) {
+          throw new Error("provider interpreter was terminated");
+        }
+        const ack = await emit(frameJson);
+        if (JSON.parse(frameJson).kind === "checkpoint") {
+          providerCheckpointAcked = true;
+        }
+        return ack;
+      };
+      dbsvc.globals.set("_duplex_emit", providerEmit);
+      try {
+        const raw = await dbsvc.runPythonAsync(
+          `_service.handle_duplex(_duplex_method, _duplex_params, _duplex_emit)`,
+        );
+        const envelope = JSON.parse(raw);
+        if (!envelope.ok) throw new Error(envelope.error.message);
+      } finally {
+        dbsvc.globals.delete("_duplex_method");
+        dbsvc.globals.delete("_duplex_params");
+        dbsvc.globals.delete("_duplex_emit");
+        busy = false;
+      }
+    });
+    let checkpointSeen = false;
+    return {
+      receive: async () => {
+        const frameJson = await pump.receive();
+        const frame = JSON.parse(frameJson);
+        if (frame.kind === "terminal") {
+          terminalFrames[scenario] = (terminalFrames[scenario] ?? 0) + 1;
+        }
+        if (frame.kind === "checkpoint") checkpointSeen = true;
+        if (
+          (scenario === "cancel" && checkpointSeen && frame.kind === "check") ||
+          (scenario === "cancel_terminal" && frame.kind === "terminal")
+        ) {
+          assertEquals(pump.requestActiveCancellation(), true);
+        }
+        return frameJson;
+      },
+      send: (ackJson: string) => pump.send(ackJson),
+      cancellation_requested: (id: string) => pump.cancellation_requested(id),
+      requestActiveCancellation: () => pump.requestActiveCancellation(),
+      close: () => pump.close(),
+    };
+  };
+
+  const repl = await loadWithDroste();
+  repl.globals.set("unary_call", unaryCall);
+  repl.globals.set("duplex_call", duplexCall);
+  const result = await repl.runPythonAsync(`
+import json
+from droste import (
+    CapabilityAdmission, CapabilityBroker, CapabilityMetadata,
+    CapabilityReservation, ConfiguredSource, ProviderCatalog, SideEffect,
+)
+from droste.sources.bridge import BridgeProvider
+
+class Authority:
+    def __init__(self):
+        self.call_id = None
+        self.checkpoints = []
+        self.settlements = 0
+    def admit(self, call):
+        self.call_id = call.call_id
+        return CapabilityAdmission(CapabilityReservation(10, 3, 10_000, 0))
+    def checkpoint(self, call, cumulative):
+        self.checkpoints.append(cumulative.to_dict())
+        return cumulative
+    def settle(self, call, result, error, checkpoint, *, attempted):
+        self.settlements += 1
+        return CapabilityMetadata()
+
+bridge = BridgeProvider(unary_call, duplex_call=duplex_call)
+registration = bridge.registration(effects={"query": SideEffect.READ, "schema": SideEffect.READ})
+registry = ProviderCatalog((registration,)).bind((ConfiguredSource("db", "sqlite"),))
+capability_id = registry.capability_registrations()[0].descriptor.capability_id
+out = {}
+for scenario in ("checkpoints", "cancel", "cancel_terminal", "loss"):
+    authority = Authority()
+    broker = CapabilityBroker(registry.capability_registrations(), attempt_authority=authority)
+    envelope = broker.call(capability_id, scenario)
+    out[scenario] = {
+        "ok": envelope.ok,
+        "error": envelope.error.code if envelope.error else None,
+        "error_message": envelope.error.message if envelope.error else None,
+        "checkpoints": authority.checkpoints,
+        "settlements": authority.settlements,
+        "late_cancel": broker.cancel(authority.call_id),
+    }
+json.dumps(out)
+`);
+  const parsed = JSON.parse(result);
+  assertEquals(parsed.checkpoints.ok, true);
+  assertEquals(parsed.checkpoints.checkpoints, [
+    { tokens: 1, subcalls: 1 },
+    { tokens: 3, subcalls: 2 },
+  ]);
+  assertEquals(parsed.cancel.error, "cancelled", JSON.stringify(parsed.cancel));
+  assertEquals(parsed.cancel.checkpoints, [{ tokens: 2, subcalls: 1 }]);
+  assertEquals(parsed.cancel_terminal.error, "cancelled");
+  assertEquals(parsed.loss.error, "bridge.transport_lost");
+  assertEquals(parsed.loss.checkpoints, [{ tokens: 2, subcalls: 1 }]);
+  for (const scenario of Object.values(parsed) as any[]) {
+    assertEquals(scenario.settlements, 1);
+    assertEquals(scenario.late_cancel, false);
+  }
+  assertEquals(terminalFrames.checkpoints, 1);
+  assertEquals(terminalFrames.cancel, 1);
+  assertEquals(terminalFrames.cancel_terminal, 1);
+  assertEquals(terminalFrames.loss ?? 0, 0);
 });

@@ -36,10 +36,15 @@ def run_for_host_pyodide(
     request: dict[str, Any],
     host_fetch: Any,
     bridge_call: Any = None,
+    duplex_bridge_call: Any = None,
     meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     resp = pyodide_host_adapter.run_for_host_pyodide(
-        request, host_fetch, bridge_call=bridge_call, meta=meta
+        request,
+        host_fetch,
+        bridge_call=bridge_call,
+        duplex_bridge_call=duplex_bridge_call,
+        meta=meta,
     )
     resp["received_meta_large_id"] = (meta or {}).get("large_id")
     return resp

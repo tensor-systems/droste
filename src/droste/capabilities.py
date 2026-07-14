@@ -1082,6 +1082,7 @@ class _CapabilityAttemptController:
         self._clock = clock
         self._cancelled = Event()
         self._lock = Lock()
+        self._transition_lock = Lock()
         self._checkpoint_value = CapabilityCheckpoint()
         self._finishing = False
         self._settled = False
@@ -1133,39 +1134,49 @@ class _CapabilityAttemptController:
     def checkpoint(self, cumulative: CapabilityCheckpoint) -> CapabilityCheckpoint:
         if not isinstance(cumulative, CapabilityCheckpoint):
             raise TypeError("capability checkpoint requires a CapabilityCheckpoint")
-        with self._lock:
-            if self._finishing or self._settled:
-                raise RuntimeError("capability attempt is already finalizing")
-            error = self._terminal_error_locked()
-            if error is not None:
-                if error.code == CapabilityErrorCode.CANCELLED:
-                    raise CapabilityCancelled(error.message)
-                raise CapabilityDeadlineExceeded(error.message)
-            previous = self._checkpoint_value
-            if cumulative.tokens < previous.tokens or cumulative.subcalls < previous.subcalls:
-                raise ValueError("capability checkpoint cannot move backward")
-            if cumulative.tokens > self.context.reservation.tokens:
-                raise ValueError("capability checkpoint tokens exceed reservation")
-            if cumulative.subcalls > self.context.reservation.subcalls:
-                raise ValueError("capability checkpoint subcalls exceed reservation")
-            if cumulative == previous:
-                return previous
+        with self._transition_lock:
+            with self._lock:
+                if self._finishing or self._settled:
+                    raise RuntimeError("capability attempt is already finalizing")
+                error = self._terminal_error_locked()
+                if error is not None:
+                    if error.code == CapabilityErrorCode.CANCELLED:
+                        raise CapabilityCancelled(error.message)
+                    raise CapabilityDeadlineExceeded(error.message)
+                previous = self._checkpoint_value
+                if cumulative.tokens < previous.tokens or cumulative.subcalls < previous.subcalls:
+                    raise ValueError("capability checkpoint cannot move backward")
+                if cumulative.tokens > self.context.reservation.tokens:
+                    raise ValueError("capability checkpoint tokens exceed reservation")
+                if cumulative.subcalls > self.context.reservation.subcalls:
+                    raise ValueError("capability checkpoint subcalls exceed reservation")
+                if cumulative == previous:
+                    return previous
+            # Accounting may synchronously deliver observational events. Never
+            # hold the attempt state lock while calling that external seam.
             if self._authority is not None:
                 cumulative = self._authority.checkpoint(self.call, cumulative)
                 if not isinstance(cumulative, CapabilityCheckpoint):
                     raise TypeError("attempt authority must return a CapabilityCheckpoint")
-            self._checkpoint_value = cumulative
+            with self._lock:
+                self._checkpoint_value = cumulative
+                error = self._terminal_error_locked()
+            if error is not None:
+                if error.code == CapabilityErrorCode.CANCELLED:
+                    raise CapabilityCancelled(error.message)
+                raise CapabilityDeadlineExceeded(error.message)
             return cumulative
 
     def begin_finish(self) -> CapabilityError | None:
         """Close the cancellation race and return its authoritative terminal fact."""
 
-        with self._lock:
-            if self._finishing or self._settled:
-                raise RuntimeError("capability attempt was finalized more than once")
-            error = self._terminal_error_locked()
-            self._finishing = True
-            return error
+        with self._transition_lock:
+            with self._lock:
+                if self._finishing or self._settled:
+                    raise RuntimeError("capability attempt was finalized more than once")
+                error = self._terminal_error_locked()
+                self._finishing = True
+                return error
 
     def settle(
         self,
@@ -1461,6 +1472,10 @@ class CapabilityBroker:
                 attempted=True,
             )
         if outcome.error is not None:
+            if outcome.error.code == CapabilityErrorCode.CANCELLED:
+                # A trusted transport/provider cancellation becomes a
+                # broker-owned terminal fact before the finalization cutoff.
+                attempt.cancel()
             return self._finish(
                 call,
                 status=(
