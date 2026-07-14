@@ -8,6 +8,16 @@ from .config import (
 from .context import ExecutionContext, create_execution_context
 from .progress import ProgressCallback, emit_progress
 from .stats import ExecutionStats
+from .trace import (
+    TRACE_ABI_VERSION,
+    DataUseAuthorization,
+    PersistenceClass,
+    RunEvent,
+    RunRecord,
+    TraceRetentionPolicy,
+    parse_event,
+    select_retained_events,
+)
 
 __all__ = [
     "DEFAULT_MAX_CALLS",
@@ -20,4 +30,12 @@ __all__ = [
     "create_execution_context",
     "ProgressCallback",
     "emit_progress",
+    "TRACE_ABI_VERSION",
+    "DataUseAuthorization",
+    "PersistenceClass",
+    "RunEvent",
+    "RunRecord",
+    "TraceRetentionPolicy",
+    "parse_event",
+    "select_retained_events",
 ]

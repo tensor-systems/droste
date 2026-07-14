@@ -134,6 +134,11 @@ output with per-iteration sub-call counts and answer state, LLM responses,
 execution errors. Exit code 0 means a confirmed (or extracted-with-note)
 answer.
 
+The strict [Trace ABI v1](docs/trace-abi.md) gives every event one run identity,
+sequence, timestamp, and retention class, then returns a policy-resolved
+terminal record for host-owned local persistence. Retaining replay content and
+authorizing training use are separate, default-denied decisions.
+
 Three worked starting points live in [docs/recipes.md](docs/recipes.md)
 (logs, chat archives, SQLite).
 

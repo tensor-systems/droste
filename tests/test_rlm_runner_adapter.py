@@ -18,7 +18,7 @@ def test_rlm_runner_adapter_delegates() -> None:
 
     try:
         result = runner.run(
-            {"adapter_module": module_name, "answer": "hello", "protocol_version": 1}
+            {"adapter_module": module_name, "answer": "hello", "protocol_version": 2}
         )
     finally:
         sys.modules.pop(module_name, None)
@@ -39,7 +39,7 @@ def test_adapter_claimed_protocol_version_is_not_overwritten() -> None:
     module.run = run  # type: ignore[attr-defined]
     sys.modules[module_name] = module
     try:
-        result = runner.run({"adapter_module": module_name, "protocol_version": 1})
+        result = runner.run({"adapter_module": module_name, "protocol_version": 2})
     finally:
         sys.modules.pop(module_name, None)
     assert result["protocol_version"] == 99
@@ -58,7 +58,7 @@ def test_missing_protocol_version_refused_with_structured_error() -> None:
         "supported": runner.RUNNER_PROTOCOL_VERSION,
     }
     # The message tells the caller exactly what to add.
-    assert '"protocol_version": 1' in result["error"]["message"]
+    assert '"protocol_version": 2' in result["error"]["message"]
     assert result["ready"] is False
     assert result["protocol_version"] == runner.RUNNER_PROTOCOL_VERSION
     assert result["prompt_pack"] is None
@@ -125,7 +125,7 @@ def test_worker_exception_envelope_is_version_stamped(tmp_path) -> None:
     import sys as _sys
 
     req = tmp_path / "request.json"
-    req.write_text(json.dumps({"protocol_version": 1, "question": "q"}))
+    req.write_text(json.dumps({"protocol_version": 2, "question": "q"}))
     proc = subprocess.run(
         [_sys.executable, "-m", "droste_runner"],
         cwd=tmp_path,
@@ -154,7 +154,7 @@ def test_version_gate_runs_before_adapter_dispatch() -> None:
     module.run = run  # type: ignore[attr-defined]
     sys.modules[module_name] = module
     try:
-        result = runner.run({"adapter_module": module_name, "protocol_version": 2})
+        result = runner.run({"adapter_module": module_name, "protocol_version": 1})
     finally:
         sys.modules.pop(module_name, None)
     assert result["error"]["type"] == "protocol_version_mismatch"

@@ -44,6 +44,13 @@ if (!adapterModule || !/^[A-Za-z_][A-Za-z0-9_.]*$/.test(adapterModule)) {
   Deno.exit(1);
 }
 const request = JSON.parse(await new Response(Deno.stdin.readable).text());
+if (typeof request.run_id !== "string" || request.run_id.length === 0) {
+  request.run_id = crypto.randomUUID();
+}
+// Relay-owned streaming telemetry is a child run: one sequence has one
+// stamping owner, while parent_run_id correlates it with the engine record.
+const relayRunId = crypto.randomUUID();
+let relaySeq = 0;
 
 const _enc = new TextEncoder();
 
@@ -291,7 +298,18 @@ if (DB_SERVICE) {
 // Best-effort; a failed write must never break the run.
 function emitEvent(obj: unknown): void {
   try {
-    Deno.stderr.writeSync(_enc.encode(JSON.stringify(obj) + "\n"));
+    if (obj === null || typeof obj !== "object" || Array.isArray(obj)) return;
+    const event = {
+      ...obj,
+      run_id: relayRunId,
+      parent_run_id: request.run_id,
+      depth: 1,
+      seq: ++relaySeq,
+      timestamp: new Date().toISOString(),
+      version: 1,
+      persistence_class: "transient",
+    };
+    Deno.stderr.writeSync(_enc.encode(JSON.stringify(event) + "\n"));
   } catch {
     // ignore
   }

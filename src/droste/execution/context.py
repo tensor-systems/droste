@@ -10,8 +10,17 @@ from .config import (
     DEFAULT_MAX_OUTPUT_CHARS,
     ExecutionConfig,
 )
-from .progress import EVENT_TYPES, EventCallback, ProgressCallback
+from .progress import EVENT_TYPES, EventCallback, ProgressCallback, progress_event
 from .stats import ExecutionStats
+from .trace import (
+    Clock,
+    DataUseAuthorization,
+    MonotonicClock,
+    RunRecord,
+    RunRecordCallback,
+    TraceRecorder,
+    TraceRetentionPolicy,
+)
 
 
 @dataclass
@@ -20,6 +29,7 @@ class ExecutionContext:
 
     config: ExecutionConfig = field(default_factory=ExecutionConfig)
     stats: ExecutionStats = field(default_factory=ExecutionStats)
+    trace: TraceRecorder = field(default_factory=TraceRecorder)
 
     def emit_progress(self, status: str) -> None:
         """Deliver a progress line to the attached sink; silent when none.
@@ -29,6 +39,7 @@ class ExecutionContext:
         stderr NDJSON sinks; the CLI: its --verbose echo)."""
         if self.config.on_progress is not None:
             self.config.on_progress(status)
+        self.emit_event(progress_event(status))
 
     def emit_event(self, event: dict[str, Any]) -> None:
         """Deliver a structured loop event (#1) to the attached sink.
@@ -44,8 +55,20 @@ class ExecutionContext:
                 "droste.execution.progress.EVENT_TYPES and the relay's events.ts "
                 "vocabulary (kept in lockstep by tests/test_event_vocabulary.py)"
             )
+        value = self.trace.append(event)
         if self.config.on_event is not None:
-            self.config.on_event(event)
+            self.config.on_event(value.as_dict())
+
+    def finish_trace(self, terminal: dict[str, Any]) -> RunRecord:
+        """Emit the terminal value and return one policy-resolved run record."""
+        prior_count = len(self.trace.events)
+        record = self.trace.finish(terminal)
+        if len(self.trace.events) > prior_count:
+            if self.config.on_event is not None:
+                self.config.on_event(self.trace.events[-1].as_dict())
+            if self.config.on_run_record is not None:
+                self.config.on_run_record(record)
+        return record
 
     @property
     def depth(self) -> int:
@@ -113,6 +136,14 @@ def create_execution_context(
     verbose: bool = False,
     on_progress: ProgressCallback | None = None,
     on_event: EventCallback | None = None,
+    on_run_record: RunRecordCallback | None = None,
+    run_id: str | None = None,
+    parent_run_id: str | None = None,
+    trace_depth: int | None = None,
+    trace_retention: TraceRetentionPolicy | None = None,
+    data_use: DataUseAuthorization | None = None,
+    trace_clock: Clock | None = None,
+    trace_monotonic_clock: MonotonicClock | None = None,
 ) -> ExecutionContext:
     config = ExecutionConfig(
         max_depth=max_depth,
@@ -122,5 +153,22 @@ def create_execution_context(
         verbose=verbose,
         on_progress=on_progress,
         on_event=on_event,
+        on_run_record=on_run_record,
     )
-    return ExecutionContext(config=config, stats=ExecutionStats())
+    trace_kwargs: dict[str, Any] = {
+        "parent_run_id": parent_run_id,
+        "depth": trace_depth,
+        "retention": trace_retention or TraceRetentionPolicy(),
+        "data_use": data_use or DataUseAuthorization(),
+    }
+    if run_id is not None:
+        trace_kwargs["run_id"] = run_id
+    if trace_clock is not None:
+        trace_kwargs["clock"] = trace_clock
+    if trace_monotonic_clock is not None:
+        trace_kwargs["monotonic_clock"] = trace_monotonic_clock
+    return ExecutionContext(
+        config=config,
+        stats=ExecutionStats(),
+        trace=TraceRecorder(**trace_kwargs),
+    )

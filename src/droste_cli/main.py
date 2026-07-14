@@ -393,23 +393,16 @@ def run_ask(args: argparse.Namespace) -> int:
     echo = _StreamEcho() if (args.verbose or args.trace) else None
 
     on_event = None
-    on_progress = echo.progress if echo else None
+    on_progress = echo.progress if echo and not args.trace else None
     if args.trace:
-        from droste.execution.progress import progress_event, render_verbose
+        from droste.execution.progress import render_verbose
 
         def _trace_sink(event: dict) -> None:
             line = render_verbose(event)
             if line is not None:
                 print(line, file=sys.stderr)
 
-        def _trace_progress(status: str) -> None:
-            # Progress travels on its own channel; re-wrap it as the event
-            # it is so the trace view (banners included) stays a single
-            # render_verbose projection instead of a second format.
-            _trace_sink(progress_event(status))
-
         on_event = _trace_sink
-        on_progress = _trace_progress
 
     environment_config = EnvironmentConfig(
         kind="native",
@@ -506,39 +499,20 @@ def run_ask(args: argparse.Namespace) -> int:
     )
 
     if args.json:
-        payload: dict[str, Any] = {
-            "answer": result.answer,
-            "answer_metadata": getattr(result, "answer_metadata", {}),
-            "ready": result.ready,
-            "extracted": result.extracted,
-            "iterations": result.iterations,
-            "tokens_used": result.tokens_used,
-            "subcalls": result.sub_calls_made,
-            "successful_subcalls": result.sub_calls_succeeded,
-            "model": args.model,
-            "files": len(loaded.context["files"]) if loaded.context else 0,
-            "db": loaded.db_path,
-            "error": None,
-            "recovered_error": None,
-            "prompt_pack": (
-                result.prompt_pack.as_dict() if getattr(result, "prompt_pack", None) else None
-            ),
-        }
-        if result.error:
-            payload["error"] = {
-                "type": result.error.type,
-                "message": result.error.message,
+        from droste.execution.report import project_result
+
+        payload: dict[str, Any] = project_result(
+            result,
+            include_trajectory=False,
+            include_error_details=False,
+        )
+        payload.update(
+            {
+                "model": args.model,
+                "files": len(loaded.context["files"]) if loaded.context else 0,
+                "db": loaded.db_path,
             }
-        if result.extract_error:
-            payload["extract_error"] = {
-                "type": result.extract_error.type,
-                "message": result.extract_error.message,
-            }
-        if result.recovered_error:
-            payload["recovered_error"] = {
-                "type": result.recovered_error.type,
-                "message": result.recovered_error.message,
-            }
+        )
         print(json.dumps(payload, ensure_ascii=True))
     else:
         print(result.answer)

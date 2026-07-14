@@ -319,7 +319,7 @@ def test_runner_omitted_budgets_use_core_defaults_and_allow_subcalls() -> None:
     try:
         response = run(
             {
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "model": "test-model",
                 "question": "q",
                 # max_iterations and max_subcalls deliberately omitted
@@ -379,7 +379,7 @@ def test_runner_explicit_zero_subcalls_is_honored() -> None:
     try:
         response = run(
             {
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "model": "test-model",
                 "question": "q",
                 "max_iterations": 2,

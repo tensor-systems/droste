@@ -92,7 +92,7 @@ def test_one_response_builder_shapes_refusal_and_success() -> None:
 
     assert response["answer"] == "ok"
     assert response["answer_metadata"] == {"evidence": "result-1"}
-    assert json.loads(response["trajectory"][0]["llm_input"])[0]["content"] == "q"
+    assert response["trajectory"][0]["llm_input"][0]["content"] == "q"
     assert response["provider"] == "provider-a"
     assert response["response_id"] == "response-1"
     assert response["model"] == "resolved-model"

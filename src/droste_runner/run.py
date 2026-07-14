@@ -100,7 +100,11 @@ def _run_valid_request(request: dict[str, Any], *, source_ctx: Any = None) -> di
     session = str(request.get("session") or "")
     session_index = int(request.get("session_index") or 0)
 
-    from droste.execution.progress import emit_event, emit_progress  # type: ignore
+    from droste.execution.progress import emit_event  # type: ignore
+    from droste.execution.trace import (  # type: ignore
+        DataUseAuthorization,
+        TraceRetentionPolicy,
+    )
 
     environment_config = EnvironmentConfig(
         kind="native",
@@ -116,8 +120,16 @@ def _run_valid_request(request: dict[str, Any], *, source_ctx: Any = None) -> di
         # NDJSON on stderr is the runner's event contract — the relay's
         # forwarding filter and native hosts read it there. Attached
         # explicitly now that a bare engine call emits nothing (#35).
-        on_progress=emit_progress,
         on_event=emit_event,
+        run_id=str(request.get("run_id") or "") or None,
+        parent_run_id=str(request.get("parent_run_id") or "") or None,
+        trace_depth=(
+            int(request["trace_depth"]) if request.get("trace_depth") is not None else None
+        ),
+        trace_retention=TraceRetentionPolicy(
+            frozenset(str(value) for value in (request.get("retain_trace") or []))
+        ),
+        data_use=DataUseAuthorization(training_allowed=request.get("training_allowed") is True),
     )
 
     model = str(request.get("model") or "")

@@ -211,7 +211,7 @@ def test_run_threads_source_ctx_to_factories(monkeypatch) -> None:
     ctx = object()
     response = runner_mod.run(
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "question": "q",
             "token": "t",
             "root_endpoint": "https://cloud/root",
@@ -233,7 +233,7 @@ def test_main_rejects_adapter_module_from_request_file(monkeypatch, tmp_path) ->
     # protocol_version present so the request reaches the security check —
     # the version gate deliberately runs first (see test_rlm_runner_adapter's
     # test_main_version_gate_precedes_adapter_module_rejection).
-    request_path.write_text('{"protocol_version": 1, "adapter_module": "evil.module"}')
+    request_path.write_text('{"protocol_version": 2, "adapter_module": "evil.module"}')
     monkeypatch.setenv("RLM_RUNNER_REQUEST_PATH", str(request_path))
     with pytest.raises(RuntimeError, match="not accepted from the request file"):
         runner_mod.main()

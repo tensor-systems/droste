@@ -58,7 +58,7 @@ def test_run_reports_actual_subcall_count() -> None:
     try:
         response = run(
             {
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "model": "test-model",
                 "question": "is it spam?",
                 "max_iterations": 3,
@@ -116,7 +116,7 @@ def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> 
     monkeypatch.setattr(import_module("droste_runner.run"), "run_rlm", fake_run_rlm)
     response = runner_module.run(
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "model": "test-model",
             "question": "q",
             "token": "unused",
@@ -280,7 +280,7 @@ def _run_with_capture(request_extra: dict[str, Any]) -> list[dict[str, Any]]:
     base = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         request: dict[str, Any] = {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "model": "test-model",
             "question": "is it spam?",
             "max_iterations": 3,
@@ -330,7 +330,7 @@ def test_explicit_zero_subcall_max_output_tokens_is_rejected() -> None:
     with pytest.raises(ValueError, match="subcall_max_output_tokens must be positive"):
         run(
             {
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "model": "m",
                 "question": "q",
                 "subcall_max_output_tokens": 0,

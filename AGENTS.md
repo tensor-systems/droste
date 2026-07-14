@@ -69,6 +69,27 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - `ModelRelayClient.root_requests_issued` is a thread-safe cumulative count of root HTTP requests at the dispatch boundary. It includes streaming and non-streaming requests that later fail, including repair and extraction calls, but excludes payload or request-construction failures before dispatch.
 - `ModelRelaySubcallClient.llm_batch` uses one typed `/responses/batch` request and never falls back to per-item fan-out. Batch ids are parsed back into caller order, per-item errors remain attributable, and the entire call budget is reserved atomically before dispatch. BYOK clients keep bounded concurrent fan-out because their synchronous APIs have no equivalent endpoint.
 
+## Trace ABI
+
+- Every structured event is a strict Trace ABI v1 value. Stamp it exactly once
+  through `ExecutionContext`; do not emit raw or partially enveloped event
+  dictionaries at host boundaries.
+- `execution.trace` owns immutable values, parsing, classification, retention
+  selection, and terminal-record invariants. Keep persistence I/O in an
+  injected host callback; core code must not choose files, databases, or cloud
+  services.
+- Durable events are `usage`, `budget`, `policy`, `capability`, and `done`.
+  Never put answer/code/output/trajectory, error messages/details, or executed
+  source inside them. Those belong only to configurable events.
+- Retention and training authorization are independent values. Training is
+  denied by default and must never be inferred from retained content.
+- An injected `ExecutionContext` owns trace identity and policy. Reject
+  conflicting `RLMConfig` values rather than replacing a recorder that may
+  already contain events.
+- Capability tracing is observational: wrap only the broker-owned content-free
+  accounting/evidence projection; do not duplicate its schema or let tracing
+  participate in dispatch or authorization.
+
 ## droste_runner Package
 
 - `droste_runner` is a shared HTTP-backed runner used by host apps (ModelRelay's hosted runner, in-process embedders). It reads the request JSON from `RLM_RUNNER_REQUEST_PATH` (or argv) and returns a JSON response payload.
@@ -93,7 +114,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
   They are assertions that the Deno/WASM host supplies those boundaries, not
   Python-side enforcement. Never weaken them or silently accept a native
   signal timeout for Pyodide.
-- Every request MUST carry `"protocol_version"` (currently 1) — missing/mismatched versions get a structured refusal, never partial work. See docs/architecture.md, "The runner protocol".
+- Every request MUST carry `"protocol_version"` (currently 2) — missing/mismatched versions get a structured refusal, never partial work. See docs/architecture.md, "The runner protocol".
 - The runner wraps `droste` and supplies an HTTP `LLMClient` + `SubcallClient` plus a sandboxed `RunnerEnvironment`.
 - Timeouts in `RunnerEnvironment.execute` use `signal.setitimer` and restore the previous handler (`old_handler`) after each execution to avoid clobbering host signal handlers.
 - `droste_runner` expects HTTP endpoints for root and subcall execution (`root_endpoint`/`subcall_endpoint` + `token`).

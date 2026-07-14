@@ -63,6 +63,31 @@ Custom `RLMEnvironment` implementations must now implement
 `droste.capabilities.broker_subcalls()` helper supplies the standard standalone
 adapter. `run_rlm` replaces all canonical subcall globals from that method and
 does not retain a raw-client fallback.
+### Trace ABI v1 unifies live events and terminal run records
+
+Every structured event now carries the required v1 envelope: `run_id`, positive
+monotonic `seq`, UTC `timestamp`, `type`, `version`, `persistence_class`, and
+optional `parent_run_id`/`depth`. Partial pre-envelope dictionaries are not a
+supported wire format. Pyodide relay telemetry is a child run correlated by
+`parent_run_id`, so the relay and engine do not race to own one sequence.
+
+`RLMResult`, runner responses, and CLI JSON expose `run_record`. Durable
+terminal/usage/budget/policy/capability facts are always selected;
+code/output/error/repair/replay content requires an explicit
+`TraceRetentionPolicy`; heartbeats/progress/deltas remain transient. The
+default retains no configurable content. `DataUseAuthorization.training_allowed`
+is independent and defaults to `False`; retaining a replay never authorizes
+training use.
+
+Attach `on_run_record` to `RLMConfig` or `create_execution_context` to hand the
+resolved immutable record to local persistence. If an existing context is
+passed to `run_rlm`, it owns trace settings; explicit conflicting `RLMConfig`
+settings raise `ValueError`. See [docs/trace-abi.md](docs/trace-abi.md).
+
+The runner protocol is now version 2. `trajectory[].llm_input` is a structured
+message list instead of a JSON-encoded string, matching the configurable
+`replay` value without a second lossy representation. Requests must send
+`"protocol_version": 2`; mismatched v1 requests fail before work begins.
 
 ### Hosts select environments through one substrate factory
 

@@ -14,6 +14,11 @@ from ..execution.config import (
 )
 from ..execution.context import ExecutionContext, create_execution_context
 from ..execution.progress import EventCallback, ProgressCallback
+from ..execution.trace import (
+    DataUseAuthorization,
+    RunRecordCallback,
+    TraceRetentionPolicy,
+)
 from ..protocols.environment import RLMEnvironment
 from ..protocols.subcall_client import SubcallClient
 from ..registry import DataSourceRegistry
@@ -95,6 +100,12 @@ def create_environment_context(
     verbose: bool = False,
     on_progress: ProgressCallback | None = None,
     on_event: EventCallback | None = None,
+    on_run_record: RunRecordCallback | None = None,
+    run_id: str | None = None,
+    parent_run_id: str | None = None,
+    trace_depth: int | None = None,
+    trace_retention: TraceRetentionPolicy | None = None,
+    data_use: DataUseAuthorization | None = None,
 ) -> ExecutionContext:
     """Create the loop context from the same immutable budgets as the environment."""
     return create_execution_context(
@@ -105,6 +116,12 @@ def create_environment_context(
         verbose=verbose,
         on_progress=on_progress,
         on_event=on_event,
+        on_run_record=on_run_record,
+        run_id=run_id,
+        parent_run_id=parent_run_id,
+        trace_depth=trace_depth,
+        trace_retention=trace_retention,
+        data_use=data_use,
     )
 
 

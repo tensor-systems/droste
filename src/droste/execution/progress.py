@@ -18,10 +18,12 @@ import json
 import sys
 from typing import Any, Callable
 
+from .trace import parse_event
+
 ProgressCallback = Callable[[str], None]
 # Structured loop events (iteration_start / code / output / …) for "watch it
-# think" UIs and NDJSON streaming (#1). Separate from ProgressCallback: progress
-# is a human-readable status string; an event is a typed dict.
+# think" UIs and NDJSON streaming (#1). ProgressCallback remains a compatibility
+# view; progress also travels through this one structured event stream.
 EventCallback = Callable[[dict[str, Any]], None]
 
 # The engine + relay event vocabulary. The relay-side copy lives in
@@ -40,7 +42,14 @@ EVENT_TYPES = frozenset(
         "reasoning_delta",  # relay-side {text}, from streamed /responses
         "finalization_error",  # {error_type, message} — terminal root finalization failed
         "extract_error",  # {error_type, message} — post-exhaustion extract pass failed
-        "done",  # final HostResponse mirror (future)
+        "heartbeat",  # transient liveness signal
+        "repair",  # configurable repair attempt details
+        "replay",  # configurable replay input/output details
+        "usage",  # durable resolved token/call accounting
+        "budget",  # durable configured/consumed budget facts
+        "policy",  # durable policy decision facts
+        "capability",  # durable broker-owned capability outcome value
+        "done",  # durable terminal result mirror
     }
 )
 
@@ -99,6 +108,13 @@ def extract_error_event(error_type: str, message: str) -> dict[str, Any]:
     return {"type": "extract_error", "error_type": error_type, "message": message}
 
 
+def repair_event(iteration: int, reason: str, *, error_type: str | None = None) -> dict[str, Any]:
+    value: dict[str, Any] = {"type": "repair", "iteration": iteration, "reason": reason}
+    if error_type is not None:
+        value["error_type"] = error_type
+    return value
+
+
 # --- sinks -------------------------------------------------------------------
 
 
@@ -126,6 +142,7 @@ def render_verbose(event: dict[str, Any]) -> str | None:
     core used to print directly under ``verbose`` — now a pure function a
     shell applies (the CLI's ``--trace`` sink). Returns None for events the
     trace view does not show."""
+    event = parse_event(event).as_dict()
     etype = event.get("type")
     if etype == "progress":
         status = str(event.get("status") or "")
