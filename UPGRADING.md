@@ -112,7 +112,9 @@ the step cannot spend further subcall budget and can synthesize already retained
 work; any resulting draft still passes through the normal unconfirmed extraction
 path. Incomplete exact semantic evidence continues to revoke readiness, and a
 finalization that retains no draft leaves the original typed policy failure
-fatal.
+fatal. If the root finalization request itself fails, the event stream emits an
+additive `finalization_error` event with `error_type` and `message`; the original
+policy failure remains authoritative and no finalization retry is made.
 
 To make this completeness check enforceable, `run_rlm` continues to replace any
 `llm_batch_json` and `llm_query_batched_json` entries in the mapping returned by

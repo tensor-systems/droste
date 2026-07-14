@@ -8,6 +8,7 @@ from ..execution.context import ExecutionContext, create_execution_context
 from ..execution.progress import (
     EventCallback,
     extract_error_event,
+    finalization_error_event,
     iteration_start_event,
     llm_response_event,
 )
@@ -735,6 +736,13 @@ def run_rlm(
                             usage=finalization_usage,
                         )
                     )
+            else:
+                context.emit_event(
+                    finalization_error_event(
+                        finalization_root_error.type,
+                        finalization_root_error.message,
+                    )
+                )
 
         # If extraction cannot recover an outstanding PolicyError, do not
         # present the gated draft as a normal answer. A successful extraction
@@ -749,10 +757,11 @@ def run_rlm(
             final_answer = _best_answer(answer, last_output, last_response, last_execution_status)
 
         # Extract fallback: the loop exhausted its iteration budget or reached
-        # a fail-closed terminal handoff without answer['ready']. Reaching here
-        # means the root client survived every prior call (root failures return
-        # early above), so one more extract call is affordable. Failed terminal
-        # attempts are trajectory evidence too: they can mutate
+        # a fail-closed terminal handoff without answer['ready']. All main-loop
+        # root failures return early. A failed terminal finalization is the
+        # sole exception: its event is emitted above while the original
+        # terminal error remains authoritative.
+        # Failed terminal attempts are trajectory evidence too: they can mutate
         # answer['content'] before raising, and their code/error explain how
         # trustworthy that draft is.
         was_extracted = False

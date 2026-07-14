@@ -38,6 +38,7 @@ EVENT_TYPES = frozenset(
         "execution_error",  # {iteration, error_type, message} — a step failed; repair may follow
         "subcall",  # {depth, seq, ...} (future)
         "reasoning_delta",  # relay-side {text}, from streamed /responses
+        "finalization_error",  # {error_type, message} — terminal root finalization failed
         "extract_error",  # {error_type, message} — post-exhaustion extract pass failed
         "done",  # final HostResponse mirror (future)
     }
@@ -88,6 +89,10 @@ def execution_error_event(iteration: int, error_type: str, message: str) -> dict
         "error_type": error_type,
         "message": message,
     }
+
+
+def finalization_error_event(error_type: str, message: str) -> dict[str, Any]:
+    return {"type": "finalization_error", "error_type": error_type, "message": message}
 
 
 def extract_error_event(error_type: str, message: str) -> dict[str, Any]:
@@ -145,6 +150,8 @@ def render_verbose(event: dict[str, Any]) -> str | None:
         return "\n".join(parts)
     if etype == "execution_error":
         return f"\nExecution error: {event.get('message', '')}"
+    if etype == "finalization_error":
+        return f"\nTerminal finalization failed: {event.get('error_type')}: {event.get('message')}"
     if etype == "extract_error":
         return f"\nExtract fallback failed: {event.get('error_type')}: {event.get('message')}"
     return None

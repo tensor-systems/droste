@@ -57,6 +57,24 @@ class RecordingLLMClient(MockLLMClient):
         )
 
 
+class FailingFinalizationLLMClient(RecordingLLMClient):
+    """Record the terminal request, then fail it without another response."""
+
+    def responses_create(
+        self, messages, model, max_tokens=4096, temperature=0.0, return_usage=False
+    ):
+        if len(self.calls) == 1:
+            self.calls.append(list(messages))
+            raise RuntimeError("terminal request failed")
+        return super().responses_create(
+            messages,
+            model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            return_usage=return_usage,
+        )
+
+
 class SyntheticClassificationSubcalls:
     """Deterministic structured responses for semantic completeness tests."""
 
@@ -825,6 +843,48 @@ answer['ready'] = False
     assert [record.execution_status for record in result.trajectory] == ["error", "success"]
     assert "single terminal finalization attempt" in llm.calls[1][-1]["content"]
     assert "Draft answer so far:\nred,blue" in llm.calls[2][-1]["content"]
+
+
+def test_terminal_finalization_root_failure_is_observable_without_changing_policy() -> None:
+    incomplete = """```python
+prompts = ['classify red blue', 'classify green yellow']
+schema = {'type': 'object', 'required': ['label'], 'properties': {'label': {'type': 'string'}}}
+llm_batch_json(prompts, schema, max_repair_attempts=0)
+answer['ready'] = True
+```"""
+    llm = FailingFinalizationLLMClient(_responses(incomplete))
+    subcalls = SyntheticClassificationSubcalls([['{"label":"red,blue"}', "not json"]])
+    events: list[dict[str, Any]] = []
+
+    result = run_rlm(
+        question="Assign labels to four synthetic records.",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=subcalls,
+        config=RLMConfig(
+            max_iterations=5,
+            max_calls=3,
+            policy_hints=PolicyHints(semantic=True),
+        ),
+        on_event=events.append,
+    )
+
+    assert len(llm.calls) == 2  # initial work and the failed terminal request
+    assert result.sub_calls_made == 2
+    assert result.sub_calls_succeeded == 2
+    assert result.ready is False
+    assert result.extracted is False
+    assert result.error is not None
+    assert result.error.type == "PolicyError"
+    assert result.error.details is not None
+    assert result.error.details["reason"] == "semantic_exact_retry_budget_exhausted"
+    assert [event for event in events if event["type"] == "finalization_error"] == [
+        {
+            "type": "finalization_error",
+            "error_type": "RuntimeError",
+            "message": "terminal request failed",
+        }
+    ]
 
 
 def test_terminal_finalization_blocks_saved_subcall_aliases_without_accounting() -> None:
