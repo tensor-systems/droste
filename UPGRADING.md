@@ -73,6 +73,23 @@ batch is not completion evidence for earlier partial work. This is a behavior
 change only for callers that explicitly enable semantic policy; runs without
 that hint are unchanged.
 
+If the remaining total subcall budget is smaller than the minimum needed to
+replay every unresolved recorded exact request, the loop now stops requesting
+impossible repairs and enters the existing bounded extraction/failure path
+immediately. In the additive diagnostic details, `required_subcalls` is the sum
+of the full batch cardinality for each unresolved recorded exact request, not
+the number of failed items. Validator object identity participates in exactness,
+so otherwise-identical calls made with distinct validator objects are distinct
+recorded requests and each contributes its full batch cardinality.
+
+Successful extraction remains unconfirmed and preserves a `PolicyError` in
+`recovered_error`; without extraction evidence, the same policy error remains
+fatal. Its additive `details.reason` is
+`"semantic_exact_retry_budget_exhausted"` and also includes the remaining
+subcall count plus unresolved recorded-request and item counts. Provider errors
+do not trigger this handoff while enough budget for the recorded exact retries
+remains.
+
 To make this completeness check enforceable, `run_rlm` now replaces any
 `llm_batch_json` and `llm_query_batched_json` entries in the mapping returned by
 `environment.globals()` with Droste's tracked bindings before sandbox execution.
