@@ -67,7 +67,22 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - `LLMClient` now exposes `responses_create(...)` (message-based) to avoid chat/completions terminology.
 - The core loop calls `responses_create` and expects it to wrap `/responses` semantics, not OpenAI-style completions.
 - `ModelRelayClient.root_requests_issued` is a thread-safe cumulative count of root HTTP requests at the dispatch boundary. It includes streaming and non-streaming requests that later fail, including repair and extraction calls, but excludes payload or request-construction failures before dispatch.
-- `ModelRelaySubcallClient.llm_batch` uses one typed `/responses/batch` request and never falls back to per-item fan-out. Batch ids are parsed back into caller order, per-item errors remain attributable, and the entire call budget is reserved atomically before dispatch. BYOK clients keep bounded concurrent fan-out because their synchronous APIs have no equivalent endpoint.
+- `ModelRelaySubcallClient.llm_batch` uses one typed `/responses/batch` request and never falls back to per-item fan-out. Batch ids are parsed back into caller order and per-item errors remain attributable. BYOK clients keep bounded concurrent fan-out because their synchronous APIs have no equivalent endpoint.
+
+## Budget Ledger
+
+- Compute authorization is one frozen `Budget` vector: tokens, subcalls,
+  depth, wall time, and root/subcall output ceilings. Do not add host-specific
+  counters, client enforcement, aliases, or `max_*` translations.
+- `BudgetLedger` is the sole mutable authority. Reserve the complete vector
+  atomically before dispatch, reconcile exactly once afterward, and refund all
+  unused authorization. Every error and process-control path must settle.
+- Batch and child reservations are strict parent allocations. A child closes
+  into its parent and returns unused capacity; it never creates compute.
+- Emit reservation facts through the ledger journal after releasing the state
+  lock. Arbitrary event sinks must never run under that lock.
+- Keep `SandboxLimits` separate. Output capture and local execution timeout are
+  REPL guardrails, not provider/model compute spend.
 
 ## Trace ABI
 
@@ -108,18 +123,20 @@ evidence with that status rather than leaving the model to interpret prefixes.
   import that facade or each other in a cycle.
 - The generic native `RunnerEnvironment` lives in
   `droste.environments.inprocess`; `droste_runner.environment` and
-  `droste_runner.runner` are compatibility shims. Core/CLI code must not import
+  `droste_runner.runner` are thin re-export modules. Core/CLI code must not import
   the runner package to obtain an execution environment.
 - Host entrypoints must use one frozen `EnvironmentConfig` with
   `create_environment_context` and `create_environment`; do not copy budget,
   registry, timeout, and executor selection across host modules. Direct
-  `RunnerEnvironment` construction remains compatibility-only.
+  `RunnerEnvironment` construction is reserved for focused substrate tests.
 - `kind="pyodide"` selects `PyodideEnvironment`/`RawExecutor` and requires
   explicit `host_managed_timeout` and `host_managed_isolation` declarations.
   They are assertions that the Deno/WASM host supplies those boundaries, not
   Python-side enforcement. Never weaken them or silently accept a native
   signal timeout for Pyodide.
-- Every request MUST carry `"protocol_version"` (currently 2) — missing/mismatched versions get a structured refusal, never partial work. See docs/architecture.md, "The runner protocol".
+- Every request MUST carry `"protocol_version": 3` and one complete `budget`
+  object. Missing/mismatched versions or incomplete budgets fail before work.
+  See docs/architecture.md, "The runner protocol".
 - The runner wraps `droste` and supplies an HTTP `LLMClient` + `SubcallClient` plus a sandboxed `RunnerEnvironment`.
 - Timeouts in `RunnerEnvironment.execute` use `signal.setitimer` and restore the previous handler (`old_handler`) after each execution to avoid clobbering host signal handlers.
 - `droste_runner` expects HTTP endpoints for root and subcall execution (`root_endpoint`/`subcall_endpoint` + `token`).
@@ -128,7 +145,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
 
 ## Capability Broker ABI
 
-- Built-in environments expose generated compatibility bindings, never raw
+- Built-in environments expose generated model bindings, never raw
   `SubcallClient` or data-source bound methods. Loop-installed structured batch
   helpers must use the required `environment.sandbox_subcalls(subcalls)` result
   so they do not recreate a direct egress path. Custom environments can use
@@ -146,8 +163,8 @@ evidence with that status rather than leaving the model to interpret prefixes.
   attach either a result or an extensible stable-code `CapabilityError` plus
   provider usage/evidence metadata. Dispatch must consume only the normalized
   outcome convention; unexpected exceptions remain `handler_error`.
-- The guard, annotator, and observer are seams only. Budget ownership, policy
-  semantics, trace ordering/storage/retention, and MCP
+- The guard, annotator, and observer are seams only. The run ledger composes
+  into the guard/finalizer; policy semantics, trace storage/retention, and MCP
   transport belong to their own issues. Observers are observational and must
   never become an authority or alternate dispatch path. Durable traces consume
   `CapabilityResult.to_trace_dict()`, which excludes parameters, inline results,

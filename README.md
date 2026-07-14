@@ -180,13 +180,22 @@ droste "why did it crash?" ./logs --model claude-opus-4-8
 
 ```python
 from droste import (
+    Budget,
+    EnvironmentConfig,
     OpenAICompatClient,
     OpenAICompatSubcallClient,
-    create_execution_context,
+    SandboxLimits,
+    create_environment,
+    create_environment_context,
     run_rlm,
 )
 
-context = create_execution_context(max_calls=50, max_depth=1)
+environment_config = EnvironmentConfig(
+    kind="native",
+    budget=Budget(subcalls=50, depth=1),
+    sandbox=SandboxLimits(output_chars=25_000),
+)
+context = create_environment_context(environment_config)
 root = OpenAICompatClient(model="gpt-5.2-mini")  # OPENAI_API_KEY / OPENAI_BASE_URL from env
 subcalls = OpenAICompatSubcallClient(
     model="gpt-5.2-mini",
@@ -194,7 +203,13 @@ subcalls = OpenAICompatSubcallClient(
     max_output_tokens=2048,        # per-subcall output bound (cost control)
 )
 
-env = ...  # your RLMEnvironment implementation (see Core Concepts below)
+env = create_environment(
+    environment_config,
+    context=data,
+    registry=registry,
+    subcalls=subcalls,
+    execution_context=context,
+)
 result = run_rlm(question, environment=env, root_llm=root, subcalls=subcalls, context=context)
 ```
 
@@ -230,11 +245,12 @@ flowchart LR
 ```
 
 **Runner Inputs**
-- `protocol_version`: **required** on every request (currently `2`) — a
+- `protocol_version`: **required** on every request (currently `3`) — a
   missing or mismatched version gets a structured refusal, so hosts detect
   incompatibility instead of failing on a missing field. See
   [docs/architecture.md](docs/architecture.md) for the compatibility rules and
   [UPGRADING.md](UPGRADING.md) for per-release embedder migration notes.
+- `budget`: **required** complete six-field compute authorization object.
 - `root_endpoint` + `subcall_endpoint` + `token`: required for HTTP-backed runs.
 - `adapter_module`: optional Python module path to override the runner entirely.
 
@@ -275,14 +291,23 @@ ownership boundaries, bridge contract, and migration example.
 
 ```python
 RLMConfig(
-    max_iterations=20,      # Max refinement loops (default)
-    max_depth=1,            # Max nested subcall depth (default)
-    max_calls=50,           # Max total subcalls (default)
-    max_output_chars=25000, # Output budget per iteration (default)
+    budget=Budget(
+        tokens=500_000,
+        subcalls=50,
+        depth=1,
+        wall_ms=300_000,
+        root_output_tokens=4_096,
+        subcall_output_tokens=2_048,
+    ),
+    sandbox=SandboxLimits(output_chars=25_000),
     prompt_profile="full",  # Versioned prompt-pack profile (full/minimal/none)
     policy_hints=PolicyHints(semantic=True), # Optional explicit contract
 )
 ```
+
+Compute authorization is one immutable vector, reconciled by one run-scoped
+ledger. See [Budgets](docs/budgets.md). Sandbox output and execution guardrails
+are separate because they describe the local REPL, not model/provider spend.
 
 Harness prompts resolve once per run from immutable, versioned data. See
 [Prompt packs](docs/prompt-packs.md) for the stable five-slot contract, custom

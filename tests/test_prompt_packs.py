@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from droste import PolicyHints, RLMConfig, run_rlm
+from droste import Budget, PolicyHints, RLMConfig, SandboxLimits, run_rlm
 from droste.exceptions import PolicyError
 from droste.loop.step import error_repair_history
 from droste.prompts import (
@@ -102,10 +102,15 @@ def _root_system_prompt(
         root_llm=llm,
         subcalls=subcalls,
         config=RLMConfig(
-            max_iterations=1,
-            max_calls=7,
-            max_depth=2,
-            max_output_chars=99,
+            budget=Budget(
+                tokens=10_000,
+                subcalls=7,
+                depth=2,
+                wall_ms=30_000,
+                root_output_tokens=1_024,
+                subcall_output_tokens=2_048,
+            ),
+            sandbox=SandboxLimits(output_chars=99),
             policy_hints=PolicyHints(semantic=True) if semantic else None,
         ),
     )
@@ -126,8 +131,10 @@ def test_root_authorized_compute_renders_output_limit_states_exactly(
 ) -> None:
     expected = (
         "## Authorized compute\n"
-        "iterations=1; subcalls=7; depth=2; output_chars_per_iteration=99\n"
-        f"subcall_output_tokens_per_call={rendered_limit}"
+        "tokens=10000; subcalls=7; depth=2; wall_ms=30000; "
+        "root_output_tokens_per_call=1024; subcall_output_tokens_per_call=2048\n"
+        f"client_reported_subcall_output_limit={rendered_limit}\n"
+        "Sandbox output_chars_per_iteration=99."
     )
 
     system_prompt = _root_system_prompt(subcalls)
@@ -143,7 +150,7 @@ def test_root_authorized_compute_renders_output_limit_states_exactly(
 def test_semantic_subcall_gate_forwards_output_limit_to_root_prompt() -> None:
     system_prompt = _root_system_prompt(ReportingSubcalls(768, successful=True), semantic=True)
 
-    assert "subcall_output_tokens_per_call=768 (bounded)" in system_prompt
+    assert "client_reported_subcall_output_limit=768 (bounded)" in system_prompt
 
 
 def test_builtin_catalog_loads_complete_immutable_profiles_from_resources() -> None:
@@ -377,7 +384,7 @@ def test_run_uses_one_caller_pack_and_records_its_provenance() -> None:
         environment=MockEnvironment(),
         root_llm=llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1, root_model="gpt-5"),
+        config=RLMConfig(root_model="gpt-5"),
         prompt_pack=caller,
     )
 
@@ -409,7 +416,7 @@ def test_pack_policy_default_applies_only_when_config_does_not_override_it() -> 
         environment=MockEnvironment(),
         root_llm=MockLLMClient([_response(prose)]),
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1),
+        config=RLMConfig(),
         prompt_pack=permissive,
     )
     assert result.answer == prose
@@ -420,7 +427,7 @@ def test_pack_policy_default_applies_only_when_config_does_not_override_it() -> 
         environment=MockEnvironment(),
         root_llm=MockLLMClient([_response(prose)]),
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1, enforce_contract=True),
+        config=RLMConfig(enforce_contract=True),
         prompt_pack=permissive,
     )
     assert strict.error is not None

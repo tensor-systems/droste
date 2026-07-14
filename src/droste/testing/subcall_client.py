@@ -3,7 +3,6 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from ..exceptions import SubcallBudgetExceeded
 from ..execution.context import ExecutionContext
 from ..protocols.subcall_client import SubcallClient
 
@@ -24,8 +23,6 @@ class MockSubcallClient(SubcallClient):
             context = self._context
             if context is None:
                 return
-            if context.max_calls >= 0 and context.stats.calls_made + count > context.max_calls:
-                raise SubcallBudgetExceeded("max subcalls exceeded")
             context.record_subcall_attempts(count)
 
     def llm_query(self, prompt: str, context: str = "") -> str:

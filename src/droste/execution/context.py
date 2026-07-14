@@ -7,13 +7,8 @@ if TYPE_CHECKING:
     from ..capabilities import CapabilityResult
 
 from ..protocols.llm_client import TokenUsage
-from .config import (
-    DEFAULT_MAX_CALLS,
-    DEFAULT_MAX_DEPTH,
-    DEFAULT_MAX_ITERATIONS,
-    DEFAULT_MAX_OUTPUT_CHARS,
-    ExecutionConfig,
-)
+from .budget import Budget, BudgetLedger
+from .config import ExecutionConfig, SandboxLimits
 from .progress import EVENT_TYPES, EventCallback, ProgressCallback, progress_event
 from .stats import ExecutionStats
 from .trace import (
@@ -34,6 +29,11 @@ class ExecutionContext:
     config: ExecutionConfig = field(default_factory=ExecutionConfig)
     stats: ExecutionStats = field(default_factory=ExecutionStats)
     trace: TraceRecorder = field(default_factory=TraceRecorder)
+    ledger: BudgetLedger = field(default_factory=lambda: BudgetLedger(Budget()))
+
+    def __post_init__(self) -> None:
+        if self.ledger.budget != self.config.budget:
+            raise ValueError("ExecutionContext config and ledger budgets must match")
 
     def emit_progress(self, status: str) -> None:
         """Deliver a progress line to the attached sink; silent when none.
@@ -130,20 +130,12 @@ class ExecutionContext:
         self.stats.depth = value
 
     @property
-    def max_depth(self) -> int:
-        return self.config.max_depth
+    def budget(self) -> Budget:
+        return self.config.budget
 
     @property
-    def max_calls(self) -> int:
-        return self.config.max_calls
-
-    @property
-    def max_iterations(self) -> int:
-        return self.config.max_iterations
-
-    @property
-    def max_output_chars(self) -> int:
-        return self.config.max_output_chars
+    def sandbox(self) -> SandboxLimits:
+        return self.config.sandbox
 
     @property
     def calls_made(self) -> int:
@@ -180,10 +172,8 @@ class ExecutionContext:
 
 def create_execution_context(
     *,
-    max_depth: int = DEFAULT_MAX_DEPTH,
-    max_calls: int = DEFAULT_MAX_CALLS,
-    max_iterations: int = DEFAULT_MAX_ITERATIONS,
-    max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
+    budget: Budget | None = None,
+    sandbox: SandboxLimits | None = None,
     verbose: bool = False,
     on_progress: ProgressCallback | None = None,
     on_event: EventCallback | None = None,
@@ -196,11 +186,11 @@ def create_execution_context(
     trace_clock: Clock | None = None,
     trace_monotonic_clock: MonotonicClock | None = None,
 ) -> ExecutionContext:
+    resolved_budget = budget or Budget()
+    resolved_sandbox = sandbox or SandboxLimits()
     config = ExecutionConfig(
-        max_depth=max_depth,
-        max_calls=max_calls,
-        max_iterations=max_iterations,
-        max_output_chars=max_output_chars,
+        budget=resolved_budget,
+        sandbox=resolved_sandbox,
         verbose=verbose,
         on_progress=on_progress,
         on_event=on_event,
@@ -218,8 +208,11 @@ def create_execution_context(
         trace_kwargs["clock"] = trace_clock
     if trace_monotonic_clock is not None:
         trace_kwargs["monotonic_clock"] = trace_monotonic_clock
-    return ExecutionContext(
+    context = ExecutionContext(
         config=config,
         stats=ExecutionStats(),
         trace=TraceRecorder(**trace_kwargs),
+        ledger=BudgetLedger(resolved_budget),
     )
+    context.ledger.on_event = context.emit_event
+    return context

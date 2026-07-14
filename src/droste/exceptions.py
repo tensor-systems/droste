@@ -27,12 +27,6 @@ class PolicyError(SandboxError):
     pass
 
 
-class SubcallBudgetExceeded(RuntimeError):
-    """A subcall dispatch was rejected before exceeding its call budget."""
-
-    pass
-
-
 @dataclass(frozen=True, slots=True)
 class BatchItemErrorDetails:
     """Allowlisted, payload-free metadata for one failed batch item.

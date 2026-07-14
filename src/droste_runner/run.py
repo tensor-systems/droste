@@ -9,7 +9,8 @@ import sys
 from typing import Any
 
 from droste.environments import EnvironmentConfig, create_environment, create_environment_context
-from droste.execution.config import DEFAULT_MAX_CALLS, DEFAULT_MAX_ITERATIONS
+from droste.execution.budget import Budget
+from droste.execution.config import SandboxLimits
 from droste.loop.rlm import RLMConfig, run_rlm
 from droste.providers import ProviderCatalog
 
@@ -93,22 +94,20 @@ def _run_valid_request(
         context=source_ctx,
     )
 
-    # Omitted budgets fall back to the core loop defaults instead of the old
-    # runner-local 1 iteration / 0 subcalls (0 made the FIRST llm_query raise
-    # "max subcalls exceeded"). An EXPLICIT value is always honored — including
-    # max_subcalls=0, which deliberately forbids subcalls. Hosts that care
-    # about cost must pass explicit budgets in the request.
-    def _budget(key: str, default: int) -> int:
-        raw = request.get(key)
-        if raw is None or raw == "":
-            return default
-        return int(raw)
-
-    max_iterations = _budget("max_iterations", DEFAULT_MAX_ITERATIONS)
-    max_depth = int(request.get("max_depth") or 1)
-    max_subcalls = _budget("max_subcalls", DEFAULT_MAX_CALLS)
-    max_output_chars = int(request.get("max_output_chars") or 0)
-    exec_timeout_ms = int(request.get("exec_timeout_ms") or 0)
+    raw_budget = request.get("budget")
+    if not isinstance(raw_budget, dict):
+        raise ValueError("request.budget must be a complete budget object")
+    budget = Budget.from_dict(raw_budget)
+    raw_sandbox = request.get("sandbox", {})
+    if not isinstance(raw_sandbox, dict):
+        raise ValueError("request.sandbox must be an object")
+    sandbox_fields = {"output_chars", "execution_timeout_ms", "capture_output_chars"}
+    unknown_sandbox = raw_sandbox.keys() - sandbox_fields
+    if unknown_sandbox:
+        raise ValueError(
+            "request.sandbox has unknown fields: " + ", ".join(sorted(unknown_sandbox))
+        )
+    sandbox = SandboxLimits(**raw_sandbox)
 
     token = str(request.get("token") or "")
     root_endpoint = str(request.get("root_endpoint") or "")
@@ -124,11 +123,8 @@ def _run_valid_request(
 
     environment_config = EnvironmentConfig(
         kind="native",
-        max_depth=max_depth,
-        max_calls=max_subcalls,
-        max_iterations=max_iterations,
-        max_output_chars=max_output_chars,
-        exec_timeout_ms=exec_timeout_ms,
+        budget=budget,
+        sandbox=sandbox,
     )
     exec_context = create_environment_context(
         environment_config,
@@ -163,7 +159,6 @@ def _run_valid_request(
 
     model = str(request.get("model") or "")
     provider = str(request.get("provider") or "") or None
-    max_output_tokens = int(request.get("max_output_tokens") or 0)
     temperature = request.get("temperature")
     stop = request.get("stop")
 
@@ -174,7 +169,7 @@ def _run_valid_request(
         token=token,
         default_model=model,
         provider=provider,
-        max_output_tokens=max_output_tokens,
+        max_output_tokens=budget.root_output_tokens,
         temperature=temperature,
         stop=stop,
         session=session,
@@ -185,13 +180,6 @@ def _run_valid_request(
     # its defaults (bounded output + no thinking for subcalls). An explicit
     # zero/negative budget is rejected: a subcall cannot answer in 0 tokens,
     # and silently treating it as unset would mask a caller bug.
-    raw_subcall_max = request.get("subcall_max_output_tokens")
-    if raw_subcall_max in (None, ""):
-        subcall_max_output_tokens = 0
-    else:
-        subcall_max_output_tokens = int(raw_subcall_max)
-        if subcall_max_output_tokens <= 0:
-            raise ValueError("subcall_max_output_tokens must be positive when set")
     subcall_model = str(request.get("subcall_model") or "")
     subcall_reasoning_effort = str(request.get("subcall_reasoning_effort") or "")
 
@@ -200,10 +188,8 @@ def _run_valid_request(
         token=token,
         session=session,
         session_index=session_index,
-        max_calls=environment_config.max_calls,
-        max_depth=environment_config.max_depth,
         context=exec_context,
-        max_output_tokens=subcall_max_output_tokens,
+        max_output_tokens=budget.subcall_output_tokens,
         model=subcall_model,
         reasoning_effort=subcall_reasoning_effort,
     )
@@ -213,16 +199,15 @@ def _run_valid_request(
         context=context,
         registry=registry,
         subcalls=subcalls,
+        execution_context=exec_context,
         capability_run_id=exec_context.trace.run_id,
         capability_parent_run_id=exec_context.trace.parent_run_id,
         capability_observer=exec_context.observe_capability,
     )
 
     config = RLMConfig(
-        max_iterations=environment_config.max_iterations,
-        max_depth=environment_config.max_depth,
-        max_calls=environment_config.max_calls,
-        max_output_chars=environment_config.max_output_chars,
+        budget=budget,
+        sandbox=sandbox,
         root_model=str(request.get("model") or ""),
         prompt_profile=str(request.get("prompt_profile") or "") or None,
         verbose=False,

@@ -42,14 +42,20 @@ def test_parse_flags_and_positionals():
             "k",
             "--subcall-model",
             "sm",
-            "--subcall-max-output-tokens",
+            "--subcall-output-tokens",
             "512",
             "--reasoning-effort",
             "low",
-            "--max-iterations",
-            "3",
-            "--max-subcalls",
+            "--budget-tokens",
+            "3000",
+            "--budget-subcalls",
             "7",
+            "--budget-depth",
+            "2",
+            "--budget-wall-ms",
+            "9000",
+            "--root-output-tokens",
+            "1024",
             "--json",
             "--verbose",
             "--quiet",
@@ -57,17 +63,26 @@ def test_parse_flags_and_positionals():
     )
     assert args.inputs == ["a.txt", "b.txt", "what changed?"]
     assert (args.model, args.base_url, args.api_key) == ("m", "http://x/v1", "k")
-    assert (args.subcall_model, args.subcall_max_output_tokens) == ("sm", 512)
+    assert (args.subcall_model, args.subcall_output_tokens) == ("sm", 512)
     assert args.reasoning_effort == "low"
-    assert (args.max_iterations, args.max_subcalls) == (3, 7)
+    assert (
+        args.budget_tokens,
+        args.budget_subcalls,
+        args.budget_depth,
+        args.budget_wall_ms,
+        args.root_output_tokens,
+    ) == (3000, 7, 2, 9000, 1024)
     assert args.json and args.verbose and args.quiet
 
 
 def test_parse_defaults():
     args = build_parser().parse_args(["q"])
-    assert args.subcall_max_output_tokens == 2048
-    assert args.max_iterations == 20
-    assert args.max_subcalls == 50
+    assert args.subcall_output_tokens == 2048
+    assert args.budget_tokens == 500_000
+    assert args.budget_subcalls == 50
+    assert args.budget_depth == 1
+    assert args.budget_wall_ms == 300_000
+    assert args.root_output_tokens == 4096
     assert args.max_bytes == 50_000_000
     assert args.max_file_bytes == 2_000_000
     assert not args.json and not args.verbose and not args.quiet
@@ -163,8 +178,6 @@ def _e2e_argv(server, *positionals, extra=()):
         server.base_url,
         "--api-key",
         "k",
-        "--max-iterations",
-        "2",
         *extra,
     ]
 
@@ -280,15 +293,26 @@ def test_ask_json_shape(stub_server, tmp_path, capsys):
     assert payload["recovered_error"] is None
 
 
-def test_ask_extracted_answer_exits_zero_with_note(stub_server, tmp_path, capsys):
+def test_ask_extracted_answer_exits_zero_with_note(monkeypatch, tmp_path, capsys):
+    import sys
+
+    from droste.loop.rlm import RLMResult
+
     doc = tmp_path / "doc.txt"
     doc.write_text("partial work")
-    stub_server.root_responses = [
-        # One iteration that never sets ready...
-        "```python\nprint(context['files'][0]['text'])\n```",
-        # ...then the extract-fallback pass answers from the trajectory.
-        "extracted final answer",
-    ]
+
+    def fake_run_rlm(*args, **kwargs):
+        return RLMResult(
+            answer="extracted final answer",
+            ready=False,
+            iterations=1,
+            tokens_used=10,
+            sub_calls_made=0,
+            trajectory=[],
+            extracted=True,
+        )
+
+    monkeypatch.setattr(sys.modules["droste_cli.main"], "run_rlm", fake_run_rlm)
     exit_code = main(
         [
             str(doc),
@@ -296,11 +320,9 @@ def test_ask_extracted_answer_exits_zero_with_note(stub_server, tmp_path, capsys
             "--model",
             "root-model",
             "--base-url",
-            stub_server.base_url,
+            "http://127.0.0.1:1",
             "--api-key",
             "k",
-            "--max-iterations",
-            "1",
         ]
     )
     captured = capsys.readouterr()
@@ -375,20 +397,20 @@ def test_ask_root_failure_is_nonzero(stub_server, tmp_path, capsys):
 # --- upfront validation of usage errors (exit 2, not a mid-run crash) ---
 
 
-def test_negative_subcall_max_output_tokens_is_usage_error(tmp_path, capsys):
+def test_negative_subcall_output_tokens_is_usage_error(tmp_path, capsys):
     f = tmp_path / "a.txt"
     f.write_text("hi")
-    code = main([str(f), "q", "--model", "m", "--subcall-max-output-tokens", "-1"])
+    code = main([str(f), "q", "--model", "m", "--subcall-output-tokens", "-1"])
     assert code == 2
-    assert "must be >= 0" in capsys.readouterr().err
+    assert "must be positive" in capsys.readouterr().err
 
 
-def test_max_iterations_below_one_is_usage_error(tmp_path, capsys):
+def test_token_budget_below_one_is_usage_error(tmp_path, capsys):
     f = tmp_path / "a.txt"
     f.write_text("hi")
-    code = main([str(f), "q", "--model", "m", "--max-iterations", "0"])
+    code = main([str(f), "q", "--model", "m", "--budget-tokens", "0"])
     assert code == 2
-    assert "must be >= 1" in capsys.readouterr().err
+    assert "must be positive" in capsys.readouterr().err
 
 
 def test_bad_byte_budgets_are_usage_errors(tmp_path, capsys):
@@ -422,7 +444,7 @@ def test_trace_dumps_full_loop(stub_server, tmp_path, capsys):
     assert exit_code == 0
     # Trace renders progress through render_verbose (#35): banner form,
     # not the --verbose echo's "droste: " marker.
-    assert "Iteration 1/" in captured.err and "=" * 60 in captured.err
+    assert "Iteration 1: Generating code" in captured.err and "=" * 60 in captured.err
     assert "LLM Response" in captured.err  # dump goes to stderr too
     assert captured.out.strip() == "content"  # stdout stays answer-only
 
@@ -488,8 +510,6 @@ def test_keyless_custom_base_url_is_allowed(stub_server, tmp_path, monkeypatch, 
             "root-model",
             "--base-url",
             stub_server.base_url,
-            "--max-iterations",
-            "2",
         ]
     )
     assert code == 0
@@ -532,8 +552,6 @@ def test_key_check_matches_hostname_not_substring(tmp_path, monkeypatch, capsys)
             "m",
             "--base-url",
             "http://127.0.0.1:9/api.openai.com",
-            "--max-iterations",
-            "1",
         ]
     )
     assert code == 1  # connection failure, NOT the exit-2 key usage error
@@ -577,7 +595,7 @@ def test_stored_credentials_run_end_to_end(stub_native_server, tmp_path, capsys)
     doc.write_text("logged-in content")
     stub_native_server.root_responses = [ANSWER_FROM_FILE]
 
-    exit_code = main([str(doc), "what does it say?", "--max-iterations", "2"])
+    exit_code = main([str(doc), "what does it say?"])
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.out.strip() == "logged-in content"
@@ -602,7 +620,7 @@ def test_stored_login_wins_over_ambient_env_keys(
     doc.write_text("logged-in content")
     stub_native_server.root_responses = [ANSWER_FROM_FILE]
 
-    exit_code = main([str(doc), "q", "--max-iterations", "2"])
+    exit_code = main([str(doc), "q"])
     assert exit_code == 0
     assert capsys.readouterr().out.strip() == "logged-in content"
     assert stub_native_server.requests, "the stored login must be used"
@@ -626,8 +644,6 @@ def test_flags_override_stored_login_for_one_run(stub_server, stub_native_server
             stub_server.base_url,
             "--api-key",
             "k",
-            "--max-iterations",
-            "2",
         ]
     )
     assert exit_code == 0
@@ -642,7 +658,7 @@ def test_env_keys_used_when_not_logged_in(stub_server, tmp_path, monkeypatch, ca
     doc = tmp_path / "doc.txt"
     doc.write_text("byok content")
     stub_server.root_responses = [ANSWER_FROM_FILE]
-    exit_code = main([str(doc), "q", "--model", "root-model", "--max-iterations", "2"])
+    exit_code = main([str(doc), "q", "--model", "root-model"])
     assert exit_code == 0
     assert capsys.readouterr().out.strip() == "byok content"
 
@@ -665,7 +681,7 @@ def test_explicit_model_beats_credentials_default(stub_native_server, tmp_path, 
     doc = tmp_path / "doc.txt"
     doc.write_text("x")
     stub_native_server.root_responses = [ANSWER_FROM_FILE]
-    exit_code = main([str(doc), "q", "--model", "override-model", "--max-iterations", "2"])
+    exit_code = main([str(doc), "q", "--model", "override-model"])
     assert exit_code == 0
     assert stub_native_server.requests[0]["model"] == "override-model"
 
@@ -701,7 +717,7 @@ def test_stored_byok_credentials_run_end_to_end(stub_server, tmp_path, capsys):
     doc = tmp_path / "doc.txt"
     doc.write_text("byok stored content")
     stub_server.root_responses = [ANSWER_FROM_FILE]
-    exit_code = main([str(doc), "q", "--max-iterations", "2"])
+    exit_code = main([str(doc), "q"])
     assert exit_code == 0
     assert capsys.readouterr().out.strip() == "byok stored content"
     assert stub_server.requests[0]["model"] == "root-model"
@@ -719,7 +735,7 @@ def test_first_run_interactive_setup_then_continues(stub_server, tmp_path, monke
     doc = tmp_path / "doc.txt"
     doc.write_text("setup then run")
     stub_server.root_responses = [ANSWER_FROM_FILE]
-    exit_code = main([str(doc), "q", "--max-iterations", "2"])
+    exit_code = main([str(doc), "q"])
     assert exit_code == 0
     assert capsys.readouterr().out.strip() == "setup then run"
 
@@ -746,7 +762,7 @@ def test_stored_byok_ignores_ambient_base_url(stub_server, tmp_path, monkeypatch
     doc = tmp_path / "doc.txt"
     doc.write_text("pinned endpoint")
     stub_server.root_responses = [ANSWER_FROM_FILE]
-    exit_code = main([str(doc), "q", "--max-iterations", "2"])
+    exit_code = main([str(doc), "q"])
     assert exit_code == 0
     assert capsys.readouterr().out.strip() == "pinned endpoint"
     assert stub_server.requests, "the stored endpoint must be used"

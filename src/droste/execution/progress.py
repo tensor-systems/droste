@@ -33,7 +33,7 @@ EVENT_TYPES = frozenset(
     {
         "startup",  # relay handshake {engine_version, runner_protocol, provider_protocol}
         "progress",  # coarse human-readable status {status}
-        "iteration_start",  # {iteration, max_iterations}
+        "iteration_start",  # {iteration, remaining_tokens}
         "llm_response",  # {iteration, response} — the root model's full reply
         "code",  # {iteration, code} — the code that is about to execute
         "output",  # {iteration, stdout, calls_made, answer_ready, answer_content_chars}
@@ -60,8 +60,12 @@ def progress_event(status: str) -> dict[str, Any]:
     return {"type": "progress", "status": status}
 
 
-def iteration_start_event(iteration: int, max_iterations: int) -> dict[str, Any]:
-    return {"type": "iteration_start", "iteration": iteration, "max_iterations": max_iterations}
+def iteration_start_event(iteration: int, remaining_tokens: int) -> dict[str, Any]:
+    return {
+        "type": "iteration_start",
+        "iteration": iteration,
+        "remaining_tokens": remaining_tokens,
+    }
 
 
 def llm_response_event(iteration: int, response: str) -> dict[str, Any]:

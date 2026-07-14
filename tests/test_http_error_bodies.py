@@ -65,9 +65,7 @@ def test_llm_query_error_includes_server_body():
             token="t",
             session="",
             session_index=0,
-            max_calls=5,
-            max_depth=5,
-            context=create_execution_context(max_calls=5, max_depth=5),
+            context=create_execution_context(),
         )
         with pytest.raises(RuntimeError, match=r"HTTP 503: no healthy provider offers model"):
             client.llm_query("hi")
@@ -108,9 +106,7 @@ def test_llm_query_streams_and_reassembles_ndjson():
             token="t",
             session="",
             session_index=0,
-            max_calls=5,
-            max_depth=5,
-            context=create_execution_context(max_calls=5, max_depth=5),
+            context=create_execution_context(),
         )
         assert client.llm_query("hi") == "slow model"
     finally:
@@ -137,9 +133,7 @@ def test_llm_query_rejects_truncated_ndjson_stream():
             token="t",
             session="",
             session_index=0,
-            max_calls=5,
-            max_depth=5,
-            context=create_execution_context(max_calls=5, max_depth=5),
+            context=create_execution_context(),
         )
         with pytest.raises(RuntimeError, match="without a completion event"):
             client.llm_query("hi")
@@ -168,9 +162,7 @@ def test_llm_query_preserves_explicitly_empty_completion_content():
             token="t",
             session="",
             session_index=0,
-            max_calls=5,
-            max_depth=5,
-            context=create_execution_context(max_calls=5, max_depth=5),
+            context=create_execution_context(),
         )
         assert client.llm_query("hi") == ""
     finally:
@@ -199,9 +191,7 @@ def test_llm_query_surfaces_ndjson_error_event():
             token="t",
             session="",
             session_index=0,
-            max_calls=5,
-            max_depth=5,
-            context=create_execution_context(max_calls=5, max_depth=5),
+            context=create_execution_context(),
         )
         with pytest.raises(RuntimeError, match=r"UPSTREAM_TIMEOUT.*provider stalled"):
             client.llm_query("hi")

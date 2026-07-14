@@ -31,7 +31,7 @@ def test_llm_query_batched_is_callable_in_sandbox():
         environment=MockEnvironment(),
         root_llm=mock_llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=2),
+        config=RLMConfig(),
     )
     assert result.ready
     assert result.answer == "got 2"

@@ -31,6 +31,25 @@ message. Custom `SubcallClient` implementations may keep returning only
 `index` and `error`; no new method or required field was added. The runner
 protocol version is unchanged.
 
+### Compute limits are one strict budget object (breaking)
+
+`max_iterations`, `max_calls`, `max_depth`, `max_subcalls`, and
+`subcall_max_output_tokens` are removed from engine, client, CLI, and runner
+configuration. There are intentionally no aliases or translation layer. Pass
+one complete `Budget(tokens, subcalls, depth, wall_ms, root_output_tokens,
+subcall_output_tokens)` value. Pass local REPL guardrails separately as
+`SandboxLimits`.
+
+All root and brokered capability work reserves its maximum authorized vector
+before dispatch and reconciles actual work afterward. Rejections use typed
+`BudgetExhausted` values. Batch reservations are atomic; strict child ledgers
+reserve from the parent and refund unused authorization on close. Runner
+requests now require `protocol_version: 3` and a complete `budget` object.
+
+Budget mutations are durable Trace ABI v1 values from
+`source="budget_ledger"`, keyed by `call_id`, with `reserve`, `commit`,
+`refund`, and `exhaust` actions. See `docs/budgets.md`.
+
 ### Subcall output limits are visible to the root model
 
 The built-in subcall clients now expose read-only `output_token_limit` metadata
@@ -78,7 +97,7 @@ the old SQL factory. Use `ProviderManifest`, `ProviderOperation`,
 `PROVIDER_PROTOCOL_VERSION` instead. `EvidenceRef` is also replaced by
 structured `EvidenceLocation`/`EvidenceRange` values.
 
-`RUNNER_PROTOCOL_VERSION` is now 2 and the provider protocol is 3. Requests
+`RUNNER_PROTOCOL_VERSION` is now 3 and the provider protocol is 3. Requests
 must use `data_sources` as a list of `{type, name, ...config}` objects. The
 relay startup event now reports `provider_protocol` instead of
 `source_protocol`. Upgrade the runner request, staged relay, and provider
@@ -333,14 +352,9 @@ and malformed-only bounded repair. Provider errors are attributable and are
 never converted into parse retries. ModelRelay clients continue to use one
 native batch request for each initial or repair batch.
 
-Subcall call-budget rejection now raises `SubcallBudgetExceeded`, a dedicated
-`RuntimeError` subclass. Existing `except RuntimeError` handlers remain
-compatible, while structured callers can distinguish budget exhaustion from
-provider failures without matching error text. For third-party clients from
-before this type existed, `structured_batch` recognizes only the exact legacy
-`RuntimeError("max subcalls exceeded")` form. Structured batch `errors` is
-authoritative for item failure: a valid JSON `null` and a failed value slot are
-both represented as JSON-serializable `None` in `values`.
+Budget rejection uses `BudgetExhausted`, carrying the exhausted resource,
+requested amount, and remaining authorization. Structured batch errors expose
+the stable `budget_exhausted` type without matching exception text.
 
 ### Semantic policy is enforced when confirming an answer
 

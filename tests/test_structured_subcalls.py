@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from droste import SubcallBudgetExceeded, aggregate_json_counts, structured_batch, validate_json
+from droste import BudgetExhausted, aggregate_json_counts, structured_batch, validate_json
 from droste.execution.context import ExecutionContext, create_execution_context
 from droste.prompts.base import BASE_SYSTEM_PROMPT
 from droste.structured import _StructuredBatchEvidence
@@ -31,11 +31,12 @@ class ScriptedSubcalls:
         self,
         batches: list[tuple[list[str], list[dict[str, object]]]],
         *,
-        max_calls: int = 50,
+        fail_after: int | None = None,
     ) -> None:
-        self.context: ExecutionContext = create_execution_context(max_calls=max_calls)
+        self.context: ExecutionContext = create_execution_context()
         self.batches = list(batches)
         self.prompts: list[list[str]] = []
+        self.fail_after = fail_after
 
     def llm_query(self, prompt: str, context: str = "") -> str:
         raise NotImplementedError
@@ -51,8 +52,12 @@ class ScriptedSubcalls:
     ) -> tuple[list[str], list[dict[str, object]]]:
         count = len(prompts)
         stats = self.context.stats
-        if stats.calls_made + count > self.context.max_calls:
-            raise SubcallBudgetExceeded("max subcalls exceeded")
+        if self.fail_after is not None and stats.calls_made + count > self.fail_after:
+            raise BudgetExhausted(
+                "subcalls",
+                count,
+                max(0, self.fail_after - stats.calls_made),
+            )
         stats.calls_made += count
         self.prompts.append(list(prompts))
         values, errors = self.batches.pop(0)
@@ -209,7 +214,7 @@ def test_structured_batch_reports_permanent_malformed_and_atomic_budget_exhausti
     assert result["errors"][0]["type"] == "validation_error"
     assert result["errors"][0]["attempts"] == 2
 
-    exhausted = ScriptedSubcalls([(["bad", "bad"], [])], max_calls=2)
+    exhausted = ScriptedSubcalls([(["bad", "bad"], [])], fail_after=2)
     result = structured_batch(exhausted, ["a", "b"], SCHEMA, max_repair_attempts=1)
     assert [item["type"] for item in result["errors"]] == [
         "budget_exhausted",
@@ -467,7 +472,7 @@ def test_structured_batch_requires_typed_budget_errors() -> None:
 
 
 def test_subcall_budget_exception_preserves_runtime_error_compatibility() -> None:
-    assert issubclass(SubcallBudgetExceeded, RuntimeError)
+    assert issubclass(BudgetExhausted, RuntimeError)
 
 
 def test_aggregate_json_counts_is_exact_and_refuses_inconsistent_chunks() -> None:

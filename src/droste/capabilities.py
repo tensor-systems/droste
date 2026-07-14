@@ -1301,11 +1301,21 @@ class BrokeredSubcallClient:
         raise AttributeError("wrapped subcall client did not report an output token limit")
 
 
-def broker_subcalls(subcalls: SubcallClient) -> BrokeredSubcallClient:
+def broker_subcalls(subcalls: SubcallClient, ledger: Any) -> BrokeredSubcallClient:
     """Create the mandatory standalone broker path for a custom environment."""
 
+    from .execution.broker_budget import BrokerBudget
+    from .execution.budget import BudgetLedger
+
+    if not isinstance(ledger, BudgetLedger):
+        raise TypeError("broker_subcalls requires the run BudgetLedger")
+    accounting = BrokerBudget(ledger)
     return BrokeredSubcallClient(
-        CapabilityBroker(subcall_registrations(subcalls)),
+        CapabilityBroker(
+            subcall_registrations(subcalls),
+            guard=accounting.guard,
+            annotator=accounting.annotate,
+        ),
         metadata_source=subcalls,
     )
 

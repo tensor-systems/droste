@@ -35,9 +35,13 @@ import sys
 from typing import Any
 
 from droste import (
-    DEFAULT_MAX_CALLS,
-    DEFAULT_MAX_ITERATIONS,
-    DEFAULT_MAX_OUTPUT_CHARS,
+    DEFAULT_DEPTH_BUDGET,
+    DEFAULT_ROOT_OUTPUT_TOKENS,
+    DEFAULT_SUBCALL_BUDGET,
+    DEFAULT_SUBCALL_OUTPUT_TOKENS,
+    DEFAULT_TOKEN_BUDGET,
+    DEFAULT_WALL_TIME_MS,
+    Budget,
     ConfiguredSource,
     EnvironmentConfig,
     OpenAICompatClient,
@@ -48,7 +52,6 @@ from droste import (
     create_environment_context,
     run_rlm,
 )
-from droste.clients.openai_compat import DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS
 
 from .credentials import Credentials, CredentialsError, load_credentials
 from .inputs import (
@@ -123,25 +126,43 @@ def build_parser() -> argparse.ArgumentParser:
         "--subcall-model", default="", help="model for llm_query subcalls (default: --model)"
     )
     parser.add_argument(
-        "--subcall-max-output-tokens",
+        "--subcall-output-tokens",
         type=int,
-        default=DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS,
-        help=f"per-subcall output token bound (default: {DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS}; 0 disables)",
+        default=DEFAULT_SUBCALL_OUTPUT_TOKENS,
+        help=f"authorized output tokens per subcall (default: {DEFAULT_SUBCALL_OUTPUT_TOKENS})",
     )
     parser.add_argument(
         "--reasoning-effort", default="", help="reasoning effort passed through to the endpoint"
     )
     parser.add_argument(
-        "--max-iterations",
+        "--budget-tokens",
         type=int,
-        default=DEFAULT_MAX_ITERATIONS,
-        help=f"max refinement iterations (default: {DEFAULT_MAX_ITERATIONS})",
+        default=DEFAULT_TOKEN_BUDGET,
+        help=f"total token budget (default: {DEFAULT_TOKEN_BUDGET})",
     )
     parser.add_argument(
-        "--max-subcalls",
+        "--budget-subcalls",
         type=int,
-        default=DEFAULT_MAX_CALLS,
-        help=f"max total llm_query subcalls (default: {DEFAULT_MAX_CALLS})",
+        default=DEFAULT_SUBCALL_BUDGET,
+        help=f"total subcall budget (default: {DEFAULT_SUBCALL_BUDGET})",
+    )
+    parser.add_argument(
+        "--budget-depth",
+        type=int,
+        default=DEFAULT_DEPTH_BUDGET,
+        help=f"child-run depth budget (default: {DEFAULT_DEPTH_BUDGET})",
+    )
+    parser.add_argument(
+        "--budget-wall-ms",
+        type=int,
+        default=DEFAULT_WALL_TIME_MS,
+        help=f"wall-clock budget in milliseconds (default: {DEFAULT_WALL_TIME_MS})",
+    )
+    parser.add_argument(
+        "--root-output-tokens",
+        type=int,
+        default=DEFAULT_ROOT_OUTPUT_TOKENS,
+        help=f"authorized output tokens per root request (default: {DEFAULT_ROOT_OUTPUT_TOKENS})",
     )
     parser.add_argument(
         "--max-bytes",
@@ -319,12 +340,16 @@ def _print_progress(status: str) -> None:
 def run_ask(args: argparse.Namespace) -> int:
     # Validate numeric budgets up front so bad values surface as clean usage
     # errors (exit 2) instead of crashing mid-run as exit 1.
-    if args.subcall_max_output_tokens < 0:
-        raise CLIError("--subcall-max-output-tokens must be >= 0 (0 disables the cap)")
-    if args.max_iterations < 1:
-        raise CLIError("--max-iterations must be >= 1")
-    if args.max_subcalls < 0:
-        raise CLIError("--max-subcalls must be >= 0")
+    if args.budget_tokens < 1:
+        raise CLIError("--budget-tokens must be positive")
+    if args.budget_subcalls < 0:
+        raise CLIError("--budget-subcalls must be non-negative")
+    if args.budget_depth < 0:
+        raise CLIError("--budget-depth must be non-negative")
+    if args.budget_wall_ms < 1:
+        raise CLIError("--budget-wall-ms must be positive")
+    if args.root_output_tokens < 1 or args.subcall_output_tokens < 1:
+        raise CLIError("root and subcall output token ceilings must be positive")
     if args.max_bytes < 1:
         raise CLIError("--max-bytes must be >= 1")
     if args.max_file_bytes < 1:
@@ -412,11 +437,17 @@ def run_ask(args: argparse.Namespace) -> int:
 
         on_event = _trace_sink
 
+    budget = Budget(
+        tokens=args.budget_tokens,
+        subcalls=args.budget_subcalls,
+        depth=args.budget_depth,
+        wall_ms=args.budget_wall_ms,
+        root_output_tokens=args.root_output_tokens,
+        subcall_output_tokens=args.subcall_output_tokens,
+    )
     environment_config = EnvironmentConfig(
         kind="native",
-        max_calls=args.max_subcalls,
-        max_iterations=args.max_iterations,
-        max_output_chars=DEFAULT_MAX_OUTPUT_CHARS,
+        budget=budget,
     )
     exec_context = create_environment_context(
         environment_config,
@@ -445,7 +476,7 @@ def run_ask(args: argparse.Namespace) -> int:
             context=exec_context,
             base_url=creds.base_url,
             api_key=creds.api_key,
-            max_output_tokens=args.subcall_max_output_tokens,
+            max_output_tokens=budget.subcall_output_tokens,
             reasoning_effort=args.reasoning_effort or "none",
         )
     elif provider == "anthropic":
@@ -462,7 +493,7 @@ def run_ask(args: argparse.Namespace) -> int:
             model=args.subcall_model or args.model,
             context=exec_context,
             api_key=args.api_key,
-            max_output_tokens=args.subcall_max_output_tokens or 2048,
+            max_output_tokens=budget.subcall_output_tokens,
         )
     else:
         root = OpenAICompatClient(
@@ -476,7 +507,7 @@ def run_ask(args: argparse.Namespace) -> int:
             context=exec_context,
             base_url=args.base_url,
             api_key=args.api_key,
-            max_output_tokens=args.subcall_max_output_tokens,
+            max_output_tokens=budget.subcall_output_tokens,
             reasoning_effort=args.reasoning_effort,
         )
 
@@ -485,15 +516,15 @@ def run_ask(args: argparse.Namespace) -> int:
         context=loaded.context,
         registry=registry,
         subcalls=subcalls,
+        execution_context=exec_context,
         capability_run_id=exec_context.trace.run_id,
         capability_parent_run_id=exec_context.trace.parent_run_id,
         capability_observer=exec_context.observe_capability,
     )
 
     config = RLMConfig(
-        max_iterations=environment_config.max_iterations,
-        max_calls=environment_config.max_calls,
-        max_output_chars=environment_config.max_output_chars,
+        budget=budget,
+        sandbox=environment_config.sandbox,
         root_model=args.model,
         # The full loop dump (code, outputs, responses) is --trace, rendered
         # by the _trace_sink above from structured events; the core no longer

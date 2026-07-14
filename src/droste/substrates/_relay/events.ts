@@ -9,7 +9,7 @@
 export const RLM_EVENT_TYPES = new Set<string>([
   "startup", // {engine_version, runner_protocol, provider_protocol} — contract handshake (#33)
   "progress", // coarse human-readable status
-  "iteration_start", // {iteration, max_iterations}
+  "iteration_start", // {iteration, remaining_tokens}
   "llm_response", // {iteration, response} — the root model's full reply (#35)
   "code", // {iteration, code} — the model's generated code, streamed for live UIs
   "output", // {iteration, stdout, calls_made, answer_ready, answer_content_chars}

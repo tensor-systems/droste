@@ -146,8 +146,9 @@ consumer-validated before frozen:
 
 ## 4. Compute is a budget, not an architectural constant
 
-`max_depth = 1` is a hard cap on how much compute the method may spend on a hard
-problem — exactly the ceiling the Bitter Lesson forbids. The paper's OOLONG-Pairs
+An architectural depth constant is a hard cap on how much compute the method
+may spend on a hard problem — exactly the ceiling the Bitter Lesson forbids.
+The paper's OOLONG-Pairs
 ablation (58 → 76 at depth 3) is the lesson restated in our own benchmark: more
 search buys more accuracy, and a depth-1 architecture forbids the spend even when
 it would pay.
@@ -155,8 +156,20 @@ it would pay.
 The replacement is **one budget object**, set by the caller, metered by the broker:
 
 ```json
-{ "tokens": 500000, "subcalls": 100, "depth": 3, "wall_ms": 300000 }
+{
+  "tokens": 500000,
+  "subcalls": 100,
+  "depth": 3,
+  "wall_ms": 300000,
+  "root_output_tokens": 4096,
+  "subcall_output_tokens": 2048
+}
 ```
+
+The broker sees only this resolved value. One ledger owns reservation and
+reconciliation; transports merely report mechanism usage. Strict child ledgers
+are allocations from the parent, not independent counters, and return unused
+authorization when they close.
 
 Depth, breadth, and iteration count stop being engine constants and become
 emergent consequences of how much compute the caller authorized. Child runs

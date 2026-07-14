@@ -1,8 +1,8 @@
 """Native ModelRelay /responses clients against a stub server.
 
 Covers: root call with usage + auth header, input-item conversion, NDJSON
-streaming with on_delta, subcall accounting into the shared ExecutionContext
-(max_calls, usage), and the platform-mirroring subcall cost defaults
+streaming with on_delta, subcall usage accounting into the shared
+ExecutionContext, and the platform-mirroring subcall cost defaults
 (bounded output, reasoning_effort="none").
 """
 
@@ -24,7 +24,6 @@ from droste.clients.modelrelay import (
     _batch_item_error_details,
 )
 from droste.environments import RunnerEnvironment
-from droste.exceptions import SubcallBudgetExceeded
 from droste.execution.context import create_execution_context
 from droste.structured import _StructuredBatchEvidence, bind_structured_batch, structured_batch
 
@@ -373,7 +372,7 @@ def test_root_accounts_usage_before_output_validation(monkeypatch):
 
 
 def test_subcall_accounting_and_cost_defaults(stub_native):
-    context = create_execution_context(max_calls=3, max_iterations=5)
+    context = create_execution_context()
     client = ModelRelaySubcallClient(
         model="sub-model",
         context=context,
@@ -401,13 +400,12 @@ def test_subcall_accounting_and_cost_defaults(stub_native):
     assert len(stub_native.requests) == 2
     assert stub_native.requests[1]["options"] == {"max_concurrent": 5, "fail_fast": False}
 
-    with pytest.raises(SubcallBudgetExceeded, match="max subcalls exceeded"):
-        client.llm_query("over budget")
-    assert context.stats.calls_made == 3  # rejected attempt not counted
+    assert client.llm_query("one more") == "echo: one more"
+    assert context.stats.calls_made == 4
 
 
 def test_subcall_reports_deliberately_unbounded_output() -> None:
-    context = create_execution_context(max_calls=1, max_iterations=1)
+    context = create_execution_context()
     client = ModelRelaySubcallClient(
         model="sub-model",
         context=context,
@@ -419,13 +417,13 @@ def test_subcall_reports_deliberately_unbounded_output() -> None:
 
 
 def test_subcall_requires_api_key():
-    context = create_execution_context(max_calls=1, max_iterations=1)
+    context = create_execution_context()
     with pytest.raises(ValueError, match="api_key"):
         ModelRelaySubcallClient(model="m", context=context, api_key="")
 
 
 def test_subcall_accounts_usage_before_output_validation(monkeypatch):
-    context = create_execution_context(max_calls=1, max_iterations=1)
+    context = create_execution_context()
     client = ModelRelaySubcallClient(model="sub-model", context=context, api_key="mr_sk_t")
     monkeypatch.setattr(
         client._transport,
@@ -443,7 +441,7 @@ def test_subcall_accounts_usage_before_output_validation(monkeypatch):
 
 
 def test_subcall_batch_reports_ordered_item_errors_without_retry(stub_native):
-    context = create_execution_context(max_calls=3, max_iterations=5)
+    context = create_execution_context()
     client = ModelRelaySubcallClient(
         model="sub-model",
         context=context,
@@ -475,7 +473,7 @@ def test_subcall_batch_reports_ordered_item_errors_without_retry(stub_native):
 
 
 def test_all_failed_native_batch_has_attempts_but_no_success_evidence(stub_native):
-    context = create_execution_context(max_calls=2, max_iterations=5)
+    context = create_execution_context()
     client = ModelRelaySubcallClient(
         model="sub-model",
         context=context,
@@ -492,8 +490,8 @@ def test_all_failed_native_batch_has_attempts_but_no_success_evidence(stub_nativ
     assert context.stats.total_tokens == 0
 
 
-def test_subcall_batch_budget_rejection_is_atomic(stub_native):
-    context = create_execution_context(max_calls=2, max_iterations=5)
+def test_subcall_batch_client_only_reports_mechanism_usage(stub_native):
+    context = create_execution_context()
     client = ModelRelaySubcallClient(
         model="sub-model",
         context=context,
@@ -501,15 +499,13 @@ def test_subcall_batch_budget_rejection_is_atomic(stub_native):
         api_key="mr_sk_t",
     )
 
-    with pytest.raises(SubcallBudgetExceeded, match="max subcalls exceeded"):
-        client.llm_batch(["a", "b", "c"])
-
-    assert context.stats.calls_made == 0
-    assert stub_native.requests == []
+    assert client.llm_batch(["a", "b", "c"]) == ["echo: a", "echo: b", "echo: c"]
+    assert context.stats.calls_made == 3
+    assert len(stub_native.requests) == 1
 
 
 def test_subcall_batch_item_error_is_bounded_and_redacted(stub_native):
-    context = create_execution_context(max_calls=1, max_iterations=5)
+    context = create_execution_context()
     client = ModelRelaySubcallClient(
         model="sub-model",
         context=context,
@@ -529,7 +525,7 @@ def test_subcall_batch_item_error_is_bounded_and_redacted(stub_native):
 
 
 def test_subcall_batch_raises_typed_error_with_allowlisted_details(stub_native):
-    context = create_execution_context(max_calls=1, max_iterations=1)
+    context = create_execution_context()
     client = ModelRelaySubcallClient(
         model="sub-model",
         context=context,
@@ -576,7 +572,7 @@ def test_subcall_batch_raises_typed_error_with_allowlisted_details(stub_native):
 
 
 def test_subcall_batch_error_details_drop_malformed_and_unknown_fields(stub_native):
-    context = create_execution_context(max_calls=1, max_iterations=1)
+    context = create_execution_context()
     client = ModelRelaySubcallClient(
         model="sub-model",
         context=context,
@@ -690,7 +686,7 @@ def test_batch_item_error_wire_projection_remains_fail_soft() -> None:
 
 
 def test_batch_error_details_survive_broker_semantic_and_runner_paths(stub_native):
-    context = create_execution_context(max_calls=3, max_iterations=1)
+    context = create_execution_context()
     client = ModelRelaySubcallClient(
         model="sub-model",
         context=context,
@@ -716,7 +712,7 @@ def test_batch_error_details_survive_broker_semantic_and_runner_paths(stub_nativ
         "retryable": True,
     }
 
-    brokered = broker_subcalls(client)
+    brokered = broker_subcalls(client, context.ledger)
     _, broker_errors = brokered.llm_batch_with_errors(["fail"])
     assert broker_errors[0]["details"] == expected
 
@@ -737,6 +733,7 @@ def test_batch_error_details_survive_broker_semantic_and_runner_paths(stub_nativ
         subcalls=client,
         max_output_chars=10_000,
         exec_timeout_ms=0,
+        budget_ledger=context.ledger,
     )
     environment.execute(
         "runner_result = llm_batch_json(['fail'], {'type': 'object'}, max_repair_attempts=0)"
@@ -745,7 +742,7 @@ def test_batch_error_details_survive_broker_semantic_and_runner_paths(stub_nativ
 
 
 def test_native_batch_structured_repair_keeps_one_wire_request_per_attempt(stub_native):
-    context = create_execution_context(max_calls=3, max_iterations=5)
+    context = create_execution_context()
     client = ModelRelaySubcallClient(
         model="sub-model",
         context=context,

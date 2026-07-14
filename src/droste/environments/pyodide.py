@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..capabilities import CapabilityAnnotator, CapabilityGuard, CapabilityObserver
+from ..execution.budget import BudgetLedger
 from ..protocols.environment import ExecutionResult
 from ..protocols.subcall_client import SubcallClient
 from ..providers import ProviderRegistry
@@ -28,6 +29,7 @@ class PyodideEnvironment(RunnerEnvironment):
         subcalls: SubcallClient,
         max_output_chars: int,
         exec_timeout_ms: int = 0,
+        budget_ledger: BudgetLedger | None = None,
         capability_run_id: str | None = None,
         capability_parent_run_id: str | None = None,
         capability_guard: CapabilityGuard | None = None,
@@ -42,6 +44,7 @@ class PyodideEnvironment(RunnerEnvironment):
             subcalls=subcalls,
             max_output_chars=max_output_chars,
             exec_timeout_ms=0,
+            budget_ledger=budget_ledger,
             capability_run_id=capability_run_id,
             capability_parent_run_id=capability_parent_run_id,
             capability_guard=capability_guard,

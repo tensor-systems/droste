@@ -88,9 +88,7 @@ def test_runner_subcall_request_carries_the_user_agent(monkeypatch) -> None:
         token="t",
         session="",
         session_index=0,
-        max_calls=5,
-        max_depth=2,
-        context=create_execution_context(max_calls=5, max_depth=2),
+        context=create_execution_context(),
     )
     assert client.llm_query("p") == "ok"
     assert captured["accept"] == 'application/x-ndjson; profile="responses-stream/v2"'

@@ -201,8 +201,6 @@ class ModelConfig:
     root_reasoning_effort: str | None
     subcall_reasoning_effort: str | None
     temperature: float | None
-    max_root_output_tokens: int
-    max_subcall_output_tokens: int | None
 
     @classmethod
     def from_dict(cls, value: Any, path: str) -> ModelConfig:
@@ -216,8 +214,6 @@ class ModelConfig:
                 "root_reasoning_effort",
                 "subcall_reasoning_effort",
                 "temperature",
-                "max_root_output_tokens",
-                "max_subcall_output_tokens",
             },
             path,
         )
@@ -241,21 +237,8 @@ class ModelConfig:
             raise ManifestError(f"{path}.temperature must be numeric or null")
         if temperature is not None and not math.isfinite(float(temperature)):
             raise ManifestError(f"{path}.temperature must be finite")
-        max_subcall_output_tokens = data.get("max_subcall_output_tokens")
-        if max_subcall_output_tokens is not None:
-            max_subcall_output_tokens = _expect_int(
-                max_subcall_output_tokens,
-                f"{path}.max_subcall_output_tokens",
-                minimum=1,
-            )
-        if subcall_model is None and (
-            subcall_reasoning_effort is not None or max_subcall_output_tokens is not None
-        ):
+        if subcall_model is None and subcall_reasoning_effort is not None:
             raise ManifestError(f"{path} cannot configure subcall settings without a subcall_model")
-        if subcall_model is not None and max_subcall_output_tokens is None:
-            raise ManifestError(
-                f"{path}.max_subcall_output_tokens is required with a subcall_model"
-            )
         return cls(
             provider=_expect_str(data.get("provider"), f"{path}.provider"),
             root_model=_expect_str(data.get("root_model"), f"{path}.root_model"),
@@ -263,20 +246,17 @@ class ModelConfig:
             root_reasoning_effort=root_reasoning_effort,
             subcall_reasoning_effort=subcall_reasoning_effort,
             temperature=float(temperature) if temperature is not None else None,
-            max_root_output_tokens=_expect_int(
-                data.get("max_root_output_tokens"),
-                f"{path}.max_root_output_tokens",
-                minimum=1,
-            ),
-            max_subcall_output_tokens=max_subcall_output_tokens,
         )
 
 
 @dataclass(frozen=True)
 class ExecutionLimits:
-    max_iterations: int
-    max_subcalls: int
-    timeout_seconds: int
+    tokens: int
+    subcalls: int
+    depth: int
+    wall_ms: int
+    root_output_tokens: int
+    subcall_output_tokens: int
     concurrency: int
 
     @classmethod
@@ -284,16 +264,24 @@ class ExecutionLimits:
         data = _expect_mapping(value, path)
         _reject_unknown(
             data,
-            {"max_iterations", "max_subcalls", "timeout_seconds", "concurrency"},
+            {
+                "tokens", "subcalls", "depth", "wall_ms",
+                "root_output_tokens", "subcall_output_tokens", "concurrency",
+            },
             path,
         )
         return cls(
-            max_iterations=_expect_int(
-                data.get("max_iterations"), f"{path}.max_iterations", minimum=1
+            tokens=_expect_int(data.get("tokens"), f"{path}.tokens", minimum=1),
+            subcalls=_expect_int(data.get("subcalls"), f"{path}.subcalls", minimum=0),
+            depth=_expect_int(data.get("depth"), f"{path}.depth", minimum=0),
+            wall_ms=_expect_int(data.get("wall_ms"), f"{path}.wall_ms", minimum=1),
+            root_output_tokens=_expect_int(
+                data.get("root_output_tokens"), f"{path}.root_output_tokens", minimum=1
             ),
-            max_subcalls=_expect_int(data.get("max_subcalls"), f"{path}.max_subcalls", minimum=0),
-            timeout_seconds=_expect_int(
-                data.get("timeout_seconds"), f"{path}.timeout_seconds", minimum=1
+            subcall_output_tokens=_expect_int(
+                data.get("subcall_output_tokens"),
+                f"{path}.subcall_output_tokens",
+                minimum=1,
             ),
             concurrency=_expect_int(data.get("concurrency"), f"{path}.concurrency", minimum=1),
         )

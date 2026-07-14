@@ -11,7 +11,6 @@ from typing import Any
 
 from droste.clients.errors import http_error_excerpt, redact_secrets
 from droste.clients.useragent import USER_AGENT
-from droste.exceptions import SubcallBudgetExceeded
 from droste.protocols.llm_client import TokenUsage
 from droste.protocols.subcall_client import SubcallClient
 
@@ -34,8 +33,6 @@ class HTTPSubcallClient(SubcallClient):
         token: str,
         session: str,
         session_index: int,
-        max_calls: int,
-        max_depth: int,
         context: Any,
         max_output_tokens: int = 0,
         model: str = "",
@@ -47,10 +44,7 @@ class HTTPSubcallClient(SubcallClient):
         self._session_index = int(session_index or 0)
         self._seq = 0
         self._seq_lock = threading.Lock()
-        self._max_calls = int(max_calls)
-        self._max_depth = int(max_depth)
         self._context = context
-        self._depth = threading.local()
         # Subcall cost controls: included in each subcall payload when
         # set; omitted when unset so the server owns the defaults (bounded
         # output + no thinking).
@@ -70,19 +64,11 @@ class HTTPSubcallClient(SubcallClient):
             self._seq += 1
             return self._seq
 
-    def _depth_get(self) -> int:
-        return getattr(self._depth, "value", 0)
-
-    def _depth_set(self, value: int) -> None:
-        self._depth.value = value
-
     def _increment_calls(self) -> None:
         # Check-then-increment under the lock: the count is the reported
         # subcall total, so a rejected over-limit attempt must not inflate it,
         # and concurrent llm_batch threads must not race the check.
         with self._seq_lock:
-            if self._max_calls >= 0 and self._context.stats.calls_made >= self._max_calls:
-                raise SubcallBudgetExceeded("max subcalls exceeded")
             self._context.record_subcall_attempts()
 
     def _increment_successful_calls(self) -> None:
@@ -186,31 +172,23 @@ class HTTPSubcallClient(SubcallClient):
     def llm_query(self, prompt: str, context: str = "") -> str:
         if context:
             prompt = f"{context}\n\n{prompt}"
-        depth = self._depth_get() + 1
-        self._depth_set(depth)
-        try:
-            if self._max_depth >= 0 and depth > self._max_depth:
-                raise RuntimeError("max depth exceeded")
-            self._increment_calls()
-            payload: dict[str, Any] = {
-                "prompt": prompt,
-                "depth": depth,
-                "seq": self._next_seq(),
-                "session": self._session,
-                "session_index": self._session_index,
-            }
-            if self._max_output_tokens > 0:
-                payload["max_output_tokens"] = self._max_output_tokens
-            if self._model:
-                payload["model"] = self._model
-            if self._reasoning_effort:
-                payload["reasoning_effort"] = self._reasoning_effort
-            result = self._request(payload)
-            if result.strip():
-                self._increment_successful_calls()
-            return result
-        finally:
-            self._depth_set(depth - 1)
+        self._increment_calls()
+        payload: dict[str, Any] = {
+            "prompt": prompt,
+            "seq": self._next_seq(),
+            "session": self._session,
+            "session_index": self._session_index,
+        }
+        if self._max_output_tokens > 0:
+            payload["max_output_tokens"] = self._max_output_tokens
+        if self._model:
+            payload["model"] = self._model
+        if self._reasoning_effort:
+            payload["reasoning_effort"] = self._reasoning_effort
+        result = self._request(payload)
+        if result.strip():
+            self._increment_successful_calls()
+        return result
 
     def llm_batch(self, prompts: list[str], contexts: list[str] | None = None) -> list[str]:
         results, errors = self._run_batch(prompts, contexts)
@@ -226,13 +204,7 @@ class HTTPSubcallClient(SubcallClient):
     ) -> tuple[list[str], list[dict[str, object]]]:
         results, errors = self._run_batch(prompts, contexts)
         structured = [
-            {
-                "index": idx,
-                "error": str(err),
-                **({"type": "budget_exhausted"} if isinstance(err, SubcallBudgetExceeded) else {}),
-            }
-            for idx, err in enumerate(errors)
-            if err is not None
+            {"index": idx, "error": str(err)} for idx, err in enumerate(errors) if err is not None
         ]
         return results, structured
 

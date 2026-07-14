@@ -15,6 +15,7 @@ from droste import (
     ProviderManifest,
     SideEffect,
     create_environment,
+    create_environment_context,
 )
 from droste.sources.sql_local import sqlite_provider
 from droste.testing import MockSubcallClient, fake_records_provider
@@ -139,6 +140,7 @@ def test_mixed_sql_and_non_sql_sources_have_identical_generic_projections(
         context={},
         registry=registry,
         subcalls=MockSubcallClient(),
+        execution_context=create_environment_context(environment_config),
     )
     globals_ = environment.globals()
 

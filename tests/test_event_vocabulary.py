@@ -71,7 +71,7 @@ def test_bare_run_rlm_writes_nothing_to_stderr(capfd) -> None:
         environment=MockEnvironment(),
         root_llm=MockLLMClient(responses=[silent_reply]),
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1, verbose=True),
+        config=RLMConfig(verbose=True),
     )
     assert result.ready
     captured = capfd.readouterr()
@@ -86,13 +86,18 @@ def test_run_rlm_event_stream_through_attached_sink() -> None:
         environment=MockEnvironment(),
         root_llm=MockLLMClient(responses=[READY_REPLY]),
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1),
+        config=RLMConfig(),
         on_event=events.append,
     )
     assert result.ready
     assert [e["type"] for e in events] == [
         "iteration_start",
         "progress",
+        "budget",
+        "budget",
+        "budget",
+        "budget",
+        "budget",
         "llm_response",
         "progress",
         "code",

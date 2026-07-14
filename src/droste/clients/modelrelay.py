@@ -10,10 +10,9 @@ Two classes, one per protocol, mirroring the BYOK pair in ``openai_compat``:
   (``responses_create`` with ``return_usage``); streams NDJSON when an
   ``on_delta`` callback is supplied (the CLI's ``--verbose``).
 - ``ModelRelaySubcallClient`` implements ``SubcallClient`` with the same
-  accounting semantics as ``OpenAICompatSubcallClient``: check-then-increment
-  of ``context.stats.calls_made`` under a lock, per-thread depth tracking,
-  bounded batch concurrency, and subcall token usage added to
-  ``context.stats.total_tokens``.
+  reporting semantics as ``OpenAICompatSubcallClient``: bounded batch
+  concurrency and subcall usage recorded in ``context.stats``. Authorization
+  belongs to the capability broker.
 
 Subcall economics: subcalls default to ``reasoning_effort="none"`` and a
 bounded output budget — the same defaults ModelRelay applies server-side
@@ -33,14 +32,14 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
-from ..exceptions import BatchItemError, BatchItemErrorDetails, SubcallBudgetExceeded
+from ..exceptions import BatchItemError, BatchItemErrorDetails
+from ..execution.budget import DEFAULT_SUBCALL_OUTPUT_TOKENS
 from ..execution.context import ExecutionContext
 from ..protocols.llm_client import TokenUsage
 from ..protocols.subcall_client import SubcallClient
 from .errors import http_error_excerpt, redact_secrets
 from .openai_compat import (
     DEFAULT_MAX_PARALLEL,
-    DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS,
     DEFAULT_TIMEOUT_SECONDS,
     MAX_BATCH_PROMPTS,
 )
@@ -441,14 +440,12 @@ class ModelRelayClient:
 class ModelRelaySubcallClient(SubcallClient):
     """``SubcallClient`` over ModelRelay's native ``/responses`` endpoint.
 
-    Accounting mirrors ``OpenAICompatSubcallClient`` (and the hosted
-    ``HTTPSubcallClient``): check-then-increment of
-    ``context.stats.calls_made`` under a lock, per-thread depth tracking
-    against ``max_depth``, bounded batch concurrency, and subcall usage
-    added to ``context.stats.total_tokens``.
+    Reporting mirrors ``OpenAICompatSubcallClient`` (and the hosted
+    ``HTTPSubcallClient``): issued calls and token usage are recorded in
+    ``context.stats`` while batch concurrency stays bounded.
 
     Cost defaults match ModelRelay's server-side subcall defaults: output
-    bounded at ``DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS`` and
+    bounded at ``DEFAULT_SUBCALL_OUTPUT_TOKENS`` and
     ``reasoning_effort="none"``. Both are explicit overrides, not silent.
     """
 
@@ -459,9 +456,7 @@ class ModelRelaySubcallClient(SubcallClient):
         context: ExecutionContext,
         base_url: str | None = None,
         api_key: str = "",
-        max_calls: int | None = None,
-        max_depth: int | None = None,
-        max_output_tokens: int = DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS,
+        max_output_tokens: int = DEFAULT_SUBCALL_OUTPUT_TOKENS,
         temperature: float | None = None,
         reasoning_effort: str = "none",
         max_parallel: int = DEFAULT_MAX_PARALLEL,
@@ -480,14 +475,11 @@ class ModelRelaySubcallClient(SubcallClient):
         )
         self._model = str(model)
         self._context = context
-        self._max_calls = int(context.max_calls if max_calls is None else max_calls)
-        self._max_depth = int(context.max_depth if max_depth is None else max_depth)
         self._max_output_tokens = int(max_output_tokens)
         self._temperature = temperature
         self._reasoning_effort = str(reasoning_effort or "")
         self._max_parallel = int(max_parallel)
         self._lock = threading.Lock()
-        self._depth = threading.local()
         self._total_usage = TokenUsage(0, 0, 0)
 
     @property
@@ -504,18 +496,10 @@ class ModelRelaySubcallClient(SubcallClient):
                 self._total_usage.total_tokens,
             )
 
-    def _depth_get(self) -> int:
-        return getattr(self._depth, "value", 0)
-
-    def _depth_set(self, value: int) -> None:
-        self._depth.value = value
-
     def _increment_calls(self, count: int = 1) -> None:
         with self._lock:
             if count < 0:
                 raise ValueError("subcall count must be non-negative")
-            if self._max_calls >= 0 and self._context.stats.calls_made + count > self._max_calls:
-                raise SubcallBudgetExceeded("max subcalls exceeded")
             self._context.record_subcall_attempts(count)
 
     def _account_usage(self, usage: TokenUsage) -> None:
@@ -534,30 +518,23 @@ class ModelRelaySubcallClient(SubcallClient):
     def llm_query(self, prompt: str, context: str = "") -> str:
         if context:
             prompt = f"{context}\n\n{prompt}"
-        depth = self._depth_get() + 1
-        self._depth_set(depth)
-        try:
-            if self._max_depth >= 0 and depth > self._max_depth:
-                raise RuntimeError("max depth exceeded")
-            self._increment_calls()
-            payload: dict[str, Any] = {
-                "model": self._model,
-                "input": _input_items([{"role": "user", "content": prompt}]),
-            }
-            if self._max_output_tokens > 0:
-                payload["max_output_tokens"] = self._max_output_tokens
-            if self._temperature is not None:
-                payload["temperature"] = self._temperature
-            if self._reasoning_effort:
-                payload["reasoning_effort"] = self._reasoning_effort
-            data = self._transport.complete(payload)
-            self._account_usage(_usage_from(data))
-            result = _output_text(data)
-            if result.strip():
-                self._increment_successful_calls()
-            return result
-        finally:
-            self._depth_set(depth - 1)
+        self._increment_calls()
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "input": _input_items([{"role": "user", "content": prompt}]),
+        }
+        if self._max_output_tokens > 0:
+            payload["max_output_tokens"] = self._max_output_tokens
+        if self._temperature is not None:
+            payload["temperature"] = self._temperature
+        if self._reasoning_effort:
+            payload["reasoning_effort"] = self._reasoning_effort
+        data = self._transport.complete(payload)
+        self._account_usage(_usage_from(data))
+        result = _output_text(data)
+        if result.strip():
+            self._increment_successful_calls()
+        return result
 
     def llm_batch(self, prompts: list[str], contexts: list[str] | None = None) -> list[str]:
         results, errors = self._run_batch(prompts, contexts)
@@ -577,8 +554,6 @@ class ModelRelaySubcallClient(SubcallClient):
             if err is None:
                 continue
             item: dict[str, object] = {"index": idx, "error": str(err)}
-            if isinstance(err, SubcallBudgetExceeded):
-                item["type"] = "budget_exhausted"
             if isinstance(err, BatchItemError):
                 details = err.details.to_dict()
                 if details:
@@ -600,82 +575,71 @@ class ModelRelaySubcallClient(SubcallClient):
         if len(prompts) > MAX_BATCH_PROMPTS:
             raise ValueError(f"llm_batch prompt count exceeds max {MAX_BATCH_PROMPTS}")
 
-        depth = self._depth_get() + 1
-        self._depth_set(depth)
-        try:
-            if self._max_depth >= 0 and depth > self._max_depth:
-                raise RuntimeError("max depth exceeded")
+        self._increment_calls(len(prompts))
+        requests: list[dict[str, Any]] = []
+        for idx, (prompt, ctx) in enumerate(zip(prompts, contexts)):
+            if ctx:
+                prompt = f"{ctx}\n\n{prompt}"
+            item: dict[str, Any] = {
+                "id": str(idx),
+                "model": self._model,
+                "input": _input_items([{"role": "user", "content": prompt}]),
+            }
+            if self._max_output_tokens > 0:
+                item["max_output_tokens"] = self._max_output_tokens
+            if self._temperature is not None:
+                item["temperature"] = self._temperature
+            if self._reasoning_effort:
+                item["reasoning_effort"] = self._reasoning_effort
+            requests.append(item)
 
-            # Reserve the whole batch atomically before the one wire call. A
-            # rejected batch consumes nothing; a dispatched batch counts every
-            # attempted item exactly like N individual llm_query calls.
-            self._increment_calls(len(prompts))
-            requests: list[dict[str, Any]] = []
-            for idx, (prompt, ctx) in enumerate(zip(prompts, contexts)):
-                if ctx:
-                    prompt = f"{ctx}\n\n{prompt}"
-                item: dict[str, Any] = {
-                    "id": str(idx),
-                    "model": self._model,
-                    "input": _input_items([{"role": "user", "content": prompt}]),
-                }
-                if self._max_output_tokens > 0:
-                    item["max_output_tokens"] = self._max_output_tokens
-                if self._temperature is not None:
-                    item["temperature"] = self._temperature
-                if self._reasoning_effort:
-                    item["reasoning_effort"] = self._reasoning_effort
-                requests.append(item)
+        data = self._transport.complete(
+            {
+                "requests": requests,
+                "options": {"max_concurrent": self._max_parallel, "fail_fast": False},
+            },
+            path="/responses/batch",
+            label="llm_batch",
+        )
+        raw_results = data.get("results")
+        if not isinstance(raw_results, list):
+            raise RuntimeError("llm_batch response missing results")
 
-            data = self._transport.complete(
-                {
-                    "requests": requests,
-                    "options": {"max_concurrent": self._max_parallel, "fail_fast": False},
-                },
-                path="/responses/batch",
-                label="llm_batch",
-            )
-            raw_results = data.get("results")
-            if not isinstance(raw_results, list):
-                raise RuntimeError("llm_batch response missing results")
+        seen: set[int] = set()
+        for raw in raw_results:
+            if not isinstance(raw, dict):
+                raise RuntimeError("llm_batch returned a non-object result")
+            try:
+                idx = int(raw.get("id"))
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("llm_batch returned an invalid result id") from exc
+            if idx < 0 or idx >= len(prompts) or idx in seen:
+                raise RuntimeError(f"llm_batch returned unexpected result id {idx}")
+            seen.add(idx)
+            status = str(raw.get("status") or "")
+            if status == "success":
+                response = raw.get("response")
+                if not isinstance(response, dict):
+                    raise RuntimeError(f"llm_batch item {idx} missing response")
+                self._account_usage(_usage_from(response))
+                results[idx] = _output_text(response)
+                if results[idx].strip():
+                    self._increment_successful_calls()
+            elif status == "error":
+                error = raw.get("error")
+                if not isinstance(error, dict):
+                    raise RuntimeError(f"llm_batch item {idx} missing error")
+                code = str(error.get("code") or "")
+                message = redact_secrets(str(error.get("message") or "batch item failed"))[:500]
+                detail = f" ({code})" if code else ""
+                errors[idx] = BatchItemError(
+                    f"llm_batch item {idx} failed{detail}: {message}",
+                    _batch_item_error_details(data, raw, error),
+                )
+            else:
+                raise RuntimeError(f"llm_batch item {idx} has invalid status {status!r}")
 
-            seen: set[int] = set()
-            for raw in raw_results:
-                if not isinstance(raw, dict):
-                    raise RuntimeError("llm_batch returned a non-object result")
-                try:
-                    idx = int(raw.get("id"))
-                except (TypeError, ValueError) as exc:
-                    raise RuntimeError("llm_batch returned an invalid result id") from exc
-                if idx < 0 or idx >= len(prompts) or idx in seen:
-                    raise RuntimeError(f"llm_batch returned unexpected result id {idx}")
-                seen.add(idx)
-                status = str(raw.get("status") or "")
-                if status == "success":
-                    response = raw.get("response")
-                    if not isinstance(response, dict):
-                        raise RuntimeError(f"llm_batch item {idx} missing response")
-                    self._account_usage(_usage_from(response))
-                    results[idx] = _output_text(response)
-                    if results[idx].strip():
-                        self._increment_successful_calls()
-                elif status == "error":
-                    error = raw.get("error")
-                    if not isinstance(error, dict):
-                        raise RuntimeError(f"llm_batch item {idx} missing error")
-                    code = str(error.get("code") or "")
-                    message = redact_secrets(str(error.get("message") or "batch item failed"))[:500]
-                    detail = f" ({code})" if code else ""
-                    errors[idx] = BatchItemError(
-                        f"llm_batch item {idx} failed{detail}: {message}",
-                        _batch_item_error_details(data, raw, error),
-                    )
-                else:
-                    raise RuntimeError(f"llm_batch item {idx} has invalid status {status!r}")
-
-            if len(seen) != len(prompts):
-                missing = sorted(set(range(len(prompts))) - seen)
-                raise RuntimeError(f"llm_batch response missing result ids {missing}")
-            return results, errors
-        finally:
-            self._depth_set(depth - 1)
+        if len(seen) != len(prompts):
+            missing = sorted(set(range(len(prompts))) - seen)
+            raise RuntimeError(f"llm_batch response missing result ids {missing}")
+        return results, errors

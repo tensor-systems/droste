@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .capabilities import CapabilityCallError
-from .exceptions import SubcallBudgetExceeded
+from .execution.budget import BudgetExhausted
 from .protocols.subcall_client import SubcallClient
 
 _SCHEMA_KEYWORDS = {
@@ -370,11 +370,11 @@ def structured_batch(
             raw_values, raw_errors = subcalls.llm_batch_with_errors(call_prompts, call_contexts)
         except Exception as exc:
             broker_budget_error = (
-                isinstance(exc, CapabilityCallError) and exc.error.type == "SubcallBudgetExceeded"
+                isinstance(exc, CapabilityCallError) and exc.error.code == "budget_exhausted"
             )
             kind = (
                 "budget_exhausted"
-                if isinstance(exc, SubcallBudgetExceeded) or broker_budget_error
+                if isinstance(exc, BudgetExhausted) or broker_budget_error
                 else "provider_error"
             )
             for index in indices:

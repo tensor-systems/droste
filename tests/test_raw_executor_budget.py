@@ -6,8 +6,9 @@ silently incomplete data, unlike the native executor path."""
 
 from __future__ import annotations
 
-from droste import RLMConfig, run_rlm
+from droste import RLMConfig, SandboxLimits, run_rlm
 from droste.capabilities import broker_subcalls
+from droste.execution import BudgetLedger
 from droste.protocols.llm_client import TokenUsage
 from droste.protocols.subcall_client import SubcallClient
 from droste.substrates.pyodide import RawExecutor
@@ -34,8 +35,8 @@ class _RawExecutorEnvironment:
     def globals(self):
         return self._globals
 
-    def sandbox_subcalls(self, subcalls: SubcallClient) -> SubcallClient:
-        return broker_subcalls(subcalls)
+    def sandbox_subcalls(self, subcalls: SubcallClient, ledger: BudgetLedger) -> SubcallClient:
+        return broker_subcalls(subcalls, ledger)
 
     def prompt_fragment(self) -> str:
         return ""
@@ -65,7 +66,7 @@ def test_oversized_output_raises_the_budget_error_end_to_end() -> None:
         environment=_RawExecutorEnvironment(),
         root_llm=MockLLMClient(responses=[oversized, repaired]),
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1, max_output_chars=50),
+        config=RLMConfig(sandbox=SandboxLimits(output_chars=50)),
         on_event=events.append,
     )
     assert result.ready and result.answer == "ok"

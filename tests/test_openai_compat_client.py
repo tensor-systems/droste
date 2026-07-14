@@ -2,7 +2,7 @@
 
 Covers the launch-gating contract: root call with usage, batch subcalls with
 bounded concurrency, usage/call accounting into the shared ExecutionContext,
-max_calls enforcement, and HTTP error bodies surfaced (bounded + redacted).
+and HTTP error bodies surfaced (bounded + redacted).
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from droste.clients.openai_compat import (
     OpenAICompatClient,
     OpenAICompatSubcallClient,
 )
-from droste.exceptions import SubcallBudgetExceeded
 from droste.execution.context import create_execution_context
 from droste.testing import MockEnvironment
 
@@ -229,7 +228,7 @@ def test_missing_api_key_omits_authorization_header(stub_server, monkeypatch):
 
 
 def test_subcall_llm_query_counts_calls_and_tokens(stub_server):
-    context = create_execution_context(max_calls=10, max_depth=3)
+    context = create_execution_context()
     client = _subcall_client(stub_server, context)
     assert client.output_token_limit == 2048
     result = client.llm_query("summarize this", context="chunk text")
@@ -244,14 +243,14 @@ def test_subcall_llm_query_counts_calls_and_tokens(stub_server):
 
 
 def test_subcall_reports_deliberately_unbounded_output(stub_server):
-    context = create_execution_context(max_calls=1, max_depth=1)
+    context = create_execution_context()
     client = _subcall_client(stub_server, context, max_output_tokens=0)
 
     assert client.output_token_limit is None
 
 
 def test_subcall_cost_controls_passthrough(stub_server):
-    context = create_execution_context(max_calls=10, max_depth=3)
+    context = create_execution_context()
     client = _subcall_client(
         stub_server,
         context,
@@ -267,7 +266,7 @@ def test_subcall_cost_controls_passthrough(stub_server):
 
 
 def test_llm_batch_ordered_results_bounded_concurrency(stub_server):
-    context = create_execution_context(max_calls=50, max_depth=3)
+    context = create_execution_context()
     client = _subcall_client(stub_server, context)
     prompts = [f"p{i}" for i in range(12)]
     results = client.llm_batch(prompts)
@@ -278,41 +277,35 @@ def test_llm_batch_ordered_results_bounded_concurrency(stub_server):
 
 
 def test_llm_batch_rejects_oversized_batches(stub_server):
-    context = create_execution_context(max_calls=100, max_depth=3)
+    context = create_execution_context()
     client = _subcall_client(stub_server, context)
     with pytest.raises(ValueError, match="exceeds max 50"):
         client.llm_batch(["p"] * 51)
     assert context.stats.calls_made == 0
 
 
-def test_max_calls_enforced_and_rejections_not_counted(stub_server):
-    context = create_execution_context(max_calls=3, max_depth=3)
-    client = _subcall_client(stub_server, context, max_calls=3)
-    for _ in range(3):
+def test_transport_client_reports_calls_without_owning_budget_policy(stub_server):
+    context = create_execution_context()
+    client = _subcall_client(stub_server, context)
+    for _ in range(4):
         client.llm_query("ok")
-    with pytest.raises(SubcallBudgetExceeded, match="max subcalls exceeded"):
-        client.llm_query("over budget")
-    # The rejected attempt must not inflate the reported subcall count.
-    assert context.stats.calls_made == 3
+    assert context.stats.calls_made == 4
 
 
 def test_llm_batch_with_errors_reports_per_item_failures(stub_server):
-    context = create_execution_context(max_calls=2, max_depth=3)
-    client = _subcall_client(stub_server, context, max_calls=2)
+    context = create_execution_context()
+    client = _subcall_client(stub_server, context)
     results, errors = client.llm_batch_with_errors(["a", "b", "c", "d"])
-    assert len([r for r in results if r]) == 2
-    assert len(errors) == 2
-    assert all("max subcalls exceeded" in str(e["error"]) for e in errors)
-    assert all(e["type"] == "budget_exhausted" for e in errors)
-    assert context.stats.calls_made == 2
+    assert results == ["echo: a", "echo: b", "echo: c", "echo: d"]
+    assert errors == []
+    assert context.stats.calls_made == 4
 
 
-def test_max_depth_enforced(stub_server):
-    context = create_execution_context(max_calls=10, max_depth=0)
-    client = _subcall_client(stub_server, context, max_depth=0)
-    with pytest.raises(RuntimeError, match="max depth exceeded"):
-        client.llm_query("p")
-    assert context.stats.calls_made == 0
+def test_transport_client_does_not_own_depth_policy(stub_server):
+    context = create_execution_context()
+    client = _subcall_client(stub_server, context)
+    assert client.llm_query("p") == "echo: p"
+    assert context.stats.calls_made == 1
 
 
 def test_error_body_surfaced_and_redacted(stub_server):
@@ -328,7 +321,7 @@ def test_error_body_surfaced_and_redacted(stub_server):
     assert "supersecret" not in str(exc_info.value)
     assert "[redacted]" in str(exc_info.value)
 
-    context = create_execution_context(max_calls=5, max_depth=3)
+    context = create_execution_context()
     subcalls = _subcall_client(stub_server, context)
     with pytest.raises(RuntimeError, match=r"llm_query failed with HTTP 503"):
         subcalls.llm_query("p")
@@ -342,7 +335,7 @@ def test_run_rlm_end_to_end_with_byok_clients(stub_server):
         "answer['ready'] = True\n"
         "```",
     ]
-    context = create_execution_context(max_calls=10, max_depth=3)
+    context = create_execution_context()
     root = OpenAICompatClient(model="root-model", base_url=stub_server.base_url, api_key="k")
     subcalls = _subcall_client(stub_server, context)
     env = MockEnvironment(
@@ -357,7 +350,7 @@ def test_run_rlm_end_to_end_with_byok_clients(stub_server):
         environment=env,
         root_llm=root,
         subcalls=subcalls,
-        config=RLMConfig(max_iterations=2, root_model="root-model"),
+        config=RLMConfig(root_model="root-model"),
         context=context,
     )
     assert result.ready
@@ -522,7 +515,7 @@ def test_subcalls_share_token_param_migration(stub_server):
     from droste import OpenAICompatSubcallClient, create_execution_context
 
     stub_server.reject_max_tokens = True
-    ctx = create_execution_context(max_calls=10, max_iterations=5)
+    ctx = create_execution_context()
     sub = OpenAICompatSubcallClient(
         model="sub-model",
         context=ctx,
@@ -543,7 +536,7 @@ def test_concurrent_batch_all_migrate_despite_state_race(stub_server):
     from droste import OpenAICompatSubcallClient, create_execution_context
 
     stub_server.reject_max_tokens = True
-    ctx = create_execution_context(max_calls=20, max_iterations=5)
+    ctx = create_execution_context()
     sub = OpenAICompatSubcallClient(
         model="sub-model",
         context=ctx,

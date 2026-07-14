@@ -3,6 +3,7 @@ import sys
 import types
 from importlib import import_module
 
+from droste import Budget
 from droste_runner import runner
 
 
@@ -18,7 +19,7 @@ def test_rlm_runner_adapter_delegates() -> None:
 
     try:
         result = runner.run(
-            {"adapter_module": module_name, "answer": "hello", "protocol_version": 2}
+            {"adapter_module": module_name, "answer": "hello", "protocol_version": 3}
         )
     finally:
         sys.modules.pop(module_name, None)
@@ -39,7 +40,7 @@ def test_adapter_claimed_protocol_version_is_not_overwritten() -> None:
     module.run = run  # type: ignore[attr-defined]
     sys.modules[module_name] = module
     try:
-        result = runner.run({"adapter_module": module_name, "protocol_version": 2})
+        result = runner.run({"adapter_module": module_name, "protocol_version": 3})
     finally:
         sys.modules.pop(module_name, None)
     assert result["protocol_version"] == 99
@@ -58,7 +59,7 @@ def test_missing_protocol_version_refused_with_structured_error() -> None:
         "supported": runner.RUNNER_PROTOCOL_VERSION,
     }
     # The message tells the caller exactly what to add.
-    assert '"protocol_version": 2' in result["error"]["message"]
+    assert f'"protocol_version": {runner.RUNNER_PROTOCOL_VERSION}' in result["error"]["message"]
     assert result["ready"] is False
     assert result["protocol_version"] == runner.RUNNER_PROTOCOL_VERSION
     assert result["prompt_pack"] is None
@@ -70,7 +71,13 @@ def test_explicit_current_protocol_version_accepted() -> None:
     # Proceeds past the gate — and fails only on the missing endpoints this
     # minimal request never provided.
     with pytest.raises(RuntimeError, match="missing endpoints"):
-        runner.run({"question": "q", "protocol_version": runner.RUNNER_PROTOCOL_VERSION})
+        runner.run(
+            {
+                "question": "q",
+                "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
+                "budget": Budget().as_dict(),
+            }
+        )
 
 
 def test_future_protocol_version_rejected_with_structured_error() -> None:
@@ -125,7 +132,15 @@ def test_worker_exception_envelope_is_version_stamped(tmp_path) -> None:
     import sys as _sys
 
     req = tmp_path / "request.json"
-    req.write_text(json.dumps({"protocol_version": 2, "question": "q"}))
+    req.write_text(
+        json.dumps(
+            {
+                "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
+                "question": "q",
+                "budget": Budget().as_dict(),
+            }
+        )
+    )
     proc = subprocess.run(
         [_sys.executable, "-m", "droste_runner"],
         cwd=tmp_path,

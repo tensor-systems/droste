@@ -69,7 +69,7 @@ EVENT_BODY_SCHEMAS: Mapping[str, EventBodySchema] = MappingProxyType(
             },
         ),
         "progress": ({"status": str}, {}),
-        "iteration_start": ({"iteration": int, "max_iterations": int}, {}),
+        "iteration_start": ({"iteration": int, "remaining_tokens": int}, {}),
         "llm_response": ({"iteration": int, "response": str}, {}),
         "code": ({"iteration": int, "code": str}, {}),
         "output": (

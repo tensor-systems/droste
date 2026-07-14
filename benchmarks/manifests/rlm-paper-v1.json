@@ -86,14 +86,15 @@
         "subcall_model": "unconfigured",
         "root_reasoning_effort": "none",
         "subcall_reasoning_effort": "none",
-        "temperature": null,
-        "max_root_output_tokens": 4096,
-        "max_subcall_output_tokens": 2048
+        "temperature": null
       },
       "limits": {
-        "max_iterations": 20,
-        "max_subcalls": 50,
-        "timeout_seconds": 900,
+        "tokens": 500000,
+        "subcalls": 50,
+        "depth": 1,
+        "wall_ms": 900000,
+        "root_output_tokens": 4096,
+        "subcall_output_tokens": 2048,
         "concurrency": 8
       }
     },
@@ -108,14 +109,15 @@
         "subcall_model": null,
         "root_reasoning_effort": "none",
         "subcall_reasoning_effort": null,
-        "temperature": null,
-        "max_root_output_tokens": 4096,
-        "max_subcall_output_tokens": null
+        "temperature": null
       },
       "limits": {
-        "max_iterations": 1,
-        "max_subcalls": 0,
-        "timeout_seconds": 900,
+        "tokens": 200000,
+        "subcalls": 0,
+        "depth": 0,
+        "wall_ms": 900000,
+        "root_output_tokens": 4096,
+        "subcall_output_tokens": 2048,
         "concurrency": 1
       }
     }
