@@ -9,6 +9,10 @@ class SubcallClient(Protocol):
     Implementations attached to an :class:`ExecutionContext` reserve
     ``calls_made`` before dispatch and increment ``successful_calls`` only
     after an item returns a usable text response.
+
+    Implementations may also implement the separate optional
+    :class:`SubcallOutputTokenLimitProvider` protocol. It stays separate so
+    existing third-party subcall clients remain compatible.
     """
 
     def llm_query(self, prompt: str, context: str = "") -> str:
@@ -25,4 +29,18 @@ class SubcallClient(Protocol):
         contexts: list[str] | None = None,
     ) -> tuple[list[str], list[dict[str, object]]]:
         """Batch sub-LLM calls with structured per-item errors."""
+        ...
+
+
+class SubcallOutputTokenLimitProvider(Protocol):
+    """Optional read-only output-limit metadata for a subcall client.
+
+    A positive integer is the effective maximum output tokens for each call.
+    ``None`` means the client is deliberately unbounded. Clients that do not
+    implement this companion protocol have an unknown limit.
+    """
+
+    @property
+    def output_token_limit(self) -> int | None:
+        """Return the effective per-call output-token limit."""
         ...

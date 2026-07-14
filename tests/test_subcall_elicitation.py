@@ -139,6 +139,8 @@ def test_full_tips_wire_into_built_system_prompt() -> None:
     assert "EXPLORE FIRST" in prompt
     assert "llm_query_batched" in prompt  # canonical batch name, incl. worked example
     assert "~100K characters" in prompt  # batching budget
+    assert "input capacity does not increase the per-call output-token limit" in prompt
+    assert "structured or map-reduce work" in prompt
     assert "~20 prompts" in prompt
     assert "just read it" in prompt  # balancing nuance: search-pinned answers
 
@@ -337,7 +339,7 @@ def test_runner_omitted_budgets_use_core_defaults_and_allow_subcalls() -> None:
     assert response["answer"] == "got: sub"
     assert response["subcalls"] == 1
     assert response["prompt_pack"]["id"] == "droste.generic.full"
-    assert response["prompt_pack"]["revision"] == "1.0.1"
+    assert response["prompt_pack"]["revision"] == "1.0.2"
 
 
 def test_runner_explicit_zero_subcalls_is_honored() -> None:

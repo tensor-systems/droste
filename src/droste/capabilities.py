@@ -863,6 +863,20 @@ LLM_BATCH_WITH_ERRORS_CAPABILITY = CapabilityDescriptor(
     side_effect=SideEffect.READ,
 )
 
+_MISSING_OUTPUT_TOKEN_LIMIT = object()
+
+
+def _reported_output_token_limit(subcalls: SubcallClient) -> int | None | object:
+    try:
+        limit = getattr(subcalls, "output_token_limit")
+    except Exception:
+        return _MISSING_OUTPUT_TOKEN_LIMIT
+    if limit is None:
+        return None
+    if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
+        return limit
+    return _MISSING_OUTPUT_TOKEN_LIMIT
+
 
 def subcall_registrations(subcalls: SubcallClient) -> tuple[CapabilityRegistration, ...]:
     llm_batch_with_errors = getattr(subcalls, "llm_batch_with_errors", None)
@@ -878,7 +892,12 @@ def subcall_registrations(subcalls: SubcallClient) -> tuple[CapabilityRegistrati
 class BrokeredSubcallClient:
     """Subcall protocol adapter whose methods are generated broker bindings."""
 
-    def __init__(self, broker: CapabilityBroker) -> None:
+    def __init__(
+        self,
+        broker: CapabilityBroker,
+        *,
+        metadata_source: SubcallClient | None = None,
+    ) -> None:
         self.llm_query = generate_binding(broker, LLM_QUERY_CAPABILITY, name="llm_query")
         self.llm_batch = generate_binding(broker, LLM_BATCH_CAPABILITY, name="llm_batch")
         self.llm_batch_with_errors = generate_binding(
@@ -886,12 +905,29 @@ class BrokeredSubcallClient:
             LLM_BATCH_WITH_ERRORS_CAPABILITY,
             name="llm_batch_with_errors",
         )
+        self._output_token_limit = (
+            _reported_output_token_limit(metadata_source)
+            if metadata_source is not None
+            else _MISSING_OUTPUT_TOKEN_LIMIT
+        )
+
+    @property
+    def output_token_limit(self) -> int | None:
+        """Forward optional planning metadata without exposing the raw client."""
+        if self._output_token_limit is None:
+            return None
+        if isinstance(self._output_token_limit, int):
+            return self._output_token_limit
+        raise AttributeError("wrapped subcall client did not report an output token limit")
 
 
 def broker_subcalls(subcalls: SubcallClient) -> BrokeredSubcallClient:
     """Create the mandatory standalone broker path for a custom environment."""
 
-    return BrokeredSubcallClient(CapabilityBroker(subcall_registrations(subcalls)))
+    return BrokeredSubcallClient(
+        CapabilityBroker(subcall_registrations(subcalls)),
+        metadata_source=subcalls,
+    )
 
 
 __all__ = [

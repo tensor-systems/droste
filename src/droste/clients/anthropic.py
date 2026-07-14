@@ -389,6 +389,11 @@ class AnthropicSubcallClient(SubcallClient):
         self._lock = threading.Lock()
         self._depth = threading.local()
 
+    @property
+    def output_token_limit(self) -> int | None:
+        """Effective maximum output tokens for each subcall."""
+        return self._max_output_tokens
+
     def _depth_get(self) -> int:
         return getattr(self._depth, "value", 0)
 

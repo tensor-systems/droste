@@ -97,10 +97,19 @@ completeness gate.
 Everything expensive is bounded and explicit: `max_iterations`, `max_calls`
 (subcalls; attempted calls are counted only when issued and successful calls
 are tracked separately, both enforced under a lock), `max_depth`,
-per-subcall `max_output_tokens` (default 2048), and `reasoning_effort`
-passthrough. Subcall usage is added to `result.tokens_used`. The defaults
-encode a measured lesson: unbounded subcall output (thinking tokens
-especially) is where RLM runs go from cents to dollars.
+per-subcall `max_output_tokens` (default 2048 in the in-process clients), and
+`reasoning_effort` passthrough. Subcall usage is added to `result.tokens_used`.
+An HTTP-backed run may instead omit the field and leave its callback to choose
+the default.
+
+The root prompt reports the effective per-call subcall output ceiling separately
+from input capacity. Built-in clients implement the optional
+`SubcallOutputTokenLimitProvider` companion protocol: a positive
+`output_token_limit` is bounded, `None` is deliberately unbounded, and absence
+is rendered as unknown rather than guessed. HTTP-backed clients report only an
+explicit positive limit because a callback-owned default is not knowable from
+the runner. The base `SubcallClient` protocol is unchanged, and broker-backed
+and semantic-policy wrappers forward the optional metadata.
 
 ## Data sources (registry)
 

@@ -443,6 +443,11 @@ class ModelRelaySubcallClient(SubcallClient):
         self._total_usage = TokenUsage(0, 0, 0)
 
     @property
+    def output_token_limit(self) -> int | None:
+        """Effective maximum output tokens for each subcall, or no limit."""
+        return self._max_output_tokens or None
+
+    @property
     def total_usage(self) -> TokenUsage:
         with self._lock:
             return TokenUsage(

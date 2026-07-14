@@ -31,6 +31,22 @@ ROOT_REPLY = (
 )
 
 
+def test_http_subcall_reports_only_an_explicit_output_limit() -> None:
+    context = create_execution_context(max_calls=1, max_depth=1)
+    kwargs = {
+        "endpoint": "https://example.invalid/subcall",
+        "token": "t",
+        "session": "s",
+        "session_index": 0,
+        "max_calls": 1,
+        "max_depth": 1,
+        "context": context,
+    }
+
+    assert not hasattr(HTTPSubcallClient(**kwargs), "output_token_limit")
+    assert HTTPSubcallClient(**kwargs, max_output_tokens=512).output_token_limit == 512
+
+
 class _StubHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 (http.server API)
         length = int(self.headers.get("Content-Length") or 0)
@@ -252,11 +268,13 @@ def test_llm_batch_raises_lowest_index_error_unwrapped() -> None:
 
 class _CapturingHandler(BaseHTTPRequestHandler):
     subcall_payloads: list[dict[str, Any]] = []
+    root_payloads: list[dict[str, Any]] = []
 
     def do_POST(self) -> None:  # noqa: N802 (http.server API)
         length = int(self.headers.get("Content-Length") or 0)
         raw_body = self.rfile.read(length)
         if self.path == "/root":
+            type(self).root_payloads.append(json.loads(raw_body.decode("utf-8")))
             body = {"result": ROOT_REPLY, "usage": {"input_tokens": 1, "output_tokens": 1}}
         else:
             type(self).subcall_payloads.append(json.loads(raw_body.decode("utf-8")))
@@ -274,6 +292,7 @@ class _CapturingHandler(BaseHTTPRequestHandler):
 
 def _run_with_capture(request_extra: dict[str, Any]) -> list[dict[str, Any]]:
     _CapturingHandler.subcall_payloads = []
+    _CapturingHandler.root_payloads = []
     server = HTTPServer(("127.0.0.1", 0), _CapturingHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -313,6 +332,8 @@ def test_subcall_payload_includes_cost_controls_when_set() -> None:
     assert payload["max_output_tokens"] == 1024
     assert payload["model"] == "grok-4-fast-non-reasoning"
     assert payload["reasoning_effort"] == "none"
+    system_prompt = _CapturingHandler.root_payloads[0]["messages"][0]["content"]
+    assert "subcall_output_tokens_per_call=1024 (bounded)" in system_prompt
 
 
 def test_subcall_payload_omits_cost_controls_when_unset() -> None:
@@ -322,6 +343,8 @@ def test_subcall_payload_omits_cost_controls_when_unset() -> None:
     assert "max_output_tokens" not in payload
     assert "model" not in payload
     assert "reasoning_effort" not in payload
+    system_prompt = _CapturingHandler.root_payloads[0]["messages"][0]["content"]
+    assert "subcall_output_tokens_per_call=unknown (client did not report)" in system_prompt
 
 
 def test_explicit_zero_subcall_max_output_tokens_is_rejected() -> None:

@@ -1,6 +1,6 @@
 schema_version = 1
 id = "droste.generic.full"
-revision = "1.0.1"
+revision = "1.0.2"
 profile = "full"
 unable_sentinel = "unable to determine from the work so far"
 
@@ -23,7 +23,7 @@ final = llm_query(
 )
 print(final)
 ```''',
-  '''Budget subcalls on two axes: each prompt handles roughly ~100K characters of input, and keep each llm_query_batched batch to at most ~20 prompts. Pack each prompt near capacity (many items or a whole document per prompt) so one call does a lot of work. Fat-prompt small batches are correct; tiny-prompt mega-batches are the anti-pattern. If the data exceeds both budgets at once, filter aggressively in Python first, or stage it: a cheap coarse pass to narrow candidates, then a targeted second pass over the survivors.''',
+  '''Budget subcalls on separate input and output axes. Each prompt handles roughly ~100K characters of input, but that input capacity does not increase the per-call output-token limit reported under Authorized compute. For structured or map-reduce work, estimate the returned items and fields, then split or stage the work so every response fits that output limit. Keep each llm_query_batched batch to at most ~20 prompts. Pack input near capacity when the expected response stays compact; tiny-prompt mega-batches are the anti-pattern. If the data exceeds multiple budgets at once, filter aggressively in Python first, or stage it: a cheap coarse pass to narrow candidates, then a targeted second pass over the survivors.''',
   '''Subcalls are a tool, not a ritual. If a regex or keyword search over `context` already pins the answer, or a short visible slice contains it, just read it directly. Reach for llm_query when the raw text will not fit in your own window or the question needs semantic interpretation.''',
 ]
 
@@ -44,6 +44,7 @@ You are in a Python REPL. Each turn, produce a single ```python code block```. I
 - Use the `answer` dict to accumulate output: set `answer["content"]`, then `answer["ready"] = True` when done.
 - Prefer concise, deterministic logic over large outputs.
 - For semantic judgments or large-scale analysis, use llm_query / llm_query_batched on chunks.
+- Plan subcalls against both input capacity and the reported per-call output-token limit; structured and map-reduce responses must fit the latter.
 - When chunk outputs must be JSON, use llm_batch_json(prompts, schema, max_repair_attempts=N, validator=optional_function).
   The optional validator is called as validator(value, index), where index is the original prompt index; raise ValueError to reject that value and request repair.
   It validates locally and returns {{"values": [...], "errors": [...], "attempts": [...], "repairs_made": N}}; inspect errors before using values. Under semantic policy, unresolved errors block answer confirmation; rerun the exact request successfully before setting ready.

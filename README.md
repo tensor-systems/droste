@@ -239,6 +239,10 @@ Implement these to integrate with your infrastructure:
 - **`RLMEnvironment`** - Sandboxed Python REPL with data access
 - **`LLMClient`** - Chat completion interface for the root LLM
 - **`SubcallClient`** - Provides `llm_query()` and `llm_batch()` for sub-LLM calls
+- **`SubcallOutputTokenLimitProvider`** - Optional companion protocol exposing a
+  read-only `output_token_limit`: a positive per-call token ceiling or `None`
+  when deliberately unbounded. Clients that omit it remain compatible and are
+  reported to the root model as having an unknown limit.
 - **`DataSource`** - Optional data source integration
 
 #### Data sources are domain-blind

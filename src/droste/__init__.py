@@ -56,7 +56,7 @@ from .prompts.pack import (
 from .protocols.data_source import DataSource, DataSourceCapabilities, SearchResult
 from .protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
 from .protocols.llm_client import LLMClient, TokenUsage
-from .protocols.subcall_client import SubcallClient
+from .protocols.subcall_client import SubcallClient, SubcallOutputTokenLimitProvider
 from .registry import DataSourceRegistry
 from .structured import aggregate_json_counts, structured_batch, validate_json
 
@@ -91,6 +91,7 @@ __all__ = [
     "LLMClient",
     "TokenUsage",
     "SubcallClient",
+    "SubcallOutputTokenLimitProvider",
     "SystemPromptBuilder",
     "PromptPack",
     "PromptPackBinding",

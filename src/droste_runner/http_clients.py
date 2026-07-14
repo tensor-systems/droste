@@ -58,6 +58,13 @@ class HTTPSubcallClient(SubcallClient):
         self._model = str(model or "")
         self._reasoning_effort = str(reasoning_effort or "")
 
+    @property
+    def output_token_limit(self) -> int:
+        """Explicit per-call limit, when the runner controls it."""
+        if self._max_output_tokens <= 0:
+            raise AttributeError("the callback owns the output token default")
+        return self._max_output_tokens
+
     def _next_seq(self) -> int:
         with self._seq_lock:
             self._seq += 1

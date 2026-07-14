@@ -231,6 +231,7 @@ def test_missing_api_key_omits_authorization_header(stub_server, monkeypatch):
 def test_subcall_llm_query_counts_calls_and_tokens(stub_server):
     context = create_execution_context(max_calls=10, max_depth=3)
     client = _subcall_client(stub_server, context)
+    assert client.output_token_limit == 2048
     result = client.llm_query("summarize this", context="chunk text")
     assert result == "echo: chunk text\n\nsummarize this"
     assert context.stats.calls_made == 1
@@ -240,6 +241,13 @@ def test_subcall_llm_query_counts_calls_and_tokens(stub_server):
     assert payload["model"] == "sub-model"
     assert payload["max_tokens"] == 2048  # bounded-output default (cost-control parity)
     assert "temperature" not in payload  # endpoint default unless configured
+
+
+def test_subcall_reports_deliberately_unbounded_output(stub_server):
+    context = create_execution_context(max_calls=1, max_depth=1)
+    client = _subcall_client(stub_server, context, max_output_tokens=0)
+
+    assert client.output_token_limit is None
 
 
 def test_subcall_cost_controls_passthrough(stub_server):
