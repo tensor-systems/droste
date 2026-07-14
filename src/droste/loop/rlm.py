@@ -34,7 +34,7 @@ from .step import (
     finalize,
     record_iteration,
 )
-from .trajectory import IterationRecord
+from .trajectory import ExecutionStatus, IterationRecord
 
 __all__ = ["RLMConfig", "RLMResult", "run_rlm", "EMPTY_OUTPUT_NUDGE"]
 
@@ -281,7 +281,7 @@ def run_rlm(
     iterations = 0
     last_output = ""
     last_response = ""
-    last_execution_status: str | None = None
+    last_execution_status: ExecutionStatus | None = None
     error: RLMError | None = None
     answer_metadata: dict[str, Any] = {}
 
@@ -396,9 +396,8 @@ def run_rlm(
                         messages=messages,
                         response=response,
                         code=code,
-                        output=last_output,
+                        outcome=outcome,
                         usage=usage,
-                        execution_status=outcome.execution_status,
                     )
                 )
                 continue
@@ -408,9 +407,8 @@ def run_rlm(
                 messages=messages,
                 response=response,
                 code=code,
-                output=last_output,
+                outcome=outcome,
                 usage=usage,
-                execution_status=outcome.execution_status,
             )
 
             context.emit_progress(
@@ -455,9 +453,8 @@ def run_rlm(
                         messages=repair_messages,
                         response=repair_response,
                         code=repaired_code,
-                        output=last_output,
+                        outcome=outcome,
                         usage=repair_usage,
-                        execution_status=outcome.execution_status,
                     )
                 )
             else:

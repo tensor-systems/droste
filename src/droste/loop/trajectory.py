@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal, TypeAlias
 
-EXECUTION_STATUS_SUCCESS = "success"
-EXECUTION_STATUS_ERROR = "error"
+ExecutionStatus: TypeAlias = Literal["success", "error"]
+EXECUTION_STATUS_SUCCESS: ExecutionStatus = "success"
+EXECUTION_STATUS_ERROR: ExecutionStatus = "error"
 
 
 @dataclass
@@ -21,4 +23,4 @@ class IterationRecord:
     tokens_used: int
     # Additive structured status: execution_result remains the exact feedback
     # text for compatibility and must never be parsed to recover this state.
-    execution_status: str = EXECUTION_STATUS_SUCCESS
+    execution_status: ExecutionStatus = EXECUTION_STATUS_SUCCESS

@@ -4,10 +4,11 @@ single RLMResult construction site — no LLM or sandbox required."""
 
 from __future__ import annotations
 
-from droste.exceptions import PolicyError
+from droste.exceptions import PolicyError, RLMError
 from droste.execution.context import create_execution_context
 from droste.loop.step import (
     EMPTY_OUTPUT_NUDGE,
+    StepOutcome,
     build_error_repair_messages,
     build_initial_messages,
     build_missing_code_repair_messages,
@@ -115,7 +116,7 @@ def test_record_iteration_snapshots_messages() -> None:
         messages=messages,
         response="R",
         code="print(1)",
-        output="1",
+        outcome=StepOutcome(output="1", answer={}),
         usage=None,
     )
     messages.append({"role": "user", "content": "later turn"})
@@ -127,7 +128,12 @@ def test_record_iteration_snapshots_messages() -> None:
 
 def test_record_iteration_normalizes_empty_output_to_nudge() -> None:
     record = record_iteration(
-        iteration=2, messages=[], response="R", code="pass", output="", usage=None
+        iteration=2,
+        messages=[],
+        response="R",
+        code="pass",
+        outcome=StepOutcome(output="", answer={}),
+        usage=None,
     )
     assert record.execution_result == EMPTY_OUTPUT_NUDGE
 
@@ -138,9 +144,12 @@ def test_record_iteration_keeps_error_text_and_status_separate() -> None:
         messages=[],
         response="R",
         code="raise ValueError('boom')",
-        output="ERROR: boom",
+        outcome=StepOutcome(
+            output="ERROR: boom",
+            answer={},
+            error=RLMError(type="ValueError", message="boom"),
+        ),
         usage=None,
-        execution_status="error",
     )
     assert record.execution_result == "ERROR: boom"
     assert record.execution_status == "error"

@@ -26,7 +26,12 @@ from ..execution.progress import execution_error_event, output_event
 from ..policy import PolicyHints, contract_violations, ready_violations
 from ..protocols.environment import ExecutionResult, RLMEnvironment
 from ..protocols.llm_client import LLMClient, total_tokens_from_usage
-from .trajectory import EXECUTION_STATUS_ERROR, EXECUTION_STATUS_SUCCESS, IterationRecord
+from .trajectory import (
+    EXECUTION_STATUS_ERROR,
+    EXECUTION_STATUS_SUCCESS,
+    ExecutionStatus,
+    IterationRecord,
+)
 
 # Fed back instead of an empty string when executed code prints nothing, so the
 # model learns that only stdout is visible.
@@ -103,7 +108,7 @@ class StepOutcome:
     answer_metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
-    def execution_status(self) -> str:
+    def execution_status(self) -> ExecutionStatus:
         """Structured execution state derived from the typed outcome, not stdout."""
         return EXECUTION_STATUS_ERROR if self.error is not None else EXECUTION_STATUS_SUCCESS
 
@@ -142,7 +147,7 @@ def _best_answer(
     answer: dict[str, Any],
     last_output: str,
     last_response: str,
-    last_execution_status: str | None,
+    last_execution_status: ExecutionStatus | None,
 ) -> str:
     if answer.get("content"):
         return str(answer.get("content", ""))
@@ -503,21 +508,21 @@ def record_iteration(
     messages: list[dict[str, str]],
     response: str,
     code: str,
-    output: str,
+    outcome: StepOutcome,
     usage: Any,
-    execution_status: str = EXECUTION_STATUS_SUCCESS,
 ) -> IterationRecord:
     """The one place iteration records are built: a structured message-list
     snapshot (deep-copied — the live list keeps growing), nudge-normalized
-    execution output."""
+    execution output. Taking the typed outcome keeps its output and status
+    atomic instead of accepting an independently assembled pair."""
     return IterationRecord(
         iteration=iteration,
         llm_input=[dict(message) for message in messages],
         llm_output=response,
         code_executed=code,
-        execution_result=_feedback_output(output),
+        execution_result=_feedback_output(outcome.output),
         tokens_used=total_tokens_from_usage(usage),
-        execution_status=execution_status,
+        execution_status=outcome.execution_status,
     )
 
 

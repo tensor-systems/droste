@@ -27,7 +27,8 @@ A failed-only trajectory with no retained `answer["content"]` must stay fatal;
 only a retained draft or at least one successful step is extraction evidence.
 Trajectory execution state is explicit in `IterationRecord.execution_status`;
 never infer success or failure from `execution_result` text because successful
-stdout may begin with `ERROR:`.
+stdout may begin with `ERROR:`. Build loop records from the typed `StepOutcome`
+so output and status cannot drift apart.
 
 ## Reproducible Benchmarks
 
