@@ -7,6 +7,17 @@ from .progress import EventCallback, ProgressCallback
 from .trace import RunRecordCallback
 
 DEFAULT_OUTPUT_CHARS = 25_000
+DEFAULT_SUBCALL_CONCURRENCY = 5
+
+
+def validate_subcall_concurrency(value: object) -> int:
+    """Return one valid, positive subcall batch-concurrency value."""
+
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("subcall concurrency must be an integer")
+    if value < 1:
+        raise ValueError("subcall concurrency must be positive")
+    return value
 
 
 @dataclass(frozen=True, slots=True)

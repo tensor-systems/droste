@@ -128,6 +128,7 @@ Deno.test("splitCredentials removes secrets and preserves normalized auth type",
     customer_token: "ct_secret",
     auth_type: "customer_token",
     root_model: "gemini-3.5-flash",
+    subcall_concurrency: 3,
     token: "runner_secret",
   };
   const { creds, sandboxRequest } = splitCredentials(req);
@@ -136,6 +137,7 @@ Deno.test("splitCredentials removes secrets and preserves normalized auth type",
     question: "who texts me most?",
     db_path: "/data/sample.db",
     root_model: "gemini-3.5-flash",
+    subcall_concurrency: 3,
     auth_type: "customer_token",
   });
   assert(!("api_key" in sandboxRequest), "api_key must not reach the sandbox");

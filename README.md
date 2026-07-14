@@ -211,8 +211,11 @@ result = run_rlm(question, environment=env, root_llm=root, subcalls=subcalls, co
 ```
 
 Explicit `base_url=` / `api_key=` constructor args win over the environment
-variables. Subcall batches run with bounded concurrency (5 workers) and every
-subcall's usage block is added to `result.tokens_used`.
+variables. Subcall batches use the immutable rollout concurrency (default 5),
+and every subcall's usage block is added to `result.tokens_used`. When choosing
+a non-default value in-process, pass the same value as the built-in subcall
+client's `max_parallel` and `RolloutConfiguration.concurrency`; a mismatch
+fails before inference.
 
 `reasoning_effort` and `extra_body` pass through to the endpoint as-is.
 Disabling thinking per-subcall is a gateway capability: a compatible gateway
@@ -248,6 +251,8 @@ flowchart LR
   [docs/architecture.md](docs/architecture.md) for the compatibility rules and
   [UPGRADING.md](UPGRADING.md) for per-release embedder migration notes.
 - `budget`: **required** complete six-field compute authorization object.
+- `subcall_concurrency`: optional positive batch limit (default: `5`), recorded
+  in the returned scaffold manifest.
 - `root_endpoint` + `subcall_endpoint` + `token`: required for HTTP-backed runs.
 - `adapter_module`: optional Python module path to override the runner entirely.
 

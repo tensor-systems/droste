@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 
 from droste import (
+    DEFAULT_SUBCALL_CONCURRENCY,
     Budget,
     EngineIdentity,
     RLMConfig,
@@ -120,6 +121,16 @@ def test_host_opaque_model_identity_is_explicit_null_not_empty_string() -> None:
         ScaffoldManifest.from_dict(wire)
 
 
+def test_rollout_concurrency_has_an_explicit_compatibility_default() -> None:
+    assert RolloutConfiguration().concurrency == DEFAULT_SUBCALL_CONCURRENCY == 5
+
+
+@pytest.mark.parametrize("value", [True, 0, -1, 1.5, "2"])
+def test_rollout_concurrency_rejects_invalid_values(value: object) -> None:
+    with pytest.raises((TypeError, ValueError), match="subcall concurrency"):
+        RolloutConfiguration(concurrency=value)  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -216,6 +227,29 @@ def test_run_rejects_incompatible_checkpoint_before_first_llm_request() -> None:
                 checkpoint_requirements=ScaffoldRequirements(
                     required={"prompt_pack": {"revision": "not-this-revision"}}
                 ),
+            ),
+        )
+
+    assert root._call_count == 0
+
+
+def test_run_rejects_builtin_concurrency_drift_before_first_llm_request() -> None:
+    class ReportingSubcalls(MockSubcallClient):
+        @property
+        def subcall_concurrency(self) -> int:
+            return 2
+
+    root = MockLLMClient([_ready_response()])
+
+    with pytest.raises(ValueError, match="rollout concurrency does not match"):
+        run_rlm(
+            "question",
+            environment=MockEnvironment(),
+            root_llm=root,
+            subcalls=ReportingSubcalls(),
+            config=RLMConfig(
+                root_model="root-model",
+                rollout=RolloutConfiguration(concurrency=3),
             ),
         )
 

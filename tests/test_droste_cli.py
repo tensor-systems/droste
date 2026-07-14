@@ -211,6 +211,26 @@ def test_ask_file_end_to_end(stub_server, tmp_path, capsys):
     assert "1 file(s)" in system_prompt
 
 
+def test_rollout_concurrency_configures_client_and_manifest(stub_server, tmp_path, capsys):
+    doc = tmp_path / "doc.txt"
+    doc.write_text("configured content")
+    stub_server.root_responses = [ANSWER_FROM_FILE]
+
+    exit_code = main(
+        _e2e_argv(
+            stub_server,
+            doc,
+            "what does the file say?",
+            extra=["--rollout-config", '{"concurrency":2}', "--json", "--quiet"],
+        )
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["answer"] == "configured content"
+    assert payload["scaffold_manifest"]["inference"]["concurrency"] == 2
+
+
 def test_ask_alias_still_works(stub_server, tmp_path, capsys):
     doc = tmp_path / "doc.txt"
     doc.write_text("alias content")

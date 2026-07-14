@@ -192,6 +192,12 @@ outcomes join externally by run ID and manifest ID. The optional
 [Verifiers v1 harness](verifiers-harness.md) sends root and subcall traffic
 through one interception endpoint without moving runtime data into the prompt.
 
+The optional positive `subcall_concurrency` request field resolves once before
+client construction (default 5), controls every HTTP-backed subcall batch, and
+is recorded at `scaffold_manifest.inference.concurrency`. Native CLI rollout
+configuration follows the same path. The Pyodide relay forwards the value
+unchanged; it does not choose another concurrency policy.
+
 **Versioned boundary**: the request/response schema and provider contract
 are versioned, each by a single integer:
 

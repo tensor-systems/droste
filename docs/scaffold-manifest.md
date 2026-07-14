@@ -55,7 +55,7 @@ inference facts.
     "subcall": {"id": "model", "revision": null},
     "root_sampling": {}, "subcall_sampling": {},
     "output_limits": {"root_tokens": 4096, "subcall_tokens": 2048},
-    "concurrency": 1, "seed": null
+    "concurrency": 5, "seed": null
   },
   "budget": {
     "tokens": 500000, "subcalls": 50, "depth": 1, "wall_ms": 300000,
@@ -76,6 +76,12 @@ Model IDs are either non-empty strings or explicit `null` when the host keeps
 the identity opaque. A revision cannot accompany a null model ID. Source and
 model revisions are never guessed by the engine; the host supplies them through
 `RolloutConfiguration`.
+
+`inference.concurrency` is the effective maximum number of in-flight subcall
+batch items. Built-in clients report their configured value, and `run_rlm`
+rejects a mismatch with `RolloutConfiguration.concurrency` before inference.
+The compatibility default is 5. Custom clients that do not expose the optional
+read-only metadata remain source-compatible and must honor the declared value.
 
 ## Compatibility and storage
 

@@ -20,6 +20,7 @@ from droste import (
     ModelRelayClient,
     ModelRelaySubcallClient,
     RLMConfig,
+    RolloutConfiguration,
     SandboxLimits,
     create_environment,
     create_environment_context,
@@ -446,6 +447,9 @@ def _droste_run(
                 sandbox=environment_config.sandbox,
                 root_model=arm.model.root_model,
                 policy_hints=PolicyHints(semantic=semantic),
+                rollout=RolloutConfiguration(
+                    concurrency=arm.limits.concurrency,
+                ),
             ),
             system_prompt_additions=benchmark_guidance,
             context=execution_context,

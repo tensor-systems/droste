@@ -41,6 +41,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from ..execution.budget import DEFAULT_SUBCALL_OUTPUT_TOKENS
+from ..execution.config import DEFAULT_SUBCALL_CONCURRENCY, validate_subcall_concurrency
 from ..execution.context import ExecutionContext
 from ..protocols.llm_client import TokenUsage
 from ..protocols.subcall_client import SubcallClient
@@ -50,7 +51,7 @@ from .useragent import USER_AGENT
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_ANTHROPIC_MAX_TOKENS = 4096
-DEFAULT_MAX_PARALLEL = 5
+DEFAULT_MAX_PARALLEL = DEFAULT_SUBCALL_CONCURRENCY
 MAX_BATCH_PROMPTS = 50
 DEFAULT_TIMEOUT_SECONDS = 120.0
 
@@ -366,8 +367,7 @@ class AnthropicSubcallClient(SubcallClient):
             raise ValueError("model is required")
         if max_output_tokens <= 0:
             raise ValueError("max_output_tokens must be > 0 (the Messages API requires max_tokens)")
-        if max_parallel < 1:
-            raise ValueError("max_parallel must be >= 1")
+        resolved_concurrency = validate_subcall_concurrency(max_parallel)
         self._transport = _MessagesTransport(
             base_url=base_url, api_key=api_key, timeout=timeout, label="llm_query"
         )
@@ -376,13 +376,18 @@ class AnthropicSubcallClient(SubcallClient):
         self._max_output_tokens = int(max_output_tokens)
         self._temperature = temperature
         self._extra_body = dict(extra_body) if extra_body else {}
-        self._max_parallel = int(max_parallel)
+        self._max_parallel = resolved_concurrency
         self._lock = threading.Lock()
 
     @property
     def output_token_limit(self) -> int | None:
         """Effective maximum output tokens for each subcall."""
         return self._max_output_tokens
+
+    @property
+    def subcall_concurrency(self) -> int:
+        """Effective maximum number of in-flight batch items."""
+        return self._max_parallel
 
     def _increment_calls(self) -> None:
         with self._lock:

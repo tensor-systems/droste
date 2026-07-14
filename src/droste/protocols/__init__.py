@@ -1,6 +1,10 @@
 from .environment import EnvCapabilities, ExecutionResult, RLMEnvironment
 from .llm_client import LLMClient, TokenUsage
-from .subcall_client import SubcallClient, SubcallOutputTokenLimitProvider
+from .subcall_client import (
+    SubcallClient,
+    SubcallConcurrencyProvider,
+    SubcallOutputTokenLimitProvider,
+)
 
 __all__ = [
     "RLMEnvironment",
@@ -9,5 +13,6 @@ __all__ = [
     "LLMClient",
     "TokenUsage",
     "SubcallClient",
+    "SubcallConcurrencyProvider",
     "SubcallOutputTokenLimitProvider",
 ]

@@ -71,7 +71,19 @@ class _StubHandler(BaseHTTPRequestHandler):
         pass
 
 
-def test_run_reports_actual_subcall_count() -> None:
+def test_run_reports_actual_subcall_count(monkeypatch) -> None:
+    from importlib import import_module
+
+    run_module = import_module("droste_runner.run")
+    real_client = run_module.HTTPSubcallClient
+    resolved_concurrency: list[int] = []
+
+    class CapturingHTTPSubcallClient(real_client):
+        def __init__(self, **kwargs: Any) -> None:
+            resolved_concurrency.append(kwargs["max_parallel"])
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(run_module, "HTTPSubcallClient", CapturingHTTPSubcallClient)
     server = HTTPServer(("127.0.0.1", 0), _StubHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -163,6 +175,7 @@ def test_run_reports_actual_subcall_count() -> None:
         "authorization_ref": "consent://trace/1",
         "purposes": ["training"],
     }
+    assert resolved_concurrency == [2]
 
 
 def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> None:
@@ -211,7 +224,7 @@ def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> 
     assert "trajectory" not in response
 
 
-def _client() -> tuple[HTTPSubcallClient, Any]:
+def _client(**kwargs: Any) -> tuple[HTTPSubcallClient, Any]:
     context = create_execution_context()
     client = HTTPSubcallClient(
         endpoint="http://unused.invalid",
@@ -219,6 +232,7 @@ def _client() -> tuple[HTTPSubcallClient, Any]:
         session="",
         session_index=0,
         context=context,
+        **kwargs,
     )
     client._request = lambda payload: "ok"  # type: ignore[method-assign]
     return client, context
@@ -258,7 +272,7 @@ def test_concurrent_batch_counts_each_issued_call() -> None:
 
 
 def test_llm_batch_with_errors_bounded_concurrency() -> None:
-    client, _ = _client()
+    client, _ = _client(max_parallel=2)
     lock = threading.Lock()
     active = 0
     peak = 0
@@ -279,7 +293,13 @@ def test_llm_batch_with_errors_bounded_concurrency() -> None:
     results, errors = client.llm_batch_with_errors([f"p{i}" for i in range(30)])
     assert results == ["ok"] * 30
     assert errors == []
-    assert peak <= 5
+    assert peak == 2
+
+
+@pytest.mark.parametrize("value", [True, 0, -1, 1.5, "2"])
+def test_http_subcall_rejects_invalid_concurrency(value: object) -> None:
+    with pytest.raises((TypeError, ValueError), match="subcall concurrency"):
+        _client(max_parallel=value)
 
 
 def test_llm_batch_with_errors_enforces_prompt_cap() -> None:

@@ -11,6 +11,7 @@ from typing import Any
 
 from droste.clients.errors import http_error_excerpt, redact_secrets
 from droste.clients.useragent import USER_AGENT
+from droste.execution.config import DEFAULT_SUBCALL_CONCURRENCY, validate_subcall_concurrency
 from droste.protocols.llm_client import TokenUsage
 from droste.protocols.subcall_client import SubcallClient
 
@@ -37,6 +38,7 @@ class HTTPSubcallClient(SubcallClient):
         max_output_tokens: int = 0,
         model: str = "",
         reasoning_effort: str = "",
+        max_parallel: int = DEFAULT_SUBCALL_CONCURRENCY,
     ) -> None:
         self._endpoint = endpoint
         self._token = token
@@ -51,6 +53,12 @@ class HTTPSubcallClient(SubcallClient):
         self._max_output_tokens = int(max_output_tokens or 0)
         self._model = str(model or "")
         self._reasoning_effort = str(reasoning_effort or "")
+        self._max_parallel = validate_subcall_concurrency(max_parallel)
+
+    @property
+    def subcall_concurrency(self) -> int:
+        """Effective maximum number of in-flight batch items."""
+        return self._max_parallel
 
     @property
     def output_token_limit(self) -> int:
@@ -221,7 +229,6 @@ class HTTPSubcallClient(SubcallClient):
             return results, errors
         if len(prompts) > 50:
             raise ValueError("llm_batch prompt count exceeds max 50")
-        max_parallel = 5
 
         def _run_one(idx: int, prompt: str, ctx: str) -> str:
             if idx > 0:
@@ -230,7 +237,7 @@ class HTTPSubcallClient(SubcallClient):
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        with ThreadPoolExecutor(max_workers=max_parallel) as executor:
+        with ThreadPoolExecutor(max_workers=self._max_parallel) as executor:
             futures = {
                 executor.submit(_run_one, idx, prompt, ctx): idx
                 for idx, (prompt, ctx) in enumerate(zip(prompts, contexts))
