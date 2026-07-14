@@ -56,6 +56,20 @@ def test_environment_config_is_immutable_and_drives_execution_context() -> None:
         config.max_calls = 99  # type: ignore[misc]
 
 
+def test_native_config_can_preserve_distinct_loop_and_executor_output_caps() -> None:
+    config = EnvironmentConfig(
+        kind="native",
+        max_output_chars=25_000,
+        executor_max_output_chars=100_000,
+    )
+
+    context = create_environment_context(config)
+    environment = _environment(config)
+
+    assert context.max_output_chars == 25_000
+    assert environment.capabilities()["max_output_chars"] == 100_000
+
+
 def test_native_environment_owns_signal_timeout_wiring(monkeypatch) -> None:
     timer_calls: list[tuple[int, float]] = []
     signal_calls: list[tuple[int, object]] = []
@@ -134,6 +148,17 @@ def test_pyodide_environment_uses_shared_raw_namespace_without_signal_timers(
 def test_native_rejects_pyodide_only_safety_declarations() -> None:
     with pytest.raises(ValueError, match="only valid for pyodide"):
         EnvironmentConfig(kind="native", host_managed_timeout=True)
+
+
+def test_pyodide_rejects_a_distinct_executor_output_cap() -> None:
+    with pytest.raises(ValueError, match="one loop-owned output limit"):
+        EnvironmentConfig(
+            kind="pyodide",
+            max_output_chars=10,
+            executor_max_output_chars=20,
+            host_managed_timeout=True,
+            host_managed_isolation=True,
+        )
 
 
 def test_host_entrypoints_use_factory_instead_of_copying_environment_wiring() -> None:

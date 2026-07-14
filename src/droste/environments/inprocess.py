@@ -191,9 +191,10 @@ class RunnerEnvironment(RLMEnvironment):
         def _handle_timeout(signum: int, frame: Any) -> None:
             raise TimeoutError("execution timed out")
 
-        # Native in-process execution uses SIGALRM. Pyodide/WASM hosts are
-        # selected through create_environment and use PyodideEnvironment
-        # instead; its deadline belongs to the host process.
+        # Native in-process execution uses SIGALRM. New Pyodide/WASM hosts are
+        # selected through create_environment and use PyodideEnvironment, but
+        # keep the availability guard for compatibility with older hosts that
+        # still construct RunnerEnvironment directly under Pyodide.
         use_signal_timeout = bool(
             self._exec_timeout_ms and self._exec_timeout_ms > 0 and hasattr(signal, "setitimer")
         )

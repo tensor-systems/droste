@@ -41,6 +41,10 @@ class EnvironmentConfig:
     max_calls: int = DEFAULT_MAX_CALLS
     max_iterations: int = DEFAULT_MAX_ITERATIONS
     max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS
+    # Normally omitted so the executor and loop share one cap. Native hosts
+    # with a deliberate two-stage policy may keep a looser capture-buffer cap
+    # while the loop owns the lower, repairable output-budget error.
+    executor_max_output_chars: int | None = None
     exec_timeout_ms: int = 0
     host_managed_timeout: bool = False
     host_managed_isolation: bool = False
@@ -49,6 +53,8 @@ class EnvironmentConfig:
         select_environment(self.kind)
         if self.exec_timeout_ms < 0:
             raise ValueError("exec_timeout_ms must be non-negative")
+        if self.executor_max_output_chars is not None and self.executor_max_output_chars < 0:
+            raise ValueError("executor_max_output_chars must be non-negative")
         if self.kind == "pyodide":
             if self.exec_timeout_ms != 0:
                 raise ValueError(
@@ -59,8 +65,20 @@ class EnvironmentConfig:
                 raise ValueError("pyodide requires host_managed_timeout=True")
             if not self.host_managed_isolation:
                 raise ValueError("pyodide requires host_managed_isolation=True")
+            if self.executor_max_output_chars not in (None, self.max_output_chars):
+                raise ValueError(
+                    "pyodide has one loop-owned output limit; "
+                    "executor_max_output_chars must match max_output_chars"
+                )
         elif self.host_managed_timeout or self.host_managed_isolation:
             raise ValueError("host-managed safety declarations are only valid for pyodide")
+
+    @property
+    def resolved_executor_max_output_chars(self) -> int:
+        """Executor cap, defaulting to the loop's output budget."""
+        if self.executor_max_output_chars is None:
+            return self.max_output_chars
+        return self.executor_max_output_chars
 
 
 def create_environment_context(
@@ -95,6 +113,6 @@ def create_environment(
         context=context,
         registry=registry,
         subcalls=subcalls,
-        max_output_chars=config.max_output_chars,
+        max_output_chars=config.resolved_executor_max_output_chars,
         exec_timeout_ms=config.exec_timeout_ms,
     )
