@@ -16,6 +16,7 @@ from typing import Any
 from ..capabilities import (
     BrokeredSubcallClient,
     CapabilityAnnotator,
+    CapabilityAttemptAuthority,
     CapabilityBroker,
     CapabilityGuard,
     CapabilityObserver,
@@ -136,6 +137,7 @@ class RunnerEnvironment(RLMEnvironment):
         capability_guard: CapabilityGuard | None = None,
         capability_annotator: CapabilityAnnotator | None = None,
         capability_observer: CapabilityObserver | None = None,
+        capability_attempt_authority: CapabilityAttemptAuthority | None = None,
     ) -> None:
         self._context = context
         self._registry = registry
@@ -153,6 +155,7 @@ class RunnerEnvironment(RLMEnvironment):
             guard=capability_guard,
             annotator=capability_annotator,
             observer=capability_observer,
+            attempt_authority=capability_attempt_authority,
         )
         self._sandbox_subcalls = BrokeredSubcallClient(
             self._broker,

@@ -31,6 +31,21 @@ mechanism usage. The capability broker is the admission/finalization boundary,
 so handler errors, invalid results, annotator errors, and process-control exits
 all settle the reservation exactly once.
 
+Trusted handlers receive a frozen `CapabilityExecutionContext`. Its reservation
+is identified only by the call's `call_id`; providers never receive the ledger.
+Long-running work may report cumulative token/subcall usage with
+`context.checkpoint(tokens=..., subcalls=...)`. Equal values are idempotent,
+dimensions cannot move backward, and values cannot exceed the admitted vector.
+Checkpoint deltas become committed ledger facts immediately; final
+reconciliation cannot retract them and refunds only authorization still unused.
+Wall time is always measured by the broker rather than reported by a provider.
+
+`context.check()` observes cooperative cancellation and the caller-authorized
+monotonic deadline. Cancellation before handler dispatch refunds the admission;
+after dispatch it follows the same deterministic final settlement as any other
+attempt. Results distinguish the stable `cancelled` and `deadline_exceeded`
+error codes under one `CapabilityStatus.CANCELLED` terminal class.
+
 Inference batches reserve every item together. Concurrent callers therefore
 cannot pass separate check-then-increment races. The broker preserves one root
 output allocation while admitting inference work so early subcalls cannot

@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import json
 from dataclasses import FrozenInstanceError
+from threading import Event, Thread
 
 import pytest
 
 from droste import RLMConfig, run_rlm
 from droste.capabilities import (
     JSON_SCHEMA_2020_12,
+    CapabilityAdmission,
     CapabilityBroker,
     CapabilityCall,
     CapabilityCallError,
+    CapabilityCheckpoint,
     CapabilityDescriptor,
     CapabilityError,
     CapabilityErrorCode,
+    CapabilityExecutionContext,
     CapabilityId,
     CapabilityKind,
     CapabilityManifest,
@@ -23,6 +27,7 @@ from droste.capabilities import (
     CapabilityMetric,
     CapabilityOutcome,
     CapabilityRegistration,
+    CapabilityReservation,
     CapabilityResult,
     CapabilityResultHandle,
     CapabilityStatus,
@@ -101,6 +106,27 @@ HANDLE_QUERY = CapabilityDescriptor(
 )
 
 
+class _AttemptAuthority:
+    def __init__(self, *, deadline: float | None = None) -> None:
+        self.deadline = deadline
+        self.checkpoints: list[CapabilityCheckpoint] = []
+        self.settlements: list[tuple[bool, str | None, CapabilityCheckpoint]] = []
+
+    def admit(self, call):
+        return CapabilityAdmission(
+            CapabilityReservation(tokens=100, subcalls=2, wall_ms=1_000),
+            self.deadline,
+        )
+
+    def checkpoint(self, call, cumulative):
+        self.checkpoints.append(cumulative)
+        return cumulative
+
+    def settle(self, call, result, error, checkpoint, *, attempted):
+        self.settlements.append((attempted, error.code if error else None, checkpoint))
+        return CapabilityMetadata()
+
+
 def test_manifest_and_envelopes_are_immutable_values() -> None:
     original_arg = {"nested": [1]}
     original_result = {"rows": [{"x": 1}]}
@@ -129,10 +155,253 @@ def test_manifest_and_envelopes_are_immutable_values() -> None:
     assert result.to_dict()["result"] == {"rows": [{"x": 1}]}
 
 
+def test_context_is_frozen_and_reports_cumulative_checkpoints() -> None:
+    authority = _AttemptAuthority()
+    observed: list[CapabilityExecutionContext] = []
+
+    def handler(context: CapabilityExecutionContext) -> str:
+        observed.append(context)
+        assert context.checkpoint(tokens=10, subcalls=1) == CapabilityCheckpoint(10, 1)
+        assert context.checkpoint(tokens=10, subcalls=1) == CapabilityCheckpoint(10, 1)
+        with pytest.raises(FrozenInstanceError):
+            context.run_id = "changed"  # type: ignore[misc]
+        return "ok"
+
+    result = CapabilityBroker(
+        (CapabilityRegistration(QUERY, handler),),
+        run_id="run-1",
+        parent_run_id="parent-1",
+        attempt_authority=authority,
+    ).dispatch(CapabilityCall(QUERY.capability_id, "call-1", "run-1", parent_run_id="parent-1"))
+
+    assert result.ok is True
+    assert observed[0].call_id == "call-1"
+    assert observed[0].reservation == CapabilityReservation(100, 2, 1_000, 0)
+    assert authority.checkpoints == [CapabilityCheckpoint(10, 1)]
+    assert authority.settlements == [(True, None, CapabilityCheckpoint(10, 1))]
+
+
+def test_deadline_before_handler_is_typed_and_releases_at_admission_boundary() -> None:
+    authority = _AttemptAuthority(deadline=10.0)
+    invoked = False
+
+    def handler(_context):
+        nonlocal invoked
+        invoked = True
+
+    result = CapabilityBroker(
+        (CapabilityRegistration(QUERY, handler),),
+        run_id="run-1",
+        attempt_authority=authority,
+        clock=lambda: 10.0,
+    ).dispatch(CapabilityCall(QUERY.capability_id, "call-1", "run-1"))
+
+    assert result.status is CapabilityStatus.CANCELLED
+    assert result.error is not None
+    assert result.error.code == CapabilityErrorCode.DEADLINE_EXCEEDED
+    assert invoked is False
+    assert authority.settlements == [
+        (False, CapabilityErrorCode.DEADLINE_EXCEEDED, CapabilityCheckpoint())
+    ]
+
+
+def test_typed_provider_deadline_uses_cancelled_status() -> None:
+    result = CapabilityBroker(
+        (
+            CapabilityRegistration(
+                QUERY,
+                lambda _context: CapabilityOutcome(
+                    error=CapabilityError(
+                        CapabilityErrorCode.DEADLINE_EXCEEDED,
+                        "CapabilityDeadlineExceeded",
+                        "remote deadline elapsed",
+                    )
+                ),
+            ),
+        )
+    ).call(QUERY.capability_id)
+
+    assert result.status is CapabilityStatus.CANCELLED
+    assert result.error is not None
+    assert result.error.code == CapabilityErrorCode.DEADLINE_EXCEEDED
+
+
+def test_cancellation_during_handler_is_observed_cooperatively() -> None:
+    authority = _AttemptAuthority()
+    entered = Event()
+    continue_handler = Event()
+
+    def handler(context: CapabilityExecutionContext) -> str:
+        context.checkpoint(tokens=20, subcalls=1)
+        entered.set()
+        assert continue_handler.wait(timeout=2)
+        context.check()
+        return "unreachable"
+
+    broker = CapabilityBroker(
+        (CapabilityRegistration(QUERY, handler),),
+        run_id="run-1",
+        attempt_authority=authority,
+    )
+    call = CapabilityCall(QUERY.capability_id, "call-1", "run-1")
+    results = []
+    worker = Thread(target=lambda: results.append(broker.dispatch(call)))
+    worker.start()
+    assert entered.wait(timeout=2)
+    assert broker.cancel("call-1") is True
+    continue_handler.set()
+    worker.join(timeout=2)
+
+    assert len(results) == 1
+    assert results[0].status is CapabilityStatus.CANCELLED
+    assert results[0].error is not None
+    assert results[0].error.code == CapabilityErrorCode.CANCELLED
+    assert authority.settlements == [
+        (True, CapabilityErrorCode.CANCELLED, CapabilityCheckpoint(20, 1))
+    ]
+    assert broker.cancel("call-1") is False
+
+
+def test_cancellation_after_admission_stops_before_handler_dispatch() -> None:
+    authority = _AttemptAuthority()
+    guarding = Event()
+    continue_guard = Event()
+    invoked = False
+
+    def guard(_call):
+        guarding.set()
+        assert continue_guard.wait(timeout=2)
+        return None
+
+    def handler(_context):
+        nonlocal invoked
+        invoked = True
+
+    broker = CapabilityBroker(
+        (CapabilityRegistration(QUERY, handler),),
+        run_id="run-1",
+        guard=guard,
+        attempt_authority=authority,
+    )
+    results = []
+    worker = Thread(
+        target=lambda: results.append(
+            broker.dispatch(CapabilityCall(QUERY.capability_id, "call-1", "run-1"))
+        )
+    )
+    worker.start()
+    assert guarding.wait(timeout=2)
+    assert broker.cancel("call-1") is True
+    continue_guard.set()
+    worker.join(timeout=2)
+
+    assert invoked is False
+    assert results[0].error is not None
+    assert results[0].error.code == CapabilityErrorCode.CANCELLED
+    assert authority.settlements == [(False, CapabilityErrorCode.CANCELLED, CapabilityCheckpoint())]
+
+
+def test_cancellation_cutoff_precedes_annotation_and_settlement() -> None:
+    authority = _AttemptAuthority()
+    handler_finished = Event()
+    release_handler = Event()
+    annotated: list[tuple[object, str | None]] = []
+
+    def annotator(call, result, error):
+        annotated.append((result, error.code if error else None))
+        return CapabilityMetadata()
+
+    def handler(_context):
+        handler_finished.set()
+        assert release_handler.wait(timeout=2)
+        return "finished"
+
+    broker = CapabilityBroker(
+        (CapabilityRegistration(QUERY, handler),),
+        run_id="run-1",
+        annotator=annotator,
+        attempt_authority=authority,
+    )
+    results = []
+    worker = Thread(
+        target=lambda: results.append(
+            broker.dispatch(CapabilityCall(QUERY.capability_id, "call-1", "run-1"))
+        )
+    )
+    worker.start()
+    assert handler_finished.wait(timeout=2)
+    assert broker.cancel("call-1") is True
+    release_handler.set()
+    worker.join(timeout=2)
+
+    assert results[0].status is CapabilityStatus.CANCELLED
+    assert results[0].result is None
+    assert annotated == [(None, CapabilityErrorCode.CANCELLED)]
+    assert authority.settlements[0][1] == CapabilityErrorCode.CANCELLED
+
+
+def test_cancellation_is_rejected_after_finalization_cutoff() -> None:
+    annotating = Event()
+    continue_annotation = Event()
+
+    def annotator(call, result, error):
+        annotating.set()
+        assert continue_annotation.wait(timeout=2)
+        return CapabilityMetadata()
+
+    broker = CapabilityBroker(
+        (CapabilityRegistration(QUERY, lambda _context: "finished"),),
+        run_id="run-1",
+        annotator=annotator,
+        attempt_authority=_AttemptAuthority(),
+    )
+    results = []
+    worker = Thread(
+        target=lambda: results.append(
+            broker.dispatch(CapabilityCall(QUERY.capability_id, "call-1", "run-1"))
+        )
+    )
+    worker.start()
+    assert annotating.wait(timeout=2)
+    assert broker.cancel("call-1") is False
+    continue_annotation.set()
+    worker.join(timeout=2)
+
+    assert results[0].ok is True
+    assert results[0].result == "finished"
+
+
+def test_process_control_from_guard_and_annotator_settles_before_propagating() -> None:
+    class Stop(BaseException):
+        pass
+
+    guarded_authority = _AttemptAuthority()
+    guarded = CapabilityBroker(
+        (CapabilityRegistration(QUERY, lambda _context: "unreachable"),),
+        guard=lambda _call: (_ for _ in ()).throw(Stop()),
+        attempt_authority=guarded_authority,
+    )
+    with pytest.raises(Stop):
+        guarded.call(QUERY.capability_id)
+    assert guarded_authority.settlements == [
+        (False, CapabilityErrorCode.GUARD_ERROR, CapabilityCheckpoint())
+    ]
+
+    annotated_authority = _AttemptAuthority()
+    annotated = CapabilityBroker(
+        (CapabilityRegistration(QUERY, lambda _context: "done"),),
+        annotator=lambda call, result, error: (_ for _ in ()).throw(Stop()),
+        attempt_authority=annotated_authority,
+    )
+    with pytest.raises(Stop):
+        annotated.call(QUERY.capability_id)
+    assert annotated_authority.settlements == [(True, None, CapabilityCheckpoint())]
+
+
 def test_validation_and_dispatch_fail_closed_without_invoking_a_handler() -> None:
     invoked = False
 
-    def handler() -> str:
+    def handler(_execution) -> str:
         nonlocal invoked
         invoked = True
         return "unreachable"
@@ -185,7 +454,7 @@ def test_one_result_shape_carries_identity_error_usage_budget_and_evidence() -> 
         )
 
     broker = CapabilityBroker(
-        (CapabilityRegistration(QUERY, lambda: {"rows": 1}),),
+        (CapabilityRegistration(QUERY, lambda _execution: {"rows": 1}),),
         run_id="run-1",
         parent_run_id="parent-1",
         annotator=annotator,
@@ -248,7 +517,7 @@ def test_provider_outcomes_and_finalizer_metadata_share_one_envelope_path() -> N
         ),
     )
     success = CapabilityBroker(
-        (CapabilityRegistration(QUERY, lambda: provider_success),),
+        (CapabilityRegistration(QUERY, lambda _execution: provider_success),),
         annotator=finalizer,
     ).call(QUERY.capability_id)
 
@@ -261,7 +530,7 @@ def test_provider_outcomes_and_finalizer_metadata_share_one_envelope_path() -> N
         (
             CapabilityRegistration(
                 QUERY,
-                lambda: CapabilityOutcome(
+                lambda _execution: CapabilityOutcome(
                     error=provider_error,
                     metadata=CapabilityMetadata(
                         usage=(CapabilityMetric("lookups", 1, "call"),),
@@ -276,7 +545,7 @@ def test_provider_outcomes_and_finalizer_metadata_share_one_envelope_path() -> N
         (
             CapabilityRegistration(
                 QUERY,
-                lambda: CapabilityOutcome(
+                lambda _execution: CapabilityOutcome(
                     result=object(),
                     metadata=CapabilityMetadata(
                         usage=(CapabilityMetric("provider_attempts", 1, "call"),)
@@ -306,8 +575,8 @@ def test_provider_outcomes_and_finalizer_metadata_share_one_envelope_path() -> N
         (invalid.call.call_id, CapabilityErrorCode.INVALID_RESULT),
     ]
 
-    raw_registration = CapabilityRegistration(QUERY, lambda: "raw")
-    assert isinstance(raw_registration.handler(), CapabilityOutcome)
+    raw_registration = CapabilityRegistration(QUERY, lambda _execution: "raw")
+    assert isinstance(raw_registration.handler(None), CapabilityOutcome)
 
 
 def test_provider_and_finalizer_singular_metadata_conflicts_fail_closed() -> None:
@@ -316,7 +585,7 @@ def test_provider_and_finalizer_singular_metadata_conflicts_fail_closed() -> Non
         (
             CapabilityRegistration(
                 QUERY,
-                lambda: CapabilityOutcome(
+                lambda _execution: CapabilityOutcome(
                     result="not-inlined",
                     metadata=CapabilityMetadata(result_handle=provider_handle),
                 ),
@@ -337,7 +606,7 @@ def test_provider_and_finalizer_singular_metadata_conflicts_fail_closed() -> Non
 def test_trace_projection_is_json_safe_and_contains_no_replay_content() -> None:
     secret = "secret prompt and result"
 
-    def fail(_prompt: str) -> None:
+    def fail(_execution, _prompt: str) -> None:
         raise RuntimeError(f"provider exposed {secret}")
 
     result = CapabilityBroker(
@@ -361,7 +630,7 @@ def test_trace_projection_is_json_safe_and_contains_no_replay_content() -> None:
     assert json.loads(encoded) == trace
 
     handled = CapabilityBroker(
-        (CapabilityRegistration(HANDLE_QUERY, lambda: secret),),
+        (CapabilityRegistration(HANDLE_QUERY, lambda _execution: secret),),
         annotator=lambda call, value, error: CapabilityMetadata(
             result_handle=CapabilityResultHandle(
                 handle=f"file:///private/{secret}",
@@ -381,13 +650,13 @@ def test_trace_projection_is_json_safe_and_contains_no_replay_content() -> None:
 
 def test_result_delivery_mode_is_enforced_by_the_broker() -> None:
     missing_handle = CapabilityBroker(
-        (CapabilityRegistration(HANDLE_QUERY, lambda: "inline"),)
+        (CapabilityRegistration(HANDLE_QUERY, lambda _execution: "inline"),)
     ).call(HANDLE_QUERY.capability_id)
     unexpected_handle = CapabilityBroker(
         (
             CapabilityRegistration(
                 QUERY,
-                lambda: CapabilityOutcome(
+                lambda _execution: CapabilityOutcome(
                     metadata=CapabilityMetadata(result_handle=CapabilityResultHandle("unexpected"))
                 ),
             ),
@@ -421,7 +690,11 @@ def test_unexpected_exception_type_is_sanitized_before_exactly_once_finalization
 
     ProviderFailure.__name__ = "private/path secret"
     broker = CapabilityBroker(
-        (CapabilityRegistration(QUERY, lambda: (_ for _ in ()).throw(ProviderFailure("detail"))),),
+        (
+            CapabilityRegistration(
+                QUERY, lambda _execution: (_ for _ in ()).throw(ProviderFailure("detail"))
+            ),
+        ),
         annotator=lambda call, result, error: (
             finalized.append(call.call_id) or CapabilityMetadata()
         ),
@@ -438,7 +711,7 @@ def test_unexpected_exception_type_is_sanitized_before_exactly_once_finalization
 def test_guard_denial_is_typed_and_does_not_call_handler() -> None:
     invoked = False
 
-    def handler() -> None:
+    def handler(_execution) -> None:
         nonlocal invoked
         invoked = True
 
@@ -462,7 +735,7 @@ def test_guard_denial_is_typed_and_does_not_call_handler() -> None:
 def test_run_identity_and_hook_failures_stay_in_typed_envelopes() -> None:
     invoked = False
 
-    def handler() -> dict[str, list[int]]:
+    def handler(_execution) -> dict[str, list[int]]:
         nonlocal invoked
         invoked = True
         return {"items": [1]}
@@ -511,25 +784,29 @@ def test_post_attempt_finalizer_runs_exactly_once_and_never_before_attempt() -> 
         return CapabilityMetadata()
 
     successful = CapabilityBroker(
-        (CapabilityRegistration(QUERY, lambda: "ok"),), annotator=finalizer
+        (CapabilityRegistration(QUERY, lambda _execution: "ok"),), annotator=finalizer
     ).call(QUERY.capability_id)
     failed = CapabilityBroker(
         (
             CapabilityRegistration(
-                QUERY, lambda: (_ for _ in ()).throw(RuntimeError("handler failed"))
+                QUERY, lambda _execution: (_ for _ in ()).throw(RuntimeError("handler failed"))
             ),
         ),
         annotator=finalizer,
     ).call(QUERY.capability_id)
     invalid_result = CapabilityBroker(
-        (CapabilityRegistration(QUERY, object),), annotator=finalizer
+        (CapabilityRegistration(QUERY, lambda _execution: object()),), annotator=finalizer
     ).call(QUERY.capability_id)
 
     class AttemptCancelled(BaseException):
         pass
 
     cancelled_broker = CapabilityBroker(
-        (CapabilityRegistration(QUERY, lambda: (_ for _ in ()).throw(AttemptCancelled())),),
+        (
+            CapabilityRegistration(
+                QUERY, lambda _execution: (_ for _ in ()).throw(AttemptCancelled())
+            ),
+        ),
         annotator=finalizer,
     )
     with pytest.raises(AttemptCancelled):
@@ -551,21 +828,21 @@ def test_post_attempt_finalizer_runs_exactly_once_and_never_before_attempt() -> 
 
     denied = CapabilityError(CapabilityErrorCode.POLICY_DENIED, "PolicyDenied", "not allowed")
     denied_broker = CapabilityBroker(
-        (CapabilityRegistration(QUERY, lambda: "unreachable"),),
+        (CapabilityRegistration(QUERY, lambda _execution: "unreachable"),),
         guard=lambda call: denied,
         annotator=finalizer,
     )
     denied_broker.call(QUERY.capability_id)
 
     guard_error_broker = CapabilityBroker(
-        (CapabilityRegistration(QUERY, lambda: "unreachable"),),
+        (CapabilityRegistration(QUERY, lambda _execution: "unreachable"),),
         guard=lambda call: (_ for _ in ()).throw(RuntimeError("guard failed")),
         annotator=finalizer,
     )
     guard_error_broker.call(QUERY.capability_id)
 
     rejected_broker = CapabilityBroker(
-        (CapabilityRegistration(QUERY, lambda: "unreachable"),), annotator=finalizer
+        (CapabilityRegistration(QUERY, lambda _execution: "unreachable"),), annotator=finalizer
     )
     unknown_id = CapabilityId(kind=CapabilityKind.DATA, source_id="db", operation="unknown")
     rejected_broker.dispatch(CapabilityCall(unknown_id, "unknown-call", rejected_broker.run_id))
@@ -576,13 +853,19 @@ def test_post_attempt_finalizer_runs_exactly_once_and_never_before_attempt() -> 
 
 
 def test_generated_binding_preserves_values_and_raises_typed_compatibility_error() -> None:
-    ok_broker = CapabilityBroker((CapabilityRegistration(QUERY, lambda value: value + 1),))
+    ok_broker = CapabilityBroker(
+        (CapabilityRegistration(QUERY, lambda _execution, value: value + 1),)
+    )
     binding = generate_binding(ok_broker, QUERY, name="query")
     assert binding(1) == 2
     assert binding.__name__ == "query"
 
     failed_broker = CapabilityBroker(
-        (CapabilityRegistration(QUERY, lambda: (_ for _ in ()).throw(ValueError("bad sql"))),)
+        (
+            CapabilityRegistration(
+                QUERY, lambda _execution: (_ for _ in ()).throw(ValueError("bad sql"))
+            ),
+        )
     )
     with pytest.raises(CapabilityCallError) as caught:
         generate_binding(failed_broker, QUERY)()
@@ -598,7 +881,7 @@ def test_generated_binding_preserves_values_and_raises_typed_compatibility_error
     assert non_finite.value.error.code == CapabilityErrorCode.INVALID_CALL
 
     non_finite_result = CapabilityBroker(
-        (CapabilityRegistration(QUERY, lambda: float("inf")),)
+        (CapabilityRegistration(QUERY, lambda _execution: float("inf")),)
     ).call(QUERY.capability_id)
     assert non_finite_result.error is not None
     assert non_finite_result.error.code == CapabilityErrorCode.INVALID_RESULT

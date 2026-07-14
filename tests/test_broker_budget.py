@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from threading import Event, Thread
 
+import pytest
+
 from droste.capabilities import (
     LLM_BATCH_CAPABILITY,
     LLM_QUERY_CAPABILITY,
@@ -40,16 +42,13 @@ def _broker(
     guard=None,
     annotator=None,
 ) -> CapabilityBroker:
-    accounting = BrokerBudget(
-        ledger,
-        guard_after_budget=guard,
-        annotator_after_budget=annotator,
-    )
+    accounting = BrokerBudget(ledger)
     return CapabilityBroker(
         subcall_registrations(subcalls),
         run_id="run",
-        guard=accounting.guard,
-        annotator=accounting.annotate,
+        guard=guard,
+        annotator=annotator,
+        attempt_authority=accounting,
     )
 
 
@@ -200,4 +199,25 @@ def test_downstream_annotator_failure_still_settles_before_error_envelope() -> N
     assert result.error is not None and result.error.code == "annotator_error"
     snapshot = ledger.snapshot()
     assert snapshot.consumed.subcalls == 1
+    assert snapshot.reserved.subcalls == 0
+
+
+def test_observational_event_sink_failure_cannot_change_or_leak_an_attempt() -> None:
+    def fail_event(_event) -> None:
+        raise RuntimeError("sink unavailable")
+
+    ledger = BudgetLedger(_budget(), on_event=fail_event)
+    client = _Subcalls()
+
+    with pytest.warns(RuntimeWarning, match="budget event sink failed"):
+        result = _broker(ledger, client).call(
+            LLM_QUERY_CAPABILITY.capability_id,
+            "question",
+        )
+
+    assert result.ok is True
+    assert client.calls == 1
+    snapshot = ledger.snapshot()
+    assert snapshot.consumed.subcalls == 1
+    assert snapshot.reserved.tokens == 0
     assert snapshot.reserved.subcalls == 0

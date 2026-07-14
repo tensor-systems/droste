@@ -69,8 +69,17 @@ needs a provider-specific parser or precedence convention.
 The annotator has exactly-once post-attempt semantics: it runs after success,
 handler error, invalid result, or propagated cancellation, but not when run
 identity, allowlist, arguments, or the guard reject a call before its handler is
-attempted. This lets a later call-ID-keyed ledger reconcile a guard reservation
-without making the broker own ledger policy.
+attempted. The separate attempt authority starts at admission and therefore
+settles even those post-admission guard exits without changing annotator scope.
+
+Every trusted registration has one context-first handler signature:
+`handler(CapabilityExecutionContext, *args, **kwargs)`. The context is a frozen
+view of call/run identity, deadline, and reservation plus two narrow mechanisms:
+`check()` for cooperative cancellation/deadline observation and cumulative
+`checkpoint()` for token/subcall progress. It exposes no ledger, trace, or
+callback registration. A broker-owned mutable attempt controller closes the
+cancellation/finalization race; admission begins the exactly-once settlement
+boundary even when a later policy guard denies dispatch.
 
 `llm_batch` is one broker operation and invokes the subcall client's batch method
 once. It is not decomposed into nested `llm_query` calls, so ordering,
@@ -131,9 +140,12 @@ run, then projects broker registrations, prompt text, Python bindings, and the
 policy accessor manifest from those same values.
 
 `ProviderService`/`BridgeProvider` carry a verified manifest plus raw operation
-calls across an interpreter boundary. The receiving host supplies its own
-effects and policy before binding. Unknown operations are rejected against the
-bound handler map, and schema/digest mismatches fail before dispatch.
+calls across an interpreter boundary. Invoke requests also carry exact portable
+execution facts; responses carry a separately validated cumulative checkpoint
+which the receiving broker applies before its sole final settlement. The
+receiving host supplies its own effects and policy before binding. Unknown
+operations are rejected against the bound handler map, and schema/digest
+mismatches fail before dispatch.
 
 The bundled SQLite source is local-mode: SELECT-only policy gate (single
 statement, masked-identifier keyword scanning, LIMIT injection, row caps,
@@ -178,8 +190,9 @@ are versioned, each by a single integer:
   that already claimed one (adapters own their response shape).
   Protocol v3 also requires one exact six-field `budget` object; missing,
   unknown, or invalid fields fail before endpoint dispatch.
-- `PROVIDER_PROTOCOL_VERSION` (currently 3) governs manifest parsing and
-  provider binding. A mismatched manifest fails before a source is live.
+- `PROVIDER_PROTOCOL_VERSION` (currently 4) governs manifest parsing,
+  context-first provider binding, and bridge invocation facts. A mismatched
+  manifest fails before a source is live.
 
 The rules: **adding an optional field is not a version bump** (the 0.5.x
 subcall cost-control knobs are the worked example — older engines ignore

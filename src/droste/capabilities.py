@@ -16,6 +16,8 @@ import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from threading import Event, Lock
+from time import monotonic
 from types import MappingProxyType
 from typing import Any, Protocol
 from uuid import uuid4
@@ -66,6 +68,7 @@ class CapabilityStatus(StrEnum):
     INVALID = "invalid"
     DENIED = "denied"
     ERROR = "error"
+    CANCELLED = "cancelled"
 
 
 class CapabilityErrorCode(StrEnum):
@@ -76,6 +79,9 @@ class CapabilityErrorCode(StrEnum):
     HANDLER_ERROR = "handler_error"
     INVALID_RESULT = "invalid_result"
     ANNOTATOR_ERROR = "annotator_error"
+    CANCELLED = "cancelled"
+    DEADLINE_EXCEEDED = "deadline_exceeded"
+    SETTLEMENT_ERROR = "settlement_error"
 
 
 @dataclass(frozen=True, slots=True)
@@ -564,6 +570,142 @@ class CapabilityCall:
 
 
 @dataclass(frozen=True, slots=True)
+class CapabilityReservation:
+    """Immutable authorization facts for one admitted capability attempt.
+
+    ``call_id`` is deliberately absent: the enclosing execution context's
+    call ID is the sole reservation identity.
+    """
+
+    tokens: int = 0
+    subcalls: int = 0
+    wall_ms: int = 0
+    depth: int = 0
+
+    def __post_init__(self) -> None:
+        for name in ("tokens", "subcalls", "wall_ms", "depth"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"capability reservation {name} must be non-negative")
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "tokens": self.tokens,
+            "subcalls": self.subcalls,
+            "wall_ms": self.wall_ms,
+            "depth": self.depth,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> CapabilityReservation:
+        expected = {"tokens", "subcalls", "wall_ms", "depth"}
+        if set(value) != expected:
+            raise ValueError("capability reservation requires tokens, subcalls, wall_ms, depth")
+        return cls(**{name: value[name] for name in expected})
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityCheckpoint:
+    """Cumulative trusted-handler usage; repeated equal facts are idempotent."""
+
+    tokens: int = 0
+    subcalls: int = 0
+
+    def __post_init__(self) -> None:
+        for name in ("tokens", "subcalls"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"capability checkpoint {name} must be non-negative")
+
+    def to_dict(self) -> dict[str, int]:
+        return {"tokens": self.tokens, "subcalls": self.subcalls}
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> CapabilityCheckpoint:
+        if set(value) != {"tokens", "subcalls"}:
+            raise ValueError("capability checkpoint requires tokens and subcalls")
+        return cls(tokens=value["tokens"], subcalls=value["subcalls"])
+
+
+class CapabilityCancelled(RuntimeError):
+    """Cooperative cancellation observed by a trusted handler."""
+
+
+class CapabilityDeadlineExceeded(RuntimeError):
+    """The caller-authorized monotonic deadline has elapsed."""
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityExecutionContext:
+    """Frozen handler context over one broker-owned mutable attempt.
+
+    Public fields are inert facts. The two methods are the only mechanisms a
+    trusted handler receives: observe cancellation/deadline, and report a
+    cumulative usage value. The handler has no ledger, trace, or callback
+    registration authority.
+    """
+
+    call_id: str
+    run_id: str
+    parent_run_id: str | None
+    deadline_monotonic: float | None
+    reservation: CapabilityReservation
+    _check: Callable[[], None] = field(repr=False, compare=False)
+    _checkpoint: Callable[[CapabilityCheckpoint], CapabilityCheckpoint] = field(
+        repr=False, compare=False
+    )
+    _is_cancelled: Callable[[], bool] = field(repr=False, compare=False)
+    _clock: Callable[[], float] = field(default=monotonic, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.call_id, str) or not self.call_id:
+            raise ValueError("capability execution context requires call_id and run_id")
+        if not isinstance(self.run_id, str) or not self.run_id:
+            raise ValueError("capability execution context requires call_id and run_id")
+        if self.parent_run_id is not None and (
+            not isinstance(self.parent_run_id, str) or not self.parent_run_id
+        ):
+            raise ValueError("capability parent_run_id must be a non-empty string or None")
+        if self.deadline_monotonic is not None and (
+            isinstance(self.deadline_monotonic, bool)
+            or not isinstance(self.deadline_monotonic, (int, float))
+            or not math.isfinite(self.deadline_monotonic)
+        ):
+            raise ValueError("capability deadline must be finite")
+        if not isinstance(self.reservation, CapabilityReservation):
+            raise TypeError("capability execution context requires a reservation")
+        if not all(
+            callable(item)
+            for item in (self._check, self._checkpoint, self._is_cancelled, self._clock)
+        ):
+            raise TypeError("capability execution context mechanisms must be callable")
+
+    def check(self) -> None:
+        self._check()
+
+    def checkpoint(self, *, tokens: int = 0, subcalls: int = 0) -> CapabilityCheckpoint:
+        return self._checkpoint(CapabilityCheckpoint(tokens=tokens, subcalls=subcalls))
+
+    @property
+    def cancellation_requested(self) -> bool:
+        return self._is_cancelled()
+
+    def to_transport_dict(self) -> dict[str, Any]:
+        remaining_ms: int | None = None
+        if self.deadline_monotonic is not None:
+            remaining_ms = max(0, round((self.deadline_monotonic - self._clock()) * 1000))
+        return {
+            "version": 1,
+            "call_id": self.call_id,
+            "run_id": self.run_id,
+            "parent_run_id": self.parent_run_id,
+            "deadline_remaining_ms": remaining_ms,
+            "reservation": self.reservation.to_dict(),
+            "cancellation_requested": self.cancellation_requested,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class CapabilityMetadata:
     """Optional facts attached by accounting/evidence integrations."""
 
@@ -836,6 +978,44 @@ class CapabilityAnnotator(Protocol):
     ) -> CapabilityMetadata: ...
 
 
+@dataclass(frozen=True, slots=True)
+class CapabilityAdmission:
+    """Facts returned by the one run-scoped admission authority."""
+
+    reservation: CapabilityReservation = CapabilityReservation()
+    deadline_monotonic: float | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reservation, CapabilityReservation):
+            raise TypeError("capability admission requires a reservation")
+        if self.deadline_monotonic is not None and (
+            isinstance(self.deadline_monotonic, bool)
+            or not isinstance(self.deadline_monotonic, (int, float))
+            or not math.isfinite(self.deadline_monotonic)
+        ):
+            raise ValueError("capability admission deadline must be finite")
+
+
+class CapabilityAttemptAuthority(Protocol):
+    """Run-scoped admission/checkpoint/settlement authority used by the broker."""
+
+    def admit(self, call: CapabilityCall) -> CapabilityAdmission | CapabilityError: ...
+
+    def checkpoint(
+        self, call: CapabilityCall, cumulative: CapabilityCheckpoint
+    ) -> CapabilityCheckpoint: ...
+
+    def settle(
+        self,
+        call: CapabilityCall,
+        result: Any,
+        error: CapabilityError | None,
+        checkpoint: CapabilityCheckpoint,
+        *,
+        attempted: bool,
+    ) -> CapabilityMetadata: ...
+
+
 class CapabilityObserver(Protocol):
     """Trace seam. Observes an immutable result envelope, never dispatches."""
 
@@ -886,6 +1066,138 @@ class CapabilityCallError(RuntimeError):
         super().__init__(f"{result.error.type}: {result.error.message}")
 
 
+class _CapabilityAttemptController:
+    """Broker-owned mutable lifecycle behind one frozen handler context."""
+
+    def __init__(
+        self,
+        call: CapabilityCall,
+        admission: CapabilityAdmission,
+        authority: CapabilityAttemptAuthority | None,
+        *,
+        clock: Callable[[], float] = monotonic,
+    ) -> None:
+        self.call = call
+        self._authority = authority
+        self._clock = clock
+        self._cancelled = Event()
+        self._lock = Lock()
+        self._checkpoint_value = CapabilityCheckpoint()
+        self._finishing = False
+        self._settled = False
+        self.context = CapabilityExecutionContext(
+            call_id=call.call_id,
+            run_id=call.run_id,
+            parent_run_id=call.parent_run_id,
+            deadline_monotonic=admission.deadline_monotonic,
+            reservation=admission.reservation,
+            _check=self.check,
+            _checkpoint=self.checkpoint,
+            _is_cancelled=self._cancelled.is_set,
+            _clock=clock,
+        )
+
+    def cancel(self) -> bool:
+        with self._lock:
+            if self._finishing or self._settled:
+                return False
+            self._cancelled.set()
+            return True
+
+    def _terminal_error_locked(self) -> CapabilityError | None:
+        if self._cancelled.is_set():
+            return CapabilityError(
+                CapabilityErrorCode.CANCELLED,
+                "CapabilityCancelled",
+                "capability call was cancelled",
+            )
+        deadline = self.context.deadline_monotonic
+        if deadline is not None and self._clock() >= deadline:
+            return CapabilityError(
+                CapabilityErrorCode.DEADLINE_EXCEEDED,
+                "CapabilityDeadlineExceeded",
+                "capability call deadline exceeded",
+            )
+        return None
+
+    def check(self) -> None:
+        with self._lock:
+            if self._finishing or self._settled:
+                raise RuntimeError("capability attempt is already finalizing")
+            error = self._terminal_error_locked()
+        if error is not None:
+            if error.code == CapabilityErrorCode.CANCELLED:
+                raise CapabilityCancelled(error.message)
+            raise CapabilityDeadlineExceeded(error.message)
+
+    def checkpoint(self, cumulative: CapabilityCheckpoint) -> CapabilityCheckpoint:
+        if not isinstance(cumulative, CapabilityCheckpoint):
+            raise TypeError("capability checkpoint requires a CapabilityCheckpoint")
+        with self._lock:
+            if self._finishing or self._settled:
+                raise RuntimeError("capability attempt is already finalizing")
+            error = self._terminal_error_locked()
+            if error is not None:
+                if error.code == CapabilityErrorCode.CANCELLED:
+                    raise CapabilityCancelled(error.message)
+                raise CapabilityDeadlineExceeded(error.message)
+            previous = self._checkpoint_value
+            if cumulative.tokens < previous.tokens or cumulative.subcalls < previous.subcalls:
+                raise ValueError("capability checkpoint cannot move backward")
+            if cumulative.tokens > self.context.reservation.tokens:
+                raise ValueError("capability checkpoint tokens exceed reservation")
+            if cumulative.subcalls > self.context.reservation.subcalls:
+                raise ValueError("capability checkpoint subcalls exceed reservation")
+            if cumulative == previous:
+                return previous
+            if self._authority is not None:
+                cumulative = self._authority.checkpoint(self.call, cumulative)
+                if not isinstance(cumulative, CapabilityCheckpoint):
+                    raise TypeError("attempt authority must return a CapabilityCheckpoint")
+            self._checkpoint_value = cumulative
+            return cumulative
+
+    def begin_finish(self) -> CapabilityError | None:
+        """Close the cancellation race and return its authoritative terminal fact."""
+
+        with self._lock:
+            if self._finishing or self._settled:
+                raise RuntimeError("capability attempt was finalized more than once")
+            error = self._terminal_error_locked()
+            self._finishing = True
+            return error
+
+    def settle(
+        self,
+        result: Any,
+        error: CapabilityError | None,
+        *,
+        attempted: bool,
+    ) -> CapabilityMetadata:
+        with self._lock:
+            if not self._finishing or self._settled:
+                raise RuntimeError("capability attempt settlement is out of order")
+            checkpoint = self._checkpoint_value
+        try:
+            metadata = (
+                self._authority.settle(
+                    self.call,
+                    result,
+                    error,
+                    checkpoint,
+                    attempted=attempted,
+                )
+                if self._authority is not None
+                else CapabilityMetadata()
+            )
+            if not isinstance(metadata, CapabilityMetadata):
+                raise TypeError("attempt authority must return CapabilityMetadata")
+            return metadata
+        finally:
+            with self._lock:
+                self._settled = True
+
+
 class CapabilityBroker:
     """Thin imperative shell around pure allowlist validation."""
 
@@ -898,6 +1210,8 @@ class CapabilityBroker:
         guard: CapabilityGuard | None = None,
         annotator: CapabilityAnnotator | None = None,
         observer: CapabilityObserver | None = None,
+        attempt_authority: CapabilityAttemptAuthority | None = None,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         self._manifest = CapabilityManifest(tuple(item.descriptor for item in registrations))
         self._handlers = MappingProxyType(
@@ -908,6 +1222,10 @@ class CapabilityBroker:
         self._guard = guard
         self._annotator = annotator
         self._observer = observer
+        self._attempt_authority = attempt_authority
+        self._clock = clock
+        self._active_attempts: dict[str, _CapabilityAttemptController] = {}
+        self._active_lock = Lock()
 
     @property
     def run_id(self) -> str:
@@ -915,6 +1233,13 @@ class CapabilityBroker:
 
     def describe(self) -> CapabilityManifest:
         return self._manifest
+
+    def cancel(self, call_id: str) -> bool:
+        """Request cooperative cancellation for one currently admitted call."""
+
+        with self._active_lock:
+            attempt = self._active_attempts.get(call_id)
+        return attempt.cancel() if attempt is not None else False
 
     def call(self, capability_id: CapabilityId, *args: Any, **kwargs: Any) -> CapabilityResult:
         call_id = str(uuid4())
@@ -963,14 +1288,96 @@ class CapabilityBroker:
             return self._finish(
                 call, status=CapabilityStatus.INVALID, error=validated, annotate=False
             )
+        with self._active_lock:
+            duplicate = call.call_id in self._active_attempts
+        if duplicate:
+            return self._finish(
+                call,
+                status=CapabilityStatus.INVALID,
+                error=CapabilityError(
+                    CapabilityErrorCode.INVALID_CALL,
+                    "DuplicateCapabilityCall",
+                    "call_id is already active",
+                ),
+                annotate=False,
+            )
+
+        try:
+            admission = (
+                self._attempt_authority.admit(call)
+                if self._attempt_authority is not None
+                else CapabilityAdmission()
+            )
+        except Exception as exc:
+            return self._finish(
+                call,
+                status=CapabilityStatus.DENIED,
+                error=CapabilityError(
+                    CapabilityErrorCode.GUARD_ERROR,
+                    _exception_type_name(exc),
+                    str(exc),
+                ),
+                annotate=False,
+            )
+        if isinstance(admission, CapabilityError):
+            return self._finish(
+                call,
+                status=CapabilityStatus.DENIED,
+                error=admission,
+                annotate=False,
+            )
+        if not isinstance(admission, CapabilityAdmission):
+            return self._finish(
+                call,
+                status=CapabilityStatus.DENIED,
+                error=CapabilityError(
+                    CapabilityErrorCode.GUARD_ERROR,
+                    "InvalidCapabilityAdmission",
+                    "attempt authority must return CapabilityAdmission or CapabilityError",
+                ),
+                annotate=False,
+            )
+        attempt = _CapabilityAttemptController(
+            call, admission, self._attempt_authority, clock=self._clock
+        )
+        with self._active_lock:
+            raced = call.call_id in self._active_attempts
+            if not raced:
+                self._active_attempts[call.call_id] = attempt
+        if raced:
+            return self._finish(
+                call,
+                status=CapabilityStatus.INVALID,
+                error=CapabilityError(
+                    CapabilityErrorCode.INVALID_CALL,
+                    "DuplicateCapabilityCall",
+                    "call_id is already active",
+                ),
+                annotate=False,
+                attempt=attempt,
+                attempted=False,
+                remove_active=False,
+            )
+
+        try:
+            attempt.check()
+        except (CapabilityCancelled, CapabilityDeadlineExceeded) as exc:
+            return self._finish(
+                call,
+                status=CapabilityStatus.CANCELLED,
+                error=self._cooperative_error(exc),
+                annotate=False,
+                attempt=attempt,
+                attempted=False,
+            )
 
         if self._guard is not None:
             try:
                 denial = self._guard(call)
                 if denial is not None and not isinstance(denial, CapabilityError):
                     raise TypeError("capability guard must return CapabilityError or None")
-            except Exception as exc:
-                return self._finish(
+            except BaseException as exc:
+                envelope = self._finish(
                     call,
                     status=CapabilityStatus.DENIED,
                     error=CapabilityError(
@@ -979,24 +1386,61 @@ class CapabilityBroker:
                         str(exc),
                     ),
                     annotate=False,
+                    attempt=attempt,
+                    attempted=False,
                 )
+                if not isinstance(exc, Exception):
+                    raise
+                return envelope
             if denial is not None:
                 return self._finish(
-                    call, status=CapabilityStatus.DENIED, error=denial, annotate=False
+                    call,
+                    status=CapabilityStatus.DENIED,
+                    error=denial,
+                    annotate=False,
+                    attempt=attempt,
+                    attempted=False,
                 )
 
         try:
+            attempt.check()
+        except (CapabilityCancelled, CapabilityDeadlineExceeded) as exc:
+            return self._finish(
+                call,
+                status=CapabilityStatus.CANCELLED,
+                error=self._cooperative_error(exc),
+                annotate=False,
+                attempt=attempt,
+                attempted=False,
+            )
+
+        try:
             outcome = self._handlers[validated.capability_id](
+                attempt.context,
                 *(thaw_value(item) for item in call.args),
                 **{key: thaw_value(item) for key, item in call.kwargs.items()},
             )
         except BaseException as exc:
-            error = CapabilityError(
-                CapabilityErrorCode.HANDLER_ERROR,
-                _exception_type_name(exc),
-                str(exc),
+            error = (
+                self._cooperative_error(exc)
+                if isinstance(exc, (CapabilityCancelled, CapabilityDeadlineExceeded))
+                else CapabilityError(
+                    CapabilityErrorCode.HANDLER_ERROR,
+                    _exception_type_name(exc),
+                    str(exc),
+                )
             )
-            envelope = self._finish(call, status=CapabilityStatus.ERROR, error=error)
+            envelope = self._finish(
+                call,
+                status=(
+                    CapabilityStatus.CANCELLED
+                    if isinstance(exc, (CapabilityCancelled, CapabilityDeadlineExceeded))
+                    else CapabilityStatus.ERROR
+                ),
+                error=error,
+                attempt=attempt,
+                attempted=True,
+            )
             if not isinstance(exc, Exception):
                 # Cancellation and process-control exits keep their propagation
                 # semantics, but the post-attempt finalizer still runs exactly once.
@@ -1013,13 +1457,25 @@ class CapabilityBroker:
                     "InvalidCapabilityOutcome",
                     "normalized handler did not return CapabilityOutcome",
                 ),
+                attempt=attempt,
+                attempted=True,
             )
         if outcome.error is not None:
             return self._finish(
                 call,
-                status=CapabilityStatus.ERROR,
+                status=(
+                    CapabilityStatus.CANCELLED
+                    if outcome.error.code
+                    in {
+                        CapabilityErrorCode.CANCELLED,
+                        CapabilityErrorCode.DEADLINE_EXCEEDED,
+                    }
+                    else CapabilityStatus.ERROR
+                ),
                 error=outcome.error,
                 provider_metadata=outcome.metadata,
+                attempt=attempt,
+                attempted=True,
             )
         try:
             frozen_result = freeze_value(outcome.result)
@@ -1033,6 +1489,8 @@ class CapabilityBroker:
                     str(exc),
                 ),
                 provider_metadata=outcome.metadata,
+                attempt=attempt,
+                attempted=True,
             )
             if not isinstance(exc, Exception):
                 raise
@@ -1042,6 +1500,22 @@ class CapabilityBroker:
             status=CapabilityStatus.OK,
             result=frozen_result,
             provider_metadata=outcome.metadata,
+            attempt=attempt,
+            attempted=True,
+        )
+
+    @staticmethod
+    def _cooperative_error(exc: BaseException) -> CapabilityError:
+        if isinstance(exc, CapabilityCancelled):
+            return CapabilityError(
+                CapabilityErrorCode.CANCELLED,
+                "CapabilityCancelled",
+                str(exc) or "capability call was cancelled",
+            )
+        return CapabilityError(
+            CapabilityErrorCode.DEADLINE_EXCEEDED,
+            "CapabilityDeadlineExceeded",
+            str(exc) or "capability call deadline exceeded",
         )
 
     def _finish(
@@ -1053,21 +1527,46 @@ class CapabilityBroker:
         error: CapabilityError | None = None,
         annotate: bool = True,
         provider_metadata: CapabilityMetadata | None = None,
+        attempt: _CapabilityAttemptController | None = None,
+        attempted: bool = False,
+        remove_active: bool = True,
     ) -> CapabilityResult:
         metadata = provider_metadata or CapabilityMetadata()
         annotation_error: CapabilityError | None = None
+        annotation_control: BaseException | None = None
+        if attempt is not None:
+            terminal_error = attempt.begin_finish()
+            if terminal_error is not None:
+                status = CapabilityStatus.CANCELLED
+                error = terminal_error
+                result = None
         if annotate and self._annotator is not None:
             try:
                 finalized = self._annotator(call, result, error)
                 if not isinstance(finalized, CapabilityMetadata):
                     raise TypeError("capability annotator must return CapabilityMetadata")
                 metadata = metadata.merged_with(finalized)
-            except Exception as exc:
+            except BaseException as exc:
                 annotation_error = CapabilityError(
                     CapabilityErrorCode.ANNOTATOR_ERROR,
                     _exception_type_name(exc),
                     str(exc),
                 )
+                if not isinstance(exc, Exception):
+                    annotation_control = exc
+        if attempt is not None:
+            try:
+                metadata = metadata.merged_with(attempt.settle(result, error, attempted=attempted))
+            except Exception as exc:
+                annotation_error = CapabilityError(
+                    CapabilityErrorCode.SETTLEMENT_ERROR,
+                    _exception_type_name(exc),
+                    str(exc),
+                )
+            finally:
+                if remove_active:
+                    with self._active_lock:
+                        self._active_attempts.pop(call.call_id, None)
         delivery_error: CapabilityError | None = None
         descriptor = self._manifest.find(call.capability_id)
         if status is CapabilityStatus.OK and annotation_error is None and descriptor is not None:
@@ -1100,6 +1599,8 @@ class CapabilityBroker:
             child_run_id=metadata.child_run_id,
         )
         self.emit(envelope)
+        if annotation_control is not None:
+            raise annotation_control
         return envelope
 
     def emit(self, result: CapabilityResult) -> None:
@@ -1262,10 +1763,23 @@ def subcall_registrations(subcalls: SubcallClient) -> tuple[CapabilityRegistrati
     llm_batch_with_errors = getattr(subcalls, "llm_batch_with_errors", None)
     if not callable(llm_batch_with_errors):
         raise TypeError("SubcallClient must implement callable llm_batch_with_errors")
+
+    def llm_query(context: CapabilityExecutionContext, *args: Any, **kwargs: Any) -> Any:
+        context.check()
+        return subcalls.llm_query(*args, **kwargs)
+
+    def llm_batch(context: CapabilityExecutionContext, *args: Any, **kwargs: Any) -> Any:
+        context.check()
+        return subcalls.llm_batch(*args, **kwargs)
+
+    def batch_with_errors(context: CapabilityExecutionContext, *args: Any, **kwargs: Any) -> Any:
+        context.check()
+        return llm_batch_with_errors(*args, **kwargs)
+
     return (
-        CapabilityRegistration(LLM_QUERY_CAPABILITY, subcalls.llm_query),
-        CapabilityRegistration(LLM_BATCH_CAPABILITY, subcalls.llm_batch),
-        CapabilityRegistration(LLM_BATCH_WITH_ERRORS_CAPABILITY, llm_batch_with_errors),
+        CapabilityRegistration(LLM_QUERY_CAPABILITY, llm_query),
+        CapabilityRegistration(LLM_BATCH_CAPABILITY, llm_batch),
+        CapabilityRegistration(LLM_BATCH_WITH_ERRORS_CAPABILITY, batch_with_errors),
     )
 
 
@@ -1313,21 +1827,26 @@ def broker_subcalls(subcalls: SubcallClient, ledger: Any) -> BrokeredSubcallClie
     return BrokeredSubcallClient(
         CapabilityBroker(
             subcall_registrations(subcalls),
-            guard=accounting.guard,
-            annotator=accounting.annotate,
+            attempt_authority=accounting,
         ),
         metadata_source=subcalls,
     )
 
 
 __all__ = [
+    "CapabilityAdmission",
     "CapabilityAnnotator",
+    "CapabilityAttemptAuthority",
     "CapabilityBroker",
     "CapabilityCall",
     "CapabilityCallError",
+    "CapabilityCancelled",
+    "CapabilityCheckpoint",
     "CapabilityDescriptor",
     "CapabilityError",
     "CapabilityErrorCode",
+    "CapabilityDeadlineExceeded",
+    "CapabilityExecutionContext",
     "CapabilityGuard",
     "CapabilityId",
     "CapabilityKind",
@@ -1337,6 +1856,7 @@ __all__ = [
     "CapabilityObserver",
     "CapabilityOutcome",
     "CapabilityRegistration",
+    "CapabilityReservation",
     "CapabilityResult",
     "CapabilityResultHandle",
     "CapabilityStatus",

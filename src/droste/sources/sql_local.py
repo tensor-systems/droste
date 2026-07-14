@@ -483,8 +483,19 @@ SQLITE_PROVIDER_MANIFEST = ProviderManifest(
 
 def _bind_sqlite(source: ConfiguredSource, context: Any = None) -> ProviderRuntime:
     runtime = LocalSqlRuntime(source.config_dict(), context)
+
+    def query(execution, sql: str):
+        execution.check()
+        result = runtime.query(sql)
+        execution.check()
+        return result
+
+    def schema(execution):
+        execution.check()
+        return runtime.get_schema()
+
     return ProviderRuntime(
-        handlers={"query": runtime.query, "schema": runtime.get_schema},
+        handlers={"query": query, "schema": schema},
         source_description=runtime.get_schema(),
         stats=lambda: {"queries_made": runtime.queries_made},
     )

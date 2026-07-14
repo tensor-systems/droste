@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..capabilities import CapabilityAnnotator, CapabilityGuard, CapabilityObserver
+from ..capabilities import (
+    CapabilityAnnotator,
+    CapabilityAttemptAuthority,
+    CapabilityGuard,
+    CapabilityObserver,
+)
 from ..execution.budget import BudgetLedger
 from ..protocols.environment import ExecutionResult
 from ..protocols.subcall_client import SubcallClient
@@ -35,6 +40,7 @@ class PyodideEnvironment(RunnerEnvironment):
         capability_guard: CapabilityGuard | None = None,
         capability_annotator: CapabilityAnnotator | None = None,
         capability_observer: CapabilityObserver | None = None,
+        capability_attempt_authority: CapabilityAttemptAuthority | None = None,
     ) -> None:
         if exec_timeout_ms != 0:
             raise ValueError("PyodideEnvironment cannot enforce exec_timeout_ms")
@@ -50,6 +56,7 @@ class PyodideEnvironment(RunnerEnvironment):
             capability_guard=capability_guard,
             capability_annotator=capability_annotator,
             capability_observer=capability_observer,
+            capability_attempt_authority=capability_attempt_authority,
         )
         self._executor = RawExecutor(
             db=None,

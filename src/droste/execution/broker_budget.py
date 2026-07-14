@@ -6,13 +6,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..capabilities import (
-    CapabilityAnnotator,
+    CapabilityAdmission,
     CapabilityCall,
+    CapabilityCheckpoint,
     CapabilityError,
-    CapabilityGuard,
     CapabilityKind,
     CapabilityMetadata,
     CapabilityMetric,
+    CapabilityReservation,
     thaw_value,
 )
 from .budget import (
@@ -76,18 +77,25 @@ def _actual_request(
     )
 
 
+def _reservation(request: BudgetRequest) -> CapabilityReservation:
+    return CapabilityReservation(
+        tokens=request.tokens,
+        subcalls=request.subcalls,
+        wall_ms=request.wall_ms,
+        depth=request.depth,
+    )
+
+
 @dataclass(slots=True)
 class BrokerBudget:
-    """One composed guard/finalizer; no second enforcement path."""
+    """The one budget authority composed into a capability broker."""
 
     ledger: BudgetLedger
-    guard_after_budget: CapabilityGuard | None = None
-    annotator_after_budget: CapabilityAnnotator | None = None
 
-    def guard(self, call: CapabilityCall) -> CapabilityError | None:
+    def admit(self, call: CapabilityCall) -> CapabilityAdmission | CapabilityError:
         request = capability_budget_request(call, self.ledger)
         try:
-            self.ledger.reserve(
+            reservation = self.ledger.reserve(
                 call.call_id,
                 request,
                 preserve_tokens=(
@@ -98,43 +106,46 @@ class BrokerBudget:
                 through_deadline=True,
             )
         except BudgetExhausted as exc:
-            return CapabilityError(
-                "budget_exhausted",
-                "BudgetExhausted",
-                str(exc),
-            )
-        if self.guard_after_budget is None:
-            return None
-        try:
-            denial = self.guard_after_budget(call)
-            if denial is not None:
-                self.ledger.release(call.call_id)
-            return denial
-        except BaseException:
-            # The broker skips its annotator for guard failures, so this
-            # composed lifecycle must release before propagating.
-            self.ledger.release(call.call_id)
-            raise
+            return CapabilityError("budget_exhausted", "BudgetExhausted", str(exc))
+        return CapabilityAdmission(
+            reservation=_reservation(reservation.request),
+            deadline_monotonic=(
+                reservation.started_at + reservation.request.wall_ms / 1000
+                if reservation.request.wall_ms
+                else None
+            ),
+        )
 
-    def annotate(
+    def checkpoint(
+        self, call: CapabilityCall, cumulative: CapabilityCheckpoint
+    ) -> CapabilityCheckpoint:
+        committed = self.ledger.checkpoint(
+            call.call_id,
+            BudgetRequest(tokens=cumulative.tokens, subcalls=cumulative.subcalls),
+        )
+        return CapabilityCheckpoint(tokens=committed.tokens, subcalls=committed.subcalls)
+
+    def settle(
         self,
         call: CapabilityCall,
         result: Any,
         error: CapabilityError | None,
+        checkpoint: CapabilityCheckpoint,
+        *,
+        attempted: bool,
     ) -> CapabilityMetadata:
+        if not attempted:
+            self.ledger.release(call.call_id)
+            return CapabilityMetadata()
         reserved = self.ledger.reservation(call.call_id).request
-        metadata = CapabilityMetadata()
-        downstream_error: BaseException | None = None
-        if self.annotator_after_budget is not None:
-            try:
-                metadata = self.annotator_after_budget(call, result, error)
-            except BaseException as exc:
-                downstream_error = exc
-        actual = self.ledger.commit(
-            call.call_id,
-            _actual_request(call, result, error, reserved),
+        inferred = _actual_request(call, result, error, reserved)
+        actual = BudgetRequest(
+            tokens=max(inferred.tokens, checkpoint.tokens),
+            subcalls=max(inferred.subcalls, checkpoint.subcalls),
+            depth=inferred.depth,
         )
-        budget_metadata = CapabilityMetadata(
+        committed = self.ledger.commit(call.call_id, actual)
+        return CapabilityMetadata(
             budget_delta=tuple(
                 CapabilityMetric(
                     name,
@@ -146,13 +157,10 @@ class BrokerBudget:
                     }[name],
                 )
                 for name, amount in (
-                    ("tokens", actual.tokens),
-                    ("subcalls", actual.subcalls),
-                    ("wall_ms", actual.wall_ms),
+                    ("tokens", committed.tokens),
+                    ("subcalls", committed.subcalls),
+                    ("wall_ms", committed.wall_ms),
                 )
                 if amount
             )
         )
-        if downstream_error is not None:
-            raise downstream_error
-        return metadata.merged_with(budget_metadata)

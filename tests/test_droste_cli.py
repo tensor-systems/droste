@@ -147,9 +147,17 @@ def test_db_exposes_sqlite_as_source(tmp_path):
     registry = _load_sql_registry(str(db))
     source = registry.sources[0]
     assert source.source.source_id == "db"
-    assert "t(" in source.runtime.handlers["schema"]()
-    rows = source.runtime.handlers["query"]("SELECT name FROM t")
-    assert rows == [{"name": "ada"}]
+    from droste import CapabilityBroker
+    from droste.capabilities import thaw_value
+
+    registrations = source.capability_registrations()
+    broker = CapabilityBroker(registrations)
+    schema = broker.call(registrations[1].descriptor.capability_id)
+    assert schema.ok is True
+    assert "t(" in schema.result
+    rows = broker.call(registrations[0].descriptor.capability_id, "SELECT name FROM t")
+    assert rows.ok is True
+    assert thaw_value(rows.result) == [{"name": "ada"}]
 
 
 def test_db_directory_is_usage_error(tmp_path, capsys):

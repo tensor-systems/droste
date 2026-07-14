@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -30,6 +31,7 @@ class ExecutionContext:
     stats: ExecutionStats = field(default_factory=ExecutionStats)
     trace: TraceRecorder = field(default_factory=TraceRecorder)
     ledger: BudgetLedger = field(default_factory=lambda: BudgetLedger(Budget()))
+    _emission_lock: RLock = field(default_factory=RLock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.ledger.budget != self.config.budget:
@@ -59,20 +61,22 @@ class ExecutionContext:
                 "droste.execution.progress.EVENT_TYPES and the relay's events.ts "
                 "vocabulary (kept in lockstep by tests/test_event_vocabulary.py)"
             )
-        value = self.trace.append(event)
-        if self.config.on_event is not None:
-            self.config.on_event(value.as_dict())
+        with self._emission_lock:
+            value = self.trace.append(event)
+            if self.config.on_event is not None:
+                self.config.on_event(value.as_dict())
 
     def finish_trace(self, terminal: dict[str, Any]) -> RunRecord:
         """Emit the terminal value and return one policy-resolved run record."""
-        prior_count = len(self.trace.events)
-        record = self.trace.finish(terminal)
-        if len(self.trace.events) > prior_count:
-            if self.config.on_event is not None:
-                self.config.on_event(self.trace.events[-1].as_dict())
-            if self.config.on_run_record is not None:
-                self.config.on_run_record(record)
-        return record
+        with self._emission_lock:
+            prior_count = len(self.trace.events)
+            record = self.trace.finish(terminal)
+            if len(self.trace.events) > prior_count:
+                if self.config.on_event is not None:
+                    self.config.on_event(self.trace.events[-1].as_dict())
+                if self.config.on_run_record is not None:
+                    self.config.on_run_record(record)
+            return record
 
     def record_root_attempt(self) -> None:
         self.stats.root_requests += 1
