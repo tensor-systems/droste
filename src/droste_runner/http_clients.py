@@ -10,7 +10,6 @@ import urllib.request
 from typing import Any
 
 from droste.clients.errors import http_error_excerpt, redact_secrets
-from droste.clients.openai_compat import DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS
 from droste.clients.useragent import USER_AGENT
 from droste.exceptions import SubcallBudgetExceeded
 from droste.protocols.llm_client import TokenUsage
@@ -60,9 +59,11 @@ class HTTPSubcallClient(SubcallClient):
         self._reasoning_effort = str(reasoning_effort or "")
 
     @property
-    def output_token_limit(self) -> int | None:
-        """Effective callback output limit, including its default."""
-        return self._max_output_tokens or DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS
+    def output_token_limit(self) -> int:
+        """Explicit per-call limit, when the runner controls it."""
+        if self._max_output_tokens <= 0:
+            raise AttributeError("the callback owns the output token default")
+        return self._max_output_tokens
 
     def _next_seq(self) -> int:
         with self._seq_lock:
