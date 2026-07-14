@@ -70,6 +70,15 @@ def test_native_config_can_preserve_distinct_loop_and_executor_output_caps() -> 
     assert environment.capabilities()["max_output_chars"] == 100_000
 
 
+def test_native_config_rejects_an_executor_cap_below_the_loop_cap() -> None:
+    with pytest.raises(ValueError, match="greater than or equal"):
+        EnvironmentConfig(
+            kind="native",
+            max_output_chars=25_000,
+            executor_max_output_chars=10_000,
+        )
+
+
 def test_native_environment_owns_signal_timeout_wiring(monkeypatch) -> None:
     timer_calls: list[tuple[int, float]] = []
     signal_calls: list[tuple[int, object]] = []

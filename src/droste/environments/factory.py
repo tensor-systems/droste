@@ -55,6 +55,13 @@ class EnvironmentConfig:
             raise ValueError("exec_timeout_ms must be non-negative")
         if self.executor_max_output_chars is not None and self.executor_max_output_chars < 0:
             raise ValueError("executor_max_output_chars must be non-negative")
+        if (
+            self.executor_max_output_chars is not None
+            and self.executor_max_output_chars < self.max_output_chars
+        ):
+            raise ValueError(
+                "executor_max_output_chars must be greater than or equal to max_output_chars"
+            )
         if self.kind == "pyodide":
             if self.exec_timeout_ms != 0:
                 raise ValueError(

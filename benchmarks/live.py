@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from droste import (
+    DEFAULT_MAX_OUTPUT_CHARS,
     EnvironmentConfig,
     ModelRelayClient,
     ModelRelaySubcallClient,
@@ -369,6 +370,7 @@ def _droste_run(
         kind="native",
         max_calls=arm.limits.max_subcalls,
         max_iterations=arm.limits.max_iterations,
+        max_output_chars=DEFAULT_MAX_OUTPUT_CHARS,
         # Preserve the historical two-stage limits: the loop gates at its
         # 25k default while the native stdout buffer allows up to 100k so the
         # loop owns the repairable SandboxError at the lower threshold.
