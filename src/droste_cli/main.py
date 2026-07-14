@@ -489,6 +489,7 @@ def run_ask(args: argparse.Namespace) -> int:
     config = RLMConfig(
         max_iterations=environment_config.max_iterations,
         max_calls=environment_config.max_calls,
+        max_output_chars=environment_config.max_output_chars,
         root_model=args.model,
         # The full loop dump (code, outputs, responses) is --trace, rendered
         # by the _trace_sink above from structured events; the core no longer

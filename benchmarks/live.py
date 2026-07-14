@@ -429,6 +429,7 @@ def _droste_run(
             config=RLMConfig(
                 max_iterations=environment_config.max_iterations,
                 max_calls=environment_config.max_calls,
+                max_output_chars=environment_config.max_output_chars,
                 root_model=arm.model.root_model,
                 policy_hints=PolicyHints(semantic=semantic),
             ),

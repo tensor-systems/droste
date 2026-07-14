@@ -44,10 +44,10 @@ class PyodideEnvironment(RunnerEnvironment):
         )
 
     def execute(self, code: str) -> ExecutionResult:
-        stdout = self._executor.execute(code)
+        output = self._executor.execute_with_output(code)
         return ExecutionResult(
-            stdout=stdout,
-            stderr="",
+            stdout=output.stdout,
+            stderr=output.stderr,
             timed_out=False,
             exit_code=0,
             files_written=[],

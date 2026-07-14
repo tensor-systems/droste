@@ -118,11 +118,15 @@ def test_pyodide_environment_uses_shared_raw_namespace_without_signal_timers(
     environment = _environment(config)
 
     result = environment.execute(
-        "answer = {'content': 'done', 'ready': True}\nprint('unbounded here')"
+        "import sys\n"
+        "answer = {'content': 'done', 'ready': True}\n"
+        "print('unbounded here')\n"
+        "print('warning', file=sys.stderr)"
     )
 
     assert isinstance(environment, PyodideEnvironment)
     assert result.stdout == "unbounded here\n"
+    assert result.stderr == "warning\n"
     assert environment.globals()["answer"] == {"content": "done", "ready": True}
     assert result.timed_out is False
 
@@ -144,6 +148,10 @@ def test_host_entrypoints_use_factory_instead_of_copying_environment_wiring() ->
         source = path.read_text(encoding="utf-8")
         assert "RunnerEnvironment(" not in source, path
         assert "create_execution_context(" not in source, path
+
+    for path in host_paths[:3]:
+        source = path.read_text(encoding="utf-8")
+        assert "max_output_chars=environment_config.max_output_chars" in source, path
 
     pyodide_adapter = host_paths[-1].read_text(encoding="utf-8")
     assert 'kind="pyodide"' in pyodide_adapter

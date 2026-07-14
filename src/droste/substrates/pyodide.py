@@ -36,6 +36,14 @@ _run_code = builtins.exec
 # --------------------------------------------------------------------------- #
 # RawExecutor — matches RestrictedExecutor.execute(code, extra_globals) -> str
 # --------------------------------------------------------------------------- #
+@dataclasses.dataclass(frozen=True, slots=True)
+class RawExecutionOutput:
+    """Captured interpreter streams returned as values to environment adapters."""
+
+    stdout: str
+    stderr: str
+
+
 class RawExecutor:
     # max_output_chars is accepted for factory-signature parity with
     # RestrictedExecutor but deliberately NOT enforced here (#44): the output
@@ -56,13 +64,23 @@ class RawExecutor:
         self._namespace = namespace if namespace is not None else {}
 
     def execute(self, code: str, extra_globals: dict[str, Any] | None = None) -> str:
+        """Compatibility API returning only stdout."""
+        return self.execute_with_output(code, extra_globals).stdout
+
+    def execute_with_output(
+        self,
+        code: str,
+        extra_globals: dict[str, Any] | None = None,
+    ) -> RawExecutionOutput:
+        """Execute code and return both captured streams."""
         if extra_globals:
             self._namespace.update(extra_globals)
-        buf = io.StringIO()
+        stdout = io.StringIO()
+        stderr = io.StringIO()
         compiled = compile(code, "<rlm>", "exec")
-        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             _run_code(compiled, self._namespace)
-        return buf.getvalue()
+        return RawExecutionOutput(stdout=stdout.getvalue(), stderr=stderr.getvalue())
 
     def close(self) -> None:  # parity with RestrictedExecutor
         pass
