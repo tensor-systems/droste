@@ -34,6 +34,28 @@ def test_run_rlm_basic():
     assert result.answer_metadata == {}
 
 
+def test_non_contract_plain_response_is_returned_as_answer():
+    response = "A direct answer without an executable code block."
+    result = run_rlm(
+        question="test",
+        environment=MockEnvironment(),
+        root_llm=MockLLMClient(
+            responses=[
+                MockResponse(
+                    text=response,
+                    usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                )
+            ]
+        ),
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=1, enforce_contract=False),
+    )
+
+    assert result.answer == response
+    assert result.ready is False
+    assert result.trajectory == []
+
+
 def test_run_rlm_preserves_confirmed_json_answer_metadata():
     mock_llm = MockLLMClient(
         responses=[
@@ -233,6 +255,7 @@ def test_run_rlm_rebound_answer_in_repaired_code_registers_ready():
     assert result.ready
     assert result.answer == "fixed"
     assert result.iterations == 1  # repair happened within iteration 1
+    assert [entry.execution_status for entry in result.trajectory] == ["success"]
 
 
 def test_failed_rebound_answer_cannot_confirm_through_noop_repair():

@@ -81,6 +81,50 @@ def test_run_reports_actual_subcall_count() -> None:
     assert response["extracted"] is False
     assert response["recovered_error"] is None
     assert response["answer_metadata"] == {"evidence_ids": ["classification-1"]}
+    assert response["trajectory"][0]["execution_status"] == "success"
+
+
+def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> None:
+    import droste_runner.runner as runner_module
+    from droste.loop.step import RLMResult
+    from droste.loop.trajectory import IterationRecord
+
+    execution_result = "ERROR: legitimate application output\n"
+
+    def fake_run_rlm(*args: Any, **kwargs: Any) -> RLMResult:
+        return RLMResult(
+            answer=execution_result,
+            ready=True,
+            iterations=1,
+            tokens_used=2,
+            sub_calls_made=0,
+            trajectory=[
+                IterationRecord(
+                    iteration=1,
+                    llm_input=[{"role": "user", "content": "q"}],
+                    llm_output="```python\nprint('x')\n```",
+                    code_executed="print('x')",
+                    execution_result=execution_result,
+                    tokens_used=2,
+                    execution_status="success",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(runner_module, "run_rlm", fake_run_rlm)
+    response = runner_module.run(
+        {
+            "protocol_version": 1,
+            "model": "test-model",
+            "question": "q",
+            "token": "unused",
+            "root_endpoint": "http://127.0.0.1:1/root",
+            "subcall_endpoint": "http://127.0.0.1:1/subcall",
+        }
+    )
+
+    assert response["trajectory"][0]["execution_result"] == execution_result
+    assert response["trajectory"][0]["execution_status"] == "success"
 
 
 def _client(max_calls: int) -> tuple[HTTPSubcallClient, Any]:

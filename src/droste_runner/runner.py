@@ -1135,6 +1135,7 @@ def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
                 "llm_output": entry.llm_output,
                 "code_executed": entry.code_executed,
                 "execution_result": entry.execution_result,
+                "execution_status": entry.execution_status,
                 "tokens_used": entry.tokens_used,
             }
             for entry in result.trajectory

@@ -458,6 +458,7 @@ def test_terminal_execution_error_extracts_partial_answer() -> None:
     assert "usable draft" in llm.calls[-1][1]["content"]
     assert "bad kwarg" in llm.calls[-1][1]["content"]
     assert "still bad" in llm.calls[-1][1]["content"]
+    assert "Status: error" in llm.calls[-1][1]["content"]
 
 
 def test_failed_only_trajectory_without_draft_skips_extraction() -> None:
@@ -512,6 +513,37 @@ def test_successful_error_prefixed_stdout_is_extractable_evidence() -> None:
     assert result.extracted is True
     assert result.answer == "Recovered analysis from the successful step."
     assert len(llm.calls) == 2
+    assert result.trajectory[0].execution_status == "success"
+    assert "Status: success" in llm.calls[-1][1]["content"]
+    assert "Output:\nERROR: line from analyzed log" in llm.calls[-1][1]["content"]
+
+
+def test_successful_ready_error_prefixed_stdout_is_the_answer() -> None:
+    class ErrorStdoutEnvironment(MockEnvironment):
+        def execute(self, code: str) -> ExecutionResult:
+            super().execute(code)
+            return ExecutionResult(
+                stdout="ERROR: line from analyzed log",
+                stderr="",
+                timed_out=False,
+                exit_code=0,
+                files_written=[],
+            )
+
+    llm = RecordingLLMClient(_responses("""```python\nanswer['ready'] = True\n```"""))
+    result = run_rlm(
+        question="q",
+        environment=ErrorStdoutEnvironment(),
+        root_llm=llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=1),
+    )
+
+    assert result.ready is True
+    assert result.answer == "ERROR: line from analyzed log"
+    assert len(llm.calls) == 1
+    assert result.trajectory[0].execution_result == "ERROR: line from analyzed log"
+    assert result.trajectory[0].execution_status == "success"
 
 
 def test_failed_attempt_is_retained_when_repair_root_call_fails() -> None:
@@ -530,6 +562,7 @@ def test_failed_attempt_is_retained_when_repair_root_call_fails() -> None:
     assert result.error.type == "RuntimeError"
     assert len(result.trajectory) == 1
     assert "boom" in result.trajectory[0].execution_result
+    assert result.trajectory[0].execution_status == "error"
 
 
 def test_mid_run_failed_attempts_remain_in_ready_trajectory() -> None:
@@ -554,6 +587,11 @@ def test_mid_run_failed_attempts_remain_in_ready_trajectory() -> None:
     assert [entry.iteration for entry in result.trajectory] == [1, 1, 2]
     assert result.trajectory[0].execution_result.startswith("ERROR:")
     assert result.trajectory[1].execution_result.startswith("ERROR:")
+    assert [entry.execution_status for entry in result.trajectory] == [
+        "error",
+        "error",
+        "success",
+    ]
 
 
 def test_terminal_subcall_budget_error_extracts_partial_answer() -> None:

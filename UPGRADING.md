@@ -13,6 +13,17 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.10.6)
 
+### Trajectory execution status is explicit
+
+`IterationRecord` and each built-in runner trajectory entry now include the
+additive string field `execution_status`, currently `"success"` or `"error"`.
+Use it instead of interpreting the text in `execution_result`: successful
+stdout may legitimately begin with `ERROR:`. The existing `execution_result`
+field and runner protocol version are unchanged.
+Direct positional construction that omits the new field remains accepted and
+defaults conservatively to `"error"`; engine-created records always set the
+status from their typed step outcome.
+
 ### Semantic structured batches fail closed when incomplete
 
 `PolicyHints(semantic=True)` now keeps any `llm_batch_json` result with

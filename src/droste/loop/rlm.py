@@ -34,7 +34,7 @@ from .step import (
     finalize,
     record_iteration,
 )
-from .trajectory import IterationRecord
+from .trajectory import ExecutionStatus, IterationRecord
 
 __all__ = ["RLMConfig", "RLMResult", "run_rlm", "EMPTY_OUTPUT_NUDGE"]
 
@@ -121,6 +121,7 @@ def _trajectory_summary(
             output = _truncate(raw_output, _EXTRACT_OUTPUT_CHARS)
         parts.append(
             f"--- Iteration {entry.iteration} ---\n"
+            f"Status: {entry.execution_status}\n"
             f"Code:\n{_truncate(entry.code_executed, _EXTRACT_CODE_CHARS)}\n"
             f"Output:\n{output}"
         )
@@ -289,6 +290,7 @@ def run_rlm(
     iterations = 0
     last_output = ""
     last_response = ""
+    last_execution_status: ExecutionStatus | None = None
     error: RLMError | None = None
     answer_metadata: dict[str, Any] = {}
 
@@ -310,7 +312,7 @@ def run_rlm(
 
     def early_result(run_error: RLMError | None) -> RLMResult:
         return finalize(
-            answer_text=_best_answer(answer, last_output, last_response),
+            answer_text=_best_answer(answer, last_output, last_response, last_execution_status),
             answer=answer,
             iterations=iterations,
             context=context,
@@ -373,7 +375,9 @@ def run_rlm(
                     usage = repair_usage
                 else:
                     context.emit_progress("No code block found, returning response as answer")
-                    final_answer = _best_answer(answer, last_output, last_response) or response
+                    final_answer = _best_answer(
+                        answer, last_output, last_response, last_execution_status
+                    )
                     return finalize(
                         answer_text=final_answer,
                         answer=answer,
@@ -390,6 +394,7 @@ def run_rlm(
             outcome = execute_step(code, **step_kwargs())
             answer = outcome.answer
             last_output = outcome.output
+            last_execution_status = outcome.execution_status
             error = outcome.error
             answer_metadata = outcome.answer_metadata
             if outcome.error is None:
@@ -400,7 +405,7 @@ def run_rlm(
                         messages=messages,
                         response=response,
                         code=code,
-                        output=last_output,
+                        outcome=outcome,
                         usage=usage,
                     )
                 )
@@ -411,7 +416,7 @@ def run_rlm(
                 messages=messages,
                 response=response,
                 code=code,
-                output=last_output,
+                outcome=outcome,
                 usage=usage,
             )
 
@@ -441,6 +446,7 @@ def run_rlm(
                 outcome = execute_step(repaired_code, **step_kwargs())
                 answer = outcome.answer
                 last_output = outcome.output
+                last_execution_status = outcome.execution_status
                 error = outcome.error
                 answer_metadata = outcome.answer_metadata
                 if outcome.error is None:
@@ -456,7 +462,7 @@ def run_rlm(
                         messages=repair_messages,
                         response=repair_response,
                         code=repaired_code,
-                        output=last_output,
+                        outcome=outcome,
                         usage=repair_usage,
                     )
                 )
@@ -473,7 +479,7 @@ def run_rlm(
             withheld_content = str(answer.get("content") or "")
             final_answer = ""
         else:
-            final_answer = _best_answer(answer, last_output, last_response)
+            final_answer = _best_answer(answer, last_output, last_response, last_execution_status)
 
         # Extract fallback: the loop exhausted its iteration budget
         # without answer['ready']. Reaching here means the root client survived
