@@ -365,9 +365,8 @@ def run_rlm(
                     usage = repair_usage
                 else:
                     context.emit_progress("No code block found, returning response as answer")
-                    final_answer = (
-                        _best_answer(answer, last_output, last_response, last_execution_status)
-                        or response
+                    final_answer = _best_answer(
+                        answer, last_output, last_response, last_execution_status
                     )
                     return finalize(
                         answer_text=final_answer,
