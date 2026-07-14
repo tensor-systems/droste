@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .redaction import redact_secrets
+
 _BATCH_ERROR_DETAIL_STRING_LIMITS = {
     "request_id": 256,
     "batch_id": 256,
@@ -53,10 +55,11 @@ class BatchItemErrorDetails:
     def __post_init__(self) -> None:
         for name, limit in _BATCH_ERROR_DETAIL_STRING_LIMITS.items():
             value = getattr(self, name)
-            if value is not None and (
-                not isinstance(value, str) or not value or len(value) > limit
-            ):
-                raise ValueError(f"{name} must be a non-empty string of at most {limit} characters")
+            if value is None:
+                continue
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must be a non-empty string")
+            object.__setattr__(self, name, redact_secrets(value.strip())[:limit])
         if self.status_code is not None and (
             not isinstance(self.status_code, int)
             or isinstance(self.status_code, bool)

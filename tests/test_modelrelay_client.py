@@ -11,13 +11,18 @@ from __future__ import annotations
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import FrozenInstanceError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
 from droste import BatchItemError, BatchItemErrorDetails
 from droste.capabilities import broker_subcalls
-from droste.clients.modelrelay import ModelRelayClient, ModelRelaySubcallClient
+from droste.clients.modelrelay import (
+    ModelRelayClient,
+    ModelRelaySubcallClient,
+    _batch_item_error_details,
+)
 from droste.environments import RunnerEnvironment
 from droste.exceptions import SubcallBudgetExceeded
 from droste.execution.context import create_execution_context
@@ -603,15 +608,85 @@ def test_subcall_batch_error_details_drop_malformed_and_unknown_fields(stub_nati
     assert len(details["request_id"]) == 256
 
 
-def test_batch_item_error_details_reject_out_of_contract_values() -> None:
+def test_batch_item_error_details_constructor_redacts_and_to_dict_is_safe() -> None:
+    details = BatchItemErrorDetails(
+        request_id="Authorization: Bearer sk-directsecret123",
+        batch_id="api_key=AIzaSyFAKE-KEY",
+        item_id="token=supersecret",
+        layer="mr_sk_directsecret123",
+        cause="sk-anothersecret456",
+        code="token=[redacted]",
+    )
+
+    payload = details.to_dict()
+    assert payload == {
+        "request_id": "Authorization: [redacted]",
+        "batch_id": "api_key=[redacted]",
+        "item_id": "token=[redacted]",
+        "layer": "[redacted]",
+        "cause": "[redacted]",
+        "code": "token=[redacted]",
+    }
+    serialized = json.dumps(payload)
+    for secret in (
+        "sk-directsecret123",
+        "AIzaSyFAKE-KEY",
+        "supersecret",
+        "mr_sk_directsecret123",
+        "sk-anothersecret456",
+    ):
+        assert secret not in serialized
+
+    # Reconstructing an already-sanitized value is stable, not double-redacted.
+    assert BatchItemErrorDetails(**payload) == details
+    with pytest.raises(FrozenInstanceError):
+        details.code = "changed"  # type: ignore[misc]
+
+
+def test_batch_item_error_details_constructor_intrinsically_bounds_strings() -> None:
+    details = BatchItemErrorDetails(request_id="r" * 300, code="c" * 200)
+
+    assert details.request_id == "r" * 256
+    assert details.code == "c" * 128
+    assert details.to_dict() == {"request_id": "r" * 256, "code": "c" * 128}
+
+
+def test_batch_item_error_details_reject_out_of_contract_scalar_types() -> None:
     with pytest.raises(ValueError, match="request_id"):
-        BatchItemErrorDetails(request_id="r" * 257)
+        BatchItemErrorDetails(request_id="   ")
+    with pytest.raises(ValueError, match="request_id"):
+        BatchItemErrorDetails(request_id=123)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="status_code"):
         BatchItemErrorDetails(status_code=99)
     with pytest.raises(ValueError, match="status_code"):
         BatchItemErrorDetails(status_code=True)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="retryable"):
         BatchItemErrorDetails(retryable="yes")  # type: ignore[arg-type]
+
+
+def test_batch_item_error_wire_projection_remains_fail_soft() -> None:
+    details = _batch_item_error_details(
+        {"id": "batch-fallback", "batch_id": {"nested": "discard"}},
+        {"id": "item-fallback", "request_id": ["discard"]},
+        {
+            "request_id": {"nested": "discard"},
+            "batch_id": ["discard"],
+            "item_id": {"nested": "discard"},
+            "layer": ["discard"],
+            "cause": {"nested": "discard"},
+            "status_code": True,
+            "status": 502,
+            "code": "token=supersecret",
+            "retryable": "yes",
+            "payload": {"must": "not survive"},
+        },
+    )
+
+    assert details.to_dict() == {
+        "batch_id": "batch-fallback",
+        "item_id": "item-fallback",
+        "code": "token=[redacted]",
+    }
 
 
 def test_batch_error_details_survive_broker_semantic_and_runner_paths(stub_native):

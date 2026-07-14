@@ -19,8 +19,10 @@ Native response-batch item failures keep the existing human-readable error
 string and now add an optional `details` object to `llm_batch_with_errors` and
 structured JSON batch error entries. The additive fields are `request_id`,
 `batch_id`, `item_id`, `layer`, `cause`, `status_code`, `code`, and
-`retryable`; unknown fields and payload data are not retained. The same object
-survives built-in broker and environment boundaries.
+`retryable`; the frozen `BatchItemErrorDetails` value itself redacts and bounds
+every accepted string, including when hosts construct it directly. Unknown
+fields and payload data are not retained. The same object survives built-in
+broker and environment boundaries.
 
 Direct `llm_batch` calls still raise a `RuntimeError`, now using the compatible
 `BatchItemError` subclass when typed item details are available. Hosts can

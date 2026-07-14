@@ -50,19 +50,19 @@ DEFAULT_MODELRELAY_BASE_URL = "https://api.modelrelay.ai/api/v1"
 _STREAM_ACCEPT = 'application/x-ndjson; profile="responses-stream/v2"'
 
 
-def _safe_batch_detail(value: Any, *, limit: int) -> str | None:
-    """Accept one bounded string field; never stringify nested payload data."""
+def _batch_detail_string(value: Any) -> str | None:
+    """Accept one string field; the public value owns redaction and bounds."""
 
     if not isinstance(value, str):
         return None
-    value = redact_secrets(value.strip())[:limit]
+    value = value.strip()
     return value or None
 
 
-def _first_safe_batch_detail(*values: Any, limit: int) -> str | None:
+def _first_batch_detail_string(*values: Any) -> str | None:
     for value in values:
-        if safe := _safe_batch_detail(value, limit=limit):
-            return safe
+        if accepted := _batch_detail_string(value):
+            return accepted
     return None
 
 
@@ -85,17 +85,15 @@ def _batch_item_error_details(
     if not isinstance(retryable, bool):
         retryable = None
     return BatchItemErrorDetails(
-        request_id=_first_safe_batch_detail(
-            error.get("request_id"), item.get("request_id"), limit=256
+        request_id=_first_batch_detail_string(error.get("request_id"), item.get("request_id")),
+        batch_id=_first_batch_detail_string(
+            error.get("batch_id"), batch.get("batch_id"), batch.get("id")
         ),
-        batch_id=_first_safe_batch_detail(
-            error.get("batch_id"), batch.get("batch_id"), batch.get("id"), limit=256
-        ),
-        item_id=_first_safe_batch_detail(error.get("item_id"), item.get("id"), limit=256),
-        layer=_safe_batch_detail(error.get("layer"), limit=128),
-        cause=_safe_batch_detail(error.get("cause"), limit=128),
+        item_id=_first_batch_detail_string(error.get("item_id"), item.get("id")),
+        layer=_batch_detail_string(error.get("layer")),
+        cause=_batch_detail_string(error.get("cause")),
         status_code=status_code,
-        code=_safe_batch_detail(error.get("code"), limit=128),
+        code=_batch_detail_string(error.get("code")),
         retryable=retryable,
     )
 
