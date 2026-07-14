@@ -11,7 +11,11 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.11.0)
+## Unreleased (post-0.12.0)
+
+No embedder-facing changes yet.
+
+## 0.12.0 (from 0.11.0)
 
 ### Python 3.14 is supported by the core package
 
