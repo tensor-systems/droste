@@ -38,7 +38,10 @@ class _StubHandler(BaseHTTPRequestHandler):
         if self.path == "/root":
             body = {"result": ROOT_REPLY, "usage": {"input_tokens": 1, "output_tokens": 1}}
         else:
-            body = {"result": "spam"}
+            body = {
+                "result": "spam",
+                "usage": {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5},
+            }
         raw = json.dumps(body).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -67,6 +70,12 @@ def test_run_reports_actual_subcall_count() -> None:
                 "token": "test-token",
                 "root_endpoint": f"{base}/root",
                 "subcall_endpoint": f"{base}/subcall",
+                "trace_policy_id": "local-training-v1",
+                "trace_expires_at": "2026-10-14T00:00:00Z",
+                "trace_host_managed_expiry": True,
+                "training_allowed": True,
+                "data_use_authorization_ref": "consent://trace/1",
+                "data_use_purposes": ["training"],
             }
         )
     finally:
@@ -81,7 +90,41 @@ def test_run_reports_actual_subcall_count() -> None:
     assert response["extracted"] is False
     assert response["recovered_error"] is None
     assert response["answer_metadata"] == {"evidence_ids": ["classification-1"]}
-    assert response["trajectory"][0]["execution_status"] == "success"
+    assert "trajectory" not in response
+    usage = response["run_record"]["terminal"]["usage"]
+    assert usage["root"] == {
+        "input_tokens": 1,
+        "output_tokens": 1,
+        "total_tokens": 2,
+        "requests": 1,
+        "successes": 1,
+    }
+    assert usage["subcall"] == {
+        "input_tokens": 2,
+        "output_tokens": 3,
+        "total_tokens": 5,
+        "requests": 1,
+        "successes": 1,
+    }
+    assert usage["total_tokens"] == 7
+    capability = next(
+        event for event in response["run_record"]["events"] if event["type"] == "capability"
+    )
+    assert capability["outcome"]["run_id"] == response["run_id"]
+    assert capability["outcome"]["capability_id"]["operation"] == "llm_query"
+    assert "params" not in capability["outcome"]
+    assert "result" not in capability["outcome"]
+    assert response["run_record"]["retention"] == {
+        "policy_id": "local-training-v1",
+        "retain": [],
+        "expires_at": "2026-10-14T00:00:00Z",
+        "host_managed_expiry": True,
+    }
+    assert response["run_record"]["data_use"] == {
+        "training_allowed": True,
+        "authorization_ref": "consent://trace/1",
+        "purposes": ["training"],
+    }
 
 
 def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> None:
@@ -125,8 +168,8 @@ def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> 
         }
     )
 
-    assert response["trajectory"][0]["execution_result"] == execution_result
-    assert response["trajectory"][0]["execution_status"] == "success"
+    assert response["answer"] == execution_result
+    assert "trajectory" not in response
 
 
 def _client(max_calls: int) -> tuple[HTTPSubcallClient, Any]:

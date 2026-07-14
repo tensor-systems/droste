@@ -12,7 +12,12 @@ from droste.loop.trajectory import IterationRecord
 from droste.protocols.llm_client import TokenUsage
 from droste_runner import runner
 from droste_runner.http_clients import HTTPSubcallClient, RootLLMClient
-from droste_runner.protocol import RootResponseMetadata, _protocol_error_response, build_response
+from droste_runner.protocol import (
+    RootResponseMetadata,
+    _protocol_error_response,
+    build_exception_response,
+    build_response,
+)
 from droste_runner.sources import WrapperV1DataSource, build_data_sources
 
 
@@ -52,7 +57,8 @@ def test_one_response_builder_shapes_refusal_and_success() -> None:
     refusal = _protocol_error_response(None, "protocol_version_missing")
     assert refusal["protocol_version"] == runner.RUNNER_PROTOCOL_VERSION
     assert refusal["error"]["type"] == "protocol_version_missing"
-    assert refusal["trajectory"] == []
+    assert "trajectory" not in refusal
+    assert refusal["status"] == "refusal"
 
     result = SimpleNamespace(
         answer="ok",
@@ -92,11 +98,14 @@ def test_one_response_builder_shapes_refusal_and_success() -> None:
 
     assert response["answer"] == "ok"
     assert response["answer_metadata"] == {"evidence": "result-1"}
-    assert response["trajectory"][0]["llm_input"][0]["content"] == "q"
+    assert "trajectory" not in response
+    assert response["status"] == "success"
     assert response["provider"] == "provider-a"
     assert response["response_id"] == "response-1"
     assert response["model"] == "resolved-model"
     assert response["data_source_requests"] == 3
+    exception = build_exception_response(RuntimeError("boom"), "traceback")
+    assert set(refusal) == set(response) == set(exception)
 
 
 def test_root_client_collects_response_metadata_as_one_record(monkeypatch) -> None:

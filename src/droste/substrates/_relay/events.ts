@@ -1,6 +1,6 @@
 // events.ts — the structured RLM event vocabulary and the stderr forwarding
 // filter (#1). The relay's Pyodide stderr carries the loop's NDJSON events
-// (progress / iteration_start / code / output / subcall) plus package-loader
+// (progress / iteration_start / code / output) plus package-loader
 // chatter and stray prints; only real events may reach the host. Extracted from
 // relay.ts so the filter is unit-testable (see events_test.ts).
 
@@ -18,6 +18,7 @@ export const RLM_EVENT_TYPES = new Set<string>([
   "finalization_error", // {error_type, message} — terminal root finalization failed
   "extract_error", // {error_type, message} — post-exhaustion extract pass failed; answer is raw loop output
   "repair", // configurable repair details
+  "result", // canonical unary-equivalent final result
   "replay", // configurable replay details
   "usage", // durable resolved accounting
   "budget", // durable budget facts
@@ -38,6 +39,7 @@ export const PERSISTENCE_BY_TYPE: Readonly<Record<string, string>> = {
   finalization_error: "configurable",
   extract_error: "configurable",
   repair: "configurable",
+  result: "configurable",
   replay: "configurable",
   usage: "durable",
   budget: "durable",
@@ -60,10 +62,13 @@ export function isRlmEvent(line: string): boolean {
       typeof o.type === "string" && RLM_EVENT_TYPES.has(o.type) &&
       typeof o.run_id === "string" && o.run_id.length > 0 &&
       Number.isInteger(o.seq) && o.seq > 0 &&
-      typeof o.timestamp === "string" && o.timestamp.length > 0 &&
+      typeof o.timestamp === "string" &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(o.timestamp) &&
       o.version === 1 && o.persistence_class === PERSISTENCE_BY_TYPE[o.type] &&
-      (o.parent_run_id === undefined || typeof o.parent_run_id === "string") &&
-      (o.depth === undefined || (Number.isInteger(o.depth) && o.depth >= 0));
+      Number.isInteger(o.depth) && o.depth >= 0 &&
+      (o.depth === 0
+        ? o.parent_run_id === undefined
+        : typeof o.parent_run_id === "string" && o.parent_run_id.length > 0);
   } catch {
     return false;
   }

@@ -67,26 +67,30 @@ does not retain a raw-client fallback.
 
 Every structured event now carries the required v1 envelope: `run_id`, positive
 monotonic `seq`, UTC `timestamp`, `type`, `version`, `persistence_class`, and
-optional `parent_run_id`/`depth`. Partial pre-envelope dictionaries are not a
+required `depth` (`0` for roots), with optional `parent_run_id`. Partial pre-envelope dictionaries are not a
 supported wire format. Pyodide relay telemetry is a child run correlated by
 `parent_run_id`, so the relay and engine do not race to own one sequence.
 
 `RLMResult`, runner responses, and CLI JSON expose `run_record`. Durable
 terminal/usage/budget/policy/capability facts are always selected;
-code/output/error/repair/replay content requires an explicit
-`TraceRetentionPolicy`; heartbeats/progress/deltas remain transient. The
-default retains no configurable content. `DataUseAuthorization.training_allowed`
-is independent and defaults to `False`; retaining a replay never authorizes
-training use.
+code/output/error/repair/result/replay content requires an explicit
+`TraceRetentionPolicy`; progress/deltas remain transient. The canonical
+trajectory-free `result` is nevertheless always delivered live before `done`;
+full `replay` is emitted only when selected. The default record retains no
+configurable content. Training authorization is independent and defaults to
+denied; enabling it requires an authorization reference plus the `training`
+purpose. Retention policies now carry a stable `policy_id` and may record an
+absolute host-managed expiry.
 
 Attach `on_run_record` to `RLMConfig` or `create_execution_context` to hand the
 resolved immutable record to local persistence. If an existing context is
 passed to `run_rlm`, it owns trace settings; explicit conflicting `RLMConfig`
 settings raise `ValueError`. See [docs/trace-abi.md](docs/trace-abi.md).
 
-The runner protocol is now version 2. `trajectory[].llm_input` is a structured
-message list instead of a JSON-encoded string, matching the configurable
-`replay` value without a second lossy representation. Requests must send
+The runner protocol is now version 2. Success, refusal, and exception responses
+share one field set. The unary response does not include a full trajectory;
+when replay is retained, `replay.result.trajectory[].llm_input` is a structured
+message list instead of a JSON-encoded string. Requests must send
 `"protocol_version": 2`; mismatched v1 requests fail before work begins.
 
 ### Hosts select environments through one substrate factory

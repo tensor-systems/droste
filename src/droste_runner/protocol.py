@@ -27,40 +27,49 @@ def build_response(
     metadata: RootResponseMetadata | None = None,
     requested_model: str = "",
     data_source_requests: int | None = None,
+    status: str | None = None,
 ) -> dict[str, Any]:
     """Build both refusal and completed-run envelopes from one field list."""
-
-    response: dict[str, Any]
-    if result is None:
-        return {
-            "answer": "",
-            "ready": False,
-            "iterations": 0,
-            "tokens_used": 0,
-            "subcalls": 0,
-            "extracted": False,
-            "extract_error": None,
-            "recovered_error": None,
-            "prompt_pack": None,
-            "trajectory": [],
-            "protocol_version": RUNNER_PROTOCOL_VERSION,
-            "error": error,
-        }
-
-    response = project_result(result)
-    response["protocol_version"] = RUNNER_PROTOCOL_VERSION
-
     root_metadata = metadata or RootResponseMetadata()
-    response.update(
-        {
-            "provider": root_metadata.provider,
-            "response_id": root_metadata.response_id,
-            "stop_reason": root_metadata.stop_reason,
-            "model": root_metadata.model or requested_model,
-        }
-    )
-    if data_source_requests is not None:
-        response["data_source_requests"] = data_source_requests
+    response: dict[str, Any] = {
+        "answer": "",
+        "answer_metadata": {},
+        "ready": False,
+        "iterations": 0,
+        "tokens_used": 0,
+        "subcalls": 0,
+        "successful_subcalls": 0,
+        "extracted": False,
+        "error": error,
+        "extract_error": None,
+        "recovered_error": None,
+        "prompt_pack": None,
+        "run_record": None,
+        "run_id": None,
+        "status": status or "error",
+        "protocol_version": RUNNER_PROTOCOL_VERSION,
+        "provider": root_metadata.provider,
+        "response_id": root_metadata.response_id,
+        "stop_reason": root_metadata.stop_reason,
+        "model": root_metadata.model or requested_model,
+        "data_source_requests": data_source_requests,
+    }
+    if result is not None:
+        response.update(project_result(result, include_trajectory=False))
+        record = getattr(result, "run_record", None)
+        response["run_id"] = record.run_id if record is not None else None
+        response["status"] = (
+            str(record.terminal["status"])
+            if record is not None
+            else (
+                status
+                or (
+                    "success"
+                    if result.error is None and (result.ready or result.extracted)
+                    else "error"
+                )
+            )
+        )
     return response
 
 
@@ -78,12 +87,13 @@ def _protocol_error_response(requested: object, error_type: str) -> dict[str, An
             f"this engine speaks {RUNNER_PROTOCOL_VERSION}"
         )
     return build_response(
+        status="refusal",
         error={
             "type": error_type,
             "message": message,
             "code": error_type,
             "details": {"requested": requested, "supported": RUNNER_PROTOCOL_VERSION},
-        }
+        },
     )
 
 
@@ -101,11 +111,11 @@ def _check_protocol_version(request: dict[str, Any]) -> dict[str, Any] | None:
 
 def build_exception_response(exc: Exception, traceback_text: str) -> dict[str, Any]:
     """Build the version-stamped worker exception envelope."""
-    return {
-        "protocol_version": RUNNER_PROTOCOL_VERSION,
-        "error": {
+    return build_response(
+        status="error",
+        error={
             "type": exc.__class__.__name__,
             "message": str(exc),
             "traceback": traceback_text,
         },
-    }
+    )

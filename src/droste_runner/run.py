@@ -123,13 +123,26 @@ def _run_valid_request(request: dict[str, Any], *, source_ctx: Any = None) -> di
         on_event=emit_event,
         run_id=str(request.get("run_id") or "") or None,
         parent_run_id=str(request.get("parent_run_id") or "") or None,
-        trace_depth=(
-            int(request["trace_depth"]) if request.get("trace_depth") is not None else None
-        ),
+        trace_depth=(int(request["trace_depth"]) if request.get("trace_depth") is not None else 0),
         trace_retention=TraceRetentionPolicy(
-            frozenset(str(value) for value in (request.get("retain_trace") or []))
+            retain=frozenset(str(value) for value in (request.get("retain_trace") or [])),
+            policy_id=str(request.get("trace_policy_id") or "default-no-content"),
+            expires_at=(
+                str(request["trace_expires_at"])
+                if request.get("trace_expires_at") is not None
+                else None
+            ),
+            host_managed_expiry=request.get("trace_host_managed_expiry") is True,
         ),
-        data_use=DataUseAuthorization(training_allowed=request.get("training_allowed") is True),
+        data_use=DataUseAuthorization(
+            training_allowed=request.get("training_allowed") is True,
+            authorization_ref=(
+                str(request["data_use_authorization_ref"])
+                if request.get("data_use_authorization_ref") is not None
+                else None
+            ),
+            purposes=frozenset(str(value) for value in (request.get("data_use_purposes") or [])),
+        ),
     )
 
     model = str(request.get("model") or "")
@@ -184,6 +197,9 @@ def _run_valid_request(request: dict[str, Any], *, source_ctx: Any = None) -> di
         context=context,
         registry=registry,
         subcalls=subcalls,
+        capability_run_id=exec_context.trace.run_id,
+        capability_parent_run_id=exec_context.trace.parent_run_id,
+        capability_observer=exec_context.observe_capability,
     )
 
     config = RLMConfig(

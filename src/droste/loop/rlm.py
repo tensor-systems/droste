@@ -30,7 +30,7 @@ from ..prompts.pack import (
     resolve_prompt_pack,
 )
 from ..protocols.environment import RLMEnvironment
-from ..protocols.llm_client import LLMClient, total_tokens_from_usage
+from ..protocols.llm_client import LLMClient
 from ..protocols.subcall_client import SubcallClient
 from ..protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest
 from ..structured import _StructuredBatchEvidence, aggregate_json_counts, bind_structured_batch
@@ -308,12 +308,13 @@ def _extract_final_answer(
                 "content": render_prompt_template(prompt_pack.templates.extract_user, slots),
             },
         ]
+        context.record_root_attempt()
         response, usage = root_llm.responses_create(
             messages,
             model=cfg.root_model or "",
             return_usage=True,
         )
-        context.stats.total_tokens += total_tokens_from_usage(usage)
+        context.record_root_success(usage)
         text = str(response).strip()
         if not text:
             return "", RLMError(type="EmptyExtraction", message="extract call returned empty text")
@@ -373,7 +374,7 @@ def run_rlm(
             on_run_record=cfg.on_run_record,
             run_id=cfg.run_id,
             parent_run_id=cfg.parent_run_id,
-            trace_depth=cfg.trace_depth,
+            trace_depth=cfg.trace_depth if cfg.trace_depth is not None else 0,
             trace_retention=cfg.trace_retention,
             data_use=cfg.data_use,
         )

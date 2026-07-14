@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+if TYPE_CHECKING:
+    from ..capabilities import CapabilityResult
+
+from ..protocols.llm_client import TokenUsage
 from .config import (
     DEFAULT_MAX_CALLS,
     DEFAULT_MAX_DEPTH,
@@ -69,6 +73,53 @@ class ExecutionContext:
             if self.config.on_run_record is not None:
                 self.config.on_run_record(record)
         return record
+
+    def record_root_attempt(self) -> None:
+        self.stats.root_requests += 1
+
+    def record_root_success(self, usage: TokenUsage) -> None:
+        self._validate_usage(usage)
+        if self.stats.root_successes >= self.stats.root_requests:
+            raise ValueError("root successes cannot exceed requests")
+        self.stats.root_successes += 1
+        self.stats.root_input_tokens += usage.prompt_tokens
+        self.stats.root_output_tokens += usage.completion_tokens
+        self.stats.root_total_tokens += usage.total_tokens
+        self.stats.total_tokens += usage.total_tokens
+
+    def record_subcall_attempts(self, count: int = 1) -> None:
+        self._validate_count(count)
+        self.stats.calls_made += count
+
+    def record_subcall_successes(self, count: int = 1) -> None:
+        self._validate_count(count)
+        if self.stats.successful_calls + count > self.stats.calls_made:
+            raise ValueError("subcall successes cannot exceed attempts")
+        self.stats.successful_calls += count
+
+    def record_subcall_usage(self, usage: TokenUsage) -> None:
+        self._validate_usage(usage)
+        self.stats.subcall_input_tokens += usage.prompt_tokens
+        self.stats.subcall_output_tokens += usage.completion_tokens
+        self.stats.subcall_total_tokens += usage.total_tokens
+        self.stats.total_tokens += usage.total_tokens
+
+    @staticmethod
+    def _validate_count(count: int) -> None:
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError("accounting counts must be non-negative integers")
+
+    @staticmethod
+    def _validate_usage(usage: TokenUsage) -> None:
+        values = (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in values
+        ):
+            raise ValueError("token usage must contain non-negative integers")
+
+    def observe_capability(self, result: CapabilityResult) -> None:
+        """Append the broker-owned content-free capability projection."""
+        self.emit_event({"type": "capability", "outcome": result.to_trace_dict()})
 
     @property
     def depth(self) -> int:
@@ -139,7 +190,7 @@ def create_execution_context(
     on_run_record: RunRecordCallback | None = None,
     run_id: str | None = None,
     parent_run_id: str | None = None,
-    trace_depth: int | None = None,
+    trace_depth: int = 0,
     trace_retention: TraceRetentionPolicy | None = None,
     data_use: DataUseAuthorization | None = None,
     trace_clock: Clock | None = None,

@@ -15,6 +15,7 @@ Deno.test("forwards every emitted event type (with json.dumps spacing)", () => {
       timestamp: "2026-07-14T00:00:00Z",
       version: 1,
       persistence_class: PERSISTENCE_BY_TYPE[type],
+      depth: 0,
       iteration: 1,
     });
     assert(
@@ -34,6 +35,7 @@ Deno.test("carries the real payload for a code event (live code streaming)", () 
         timestamp: "2026-07-14T00:00:00Z",
         version: 1,
         persistence_class: "configurable",
+        depth: 0,
         iteration: 2,
         code: "print(get_stats())",
       }),
@@ -80,8 +82,7 @@ Deno.test("rejects partial and falsely classified envelopes", () => {
 
 Deno.test("vocabulary matches the engine's emitters", () => {
   // Guard against drift: these are exactly what droste/execution + loop emit,
-  // plus the relay-side startup handshake (#33) and reasoning_delta, and the
-  // future subcall/done.
+  // plus the relay-side startup handshake (#33) and reasoning_delta.
   assertEquals(
     [...RLM_EVENT_TYPES].sort(),
     [
@@ -92,17 +93,16 @@ Deno.test("vocabulary matches the engine's emitters", () => {
       "execution_error",
       "extract_error",
       "finalization_error",
-      "heartbeat",
       "iteration_start",
       "llm_response",
       "output",
       "progress",
       "policy",
       "repair",
+      "result",
       "replay",
       "reasoning_delta",
       "startup",
-      "subcall",
       "usage",
     ].sort(),
   );

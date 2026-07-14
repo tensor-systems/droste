@@ -103,7 +103,7 @@ def create_environment_context(
     on_run_record: RunRecordCallback | None = None,
     run_id: str | None = None,
     parent_run_id: str | None = None,
-    trace_depth: int | None = None,
+    trace_depth: int = 0,
     trace_retention: TraceRetentionPolicy | None = None,
     data_use: DataUseAuthorization | None = None,
 ) -> ExecutionContext:

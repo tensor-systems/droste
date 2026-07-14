@@ -427,11 +427,12 @@ def call_root(
     Returns ``(response, usage, None)`` on success or ``("", None, error)`` —
     a root failure always ends the run, so the caller finalizes immediately.
     """
+    context.record_root_attempt()
     try:
         response, usage = root_llm.responses_create(messages, model=model, return_usage=True)
     except Exception as exc:
         return "", None, RLMError(type=exc.__class__.__name__, message=str(exc))
-    context.stats.total_tokens += total_tokens_from_usage(usage)
+    context.record_root_success(usage)
     return response, usage, None
 
 
@@ -603,17 +604,10 @@ def finalize(
         max_calls=context.max_calls,
         max_output_chars=context.max_output_chars,
     )
-    usage = {
-        "kind": "resolved",
-        "tokens": {"total": result.tokens_used},
-        "subcalls": {
-            "attempted": result.sub_calls_made,
-            "successful": result.sub_calls_succeeded,
-        },
-        "wall_time_ms": context.trace.elapsed_ms(),
-    }
+    usage = context.stats.resolved_usage(context.trace.elapsed_ms()).as_dict()
     budget = {
-        "kind": "resolved",
+        "kind": "snapshot",
+        "source": "legacy_execution_stats",
         "configured": {
             "iterations": cfg.max_iterations,
             "subcalls": cfg.max_calls,
@@ -628,10 +622,6 @@ def finalize(
             "iterations": max(0, cfg.max_iterations - result.iterations),
             "subcalls": max(0, cfg.max_calls - result.sub_calls_made),
         },
-        "mutations": [
-            {"resource": "iterations", "consumed": result.iterations},
-            {"resource": "subcalls", "consumed": result.sub_calls_made},
-        ],
     }
     observed_errors = (result.error, result.extract_error, result.recovered_error)
     policy_violation = next(
@@ -654,10 +644,15 @@ def finalize(
     context.emit_event({"type": "usage", **usage})
     context.emit_event({"type": "budget", **budget})
     context.emit_event({"type": "policy", **policy})
-    # Full result/trajectory content is configurable, never smuggled inside
-    # the durable terminal event or duplicated on the live channel by default.
+    # The live stream always receives one canonical unary-equivalent result.
+    # Retention controls storage only; it must never suppress live delivery.
+    canonical_result = project_result(result, include_trajectory=False)
+    canonical_result.pop("run_record")
+    context.emit_event({"type": "result", "result": canonical_result})
+    # Full replay/trajectory content is retained and delivered only when a host
+    # explicitly selects it.
     if "replay" in context.trace.retention.retain:
-        replay = project_result(result)
+        replay = project_result(result, include_trajectory=True)
         replay.pop("run_record")
         context.emit_event({"type": "replay", "result": replay})
 
@@ -680,7 +675,7 @@ def finalize(
         "budget": budget,
         "policy": policy,
         "retention": {
-            "retained_configurable": sorted(context.trace.retention.retain),
+            **context.trace.retention.as_dict(),
             "replay_retained": "replay" in context.trace.retention.retain,
         },
         "error": terminal_error(result.error),

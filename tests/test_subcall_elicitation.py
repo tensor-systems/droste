@@ -879,13 +879,11 @@ answer['ready'] = True
     assert result.error.type == "PolicyError"
     assert result.error.details is not None
     assert result.error.details["reason"] == "semantic_exact_retry_budget_exhausted"
-    assert [event for event in events if event["type"] == "finalization_error"] == [
-        {
-            "type": "finalization_error",
-            "error_type": "RuntimeError",
-            "message": "terminal request failed",
-        }
-    ]
+    finalization_events = [event for event in events if event["type"] == "finalization_error"]
+    assert len(finalization_events) == 1
+    assert finalization_events[0]["error_type"] == "RuntimeError"
+    assert finalization_events[0]["message"] == "terminal request failed"
+    assert finalization_events[0]["depth"] == 0
 
 
 def test_terminal_finalization_blocks_saved_subcall_aliases_without_accounting() -> None:

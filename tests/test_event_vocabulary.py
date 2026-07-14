@@ -100,6 +100,7 @@ def test_run_rlm_event_stream_through_attached_sink() -> None:
         "usage",
         "budget",
         "policy",
+        "result",
         "done",
     ]
     assert all(e["type"] in EVENT_TYPES for e in events)

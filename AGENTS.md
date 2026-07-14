@@ -81,8 +81,13 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - Durable events are `usage`, `budget`, `policy`, `capability`, and `done`.
   Never put answer/code/output/trajectory, error messages/details, or executed
   source inside them. Those belong only to configurable events.
+- Deliver the configurable canonical `result` live before `done` regardless of
+  retention. Emit full `replay`/trajectory only when replay retention is
+  selected; retention controls storage, not ordinary live delivery.
 - Retention and training authorization are independent values. Training is
-  denied by default and must never be inferred from retained content.
+  denied by default, requires an authorization reference plus the `training`
+  purpose, and must never be inferred from retained content. Expiry is recorded
+  by the ABI and enforced by the host persistence shell.
 - An injected `ExecutionContext` owns trace identity and policy. Reject
   conflicting `RLMConfig` values rather than replacing a recorder that may
   already contain events.

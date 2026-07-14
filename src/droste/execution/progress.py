@@ -38,12 +38,11 @@ EVENT_TYPES = frozenset(
         "code",  # {iteration, code} — the code that is about to execute
         "output",  # {iteration, stdout, calls_made, answer_ready, answer_content_chars}
         "execution_error",  # {iteration, error_type, message} — a step failed; repair may follow
-        "subcall",  # {depth, seq, ...} (future)
         "reasoning_delta",  # relay-side {text}, from streamed /responses
         "finalization_error",  # {error_type, message} — terminal root finalization failed
         "extract_error",  # {error_type, message} — post-exhaustion extract pass failed
-        "heartbeat",  # transient liveness signal
         "repair",  # configurable repair attempt details
+        "result",  # canonical unary-equivalent final result (without trajectory)
         "replay",  # configurable replay input/output details
         "usage",  # durable resolved token/call accounting
         "budget",  # durable configured/consumed budget facts

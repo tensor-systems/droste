@@ -39,6 +39,7 @@ CONFIGURABLE_EVENT_TYPES = frozenset(
         "finalization_error",
         "extract_error",
         "repair",
+        "result",
         "replay",
     }
 )
@@ -51,6 +52,266 @@ PERSISTENCE_BY_TYPE: Mapping[str, PersistenceClass] = MappingProxyType(
         **dict.fromkeys(TRANSIENT_EVENT_TYPES, PersistenceClass.TRANSIENT),
     }
 )
+
+_NONE_TYPE = type(None)
+EventFieldType = type | tuple[type, ...]
+EventBodySchema = tuple[Mapping[str, EventFieldType], Mapping[str, EventFieldType]]
+
+# One exhaustive v1 table. The first mapping is required fields; the second is
+# optional fields. Nested broker/result values keep their own schema authority.
+EVENT_BODY_SCHEMAS: Mapping[str, EventBodySchema] = MappingProxyType(
+    {
+        "startup": (
+            {"engine_version": str},
+            {
+                "runner_protocol": (int, _NONE_TYPE),
+                "source_protocol": (int, _NONE_TYPE),
+            },
+        ),
+        "progress": ({"status": str}, {}),
+        "iteration_start": ({"iteration": int, "max_iterations": int}, {}),
+        "llm_response": ({"iteration": int, "response": str}, {}),
+        "code": ({"iteration": int, "code": str}, {}),
+        "output": (
+            {
+                "iteration": int,
+                "stdout": str,
+                "calls_made": int,
+                "answer_ready": bool,
+                "answer_content_chars": int,
+            },
+            {},
+        ),
+        "execution_error": (
+            {"iteration": int, "error_type": str, "message": str},
+            {},
+        ),
+        "reasoning_delta": ({"text": str}, {}),
+        "finalization_error": ({"error_type": str, "message": str}, {}),
+        "extract_error": ({"error_type": str, "message": str}, {}),
+        "repair": (
+            {"iteration": int, "reason": str},
+            {"error_type": str},
+        ),
+        "result": ({"result": Mapping}, {}),
+        "replay": ({"result": Mapping}, {}),
+        "usage": (
+            {
+                "kind": str,
+                "root": Mapping,
+                "subcall": Mapping,
+                "unattributed": Mapping,
+                "total_tokens": int,
+                "wall_time_ms": int,
+            },
+            {},
+        ),
+        "budget": (
+            {"kind": str, "source": str},
+            {
+                "configured": Mapping,
+                "consumed": Mapping,
+                "remaining": Mapping,
+                "action": str,
+                "resource": str,
+                "amount": (int, float),
+                "call_id": str,
+            },
+        ),
+        "policy": (
+            {"contract_enforced": bool, "outcome": str, "violation_type": (str, _NONE_TYPE)},
+            {},
+        ),
+        "capability": ({"outcome": Mapping}, {}),
+        "done": (
+            {
+                "status": str,
+                "ready": bool,
+                "extracted": bool,
+                "iterations": int,
+                "usage": Mapping,
+                "budget": Mapping,
+                "policy": Mapping,
+                "retention": Mapping,
+                "error": (Mapping, _NONE_TYPE),
+                "extract_error": (Mapping, _NONE_TYPE),
+                "recovered_error": (Mapping, _NONE_TYPE),
+            },
+            {},
+        ),
+    }
+)
+
+
+def _matches_field_type(value: Any, expected: EventFieldType) -> bool:
+    expected_types = expected if isinstance(expected, tuple) else (expected,)
+    if int in expected_types and bool not in expected_types and isinstance(value, bool):
+        return False
+    return isinstance(value, expected_types)
+
+
+def validate_event_body(event_type: str, body: Mapping[str, Any]) -> None:
+    """Validate one body against the exhaustive Trace ABI v1 table."""
+    try:
+        required, optional = EVENT_BODY_SCHEMAS[event_type]
+    except KeyError as exc:
+        raise ValueError(f"event type {event_type!r} has no v1 body schema") from exc
+    missing = required.keys() - body.keys()
+    if missing:
+        raise ValueError(f"event {event_type!r} missing body fields: " + ", ".join(sorted(missing)))
+    unknown = body.keys() - required.keys() - optional.keys()
+    if unknown:
+        raise ValueError(
+            f"event {event_type!r} has unknown body fields: " + ", ".join(sorted(unknown))
+        )
+    for key, value in body.items():
+        expected = required.get(key, optional.get(key))
+        assert expected is not None
+        if not _matches_field_type(value, expected):
+            raise TypeError(
+                f"event {event_type!r} field {key!r} has invalid type {type(value).__name__}"
+            )
+    _validate_structured_body(event_type, body)
+
+
+def _require_exact_mapping(
+    value: Any, *, name: str, fields: Mapping[str, EventFieldType]
+) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{name} must be an object")
+    missing = fields.keys() - value.keys()
+    unknown = value.keys() - fields.keys()
+    if missing or unknown:
+        detail = []
+        if missing:
+            detail.append("missing " + ", ".join(sorted(missing)))
+        if unknown:
+            detail.append("unknown " + ", ".join(sorted(unknown)))
+        raise ValueError(f"{name} has " + "; ".join(detail))
+    for key, expected in fields.items():
+        if not _matches_field_type(value[key], expected):
+            raise TypeError(f"{name}.{key} has invalid type {type(value[key]).__name__}")
+    return value
+
+
+def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
+    if event_type == "usage":
+        if body["kind"] != "resolved":
+            raise ValueError("usage kind must be 'resolved'")
+        breakdown_fields: Mapping[str, EventFieldType] = {
+            "input_tokens": int,
+            "output_tokens": int,
+            "total_tokens": int,
+            "requests": int,
+            "successes": int,
+        }
+        root = _require_exact_mapping(body["root"], name="usage.root", fields=breakdown_fields)
+        subcall = _require_exact_mapping(
+            body["subcall"], name="usage.subcall", fields=breakdown_fields
+        )
+        unattributed = _require_exact_mapping(
+            body["unattributed"],
+            name="usage.unattributed",
+            fields={"total_tokens": int},
+        )
+        counts = [
+            *root.values(),
+            *subcall.values(),
+            unattributed["total_tokens"],
+            body["total_tokens"],
+            body["wall_time_ms"],
+        ]
+        if any(isinstance(value, bool) or value < 0 for value in counts):
+            raise ValueError("usage counts must be non-negative integers")
+        if root["successes"] > root["requests"] or subcall["successes"] > subcall["requests"]:
+            raise ValueError("usage successes cannot exceed requests")
+        if (
+            root["total_tokens"] + subcall["total_tokens"] + unattributed["total_tokens"]
+            != body["total_tokens"]
+        ):
+            raise ValueError("usage token scopes must reconcile to total_tokens")
+    elif event_type == "budget":
+        if body["kind"] == "snapshot":
+            required = {"configured", "consumed", "remaining"}
+            if not required <= body.keys():
+                raise ValueError("budget snapshot requires configured, consumed, and remaining")
+            forbidden = {"action", "resource", "amount", "call_id"} & body.keys()
+            if forbidden:
+                raise ValueError("budget snapshot cannot carry mutation fields")
+        elif body["kind"] == "mutation":
+            required = {"action", "resource", "amount"}
+            if not required <= body.keys():
+                raise ValueError("budget mutation requires action, resource, and amount")
+            if body["action"] not in {"reserve", "commit", "refund", "exhaust"}:
+                raise ValueError("budget mutation action is not recognized by Trace ABI v1")
+            if body["amount"] < 0:
+                raise ValueError("budget mutation amount must be non-negative")
+        else:
+            raise ValueError("budget kind must be 'snapshot' or 'mutation'")
+        if not body["source"]:
+            raise ValueError("budget source must not be empty")
+    elif event_type == "result":
+        result = _require_exact_mapping(
+            body["result"],
+            name="result.result",
+            fields={
+                "answer": str,
+                "answer_metadata": Mapping,
+                "ready": bool,
+                "iterations": int,
+                "tokens_used": int,
+                "subcalls": int,
+                "successful_subcalls": int,
+                "extracted": bool,
+                "error": (Mapping, _NONE_TYPE),
+                "extract_error": (Mapping, _NONE_TYPE),
+                "recovered_error": (Mapping, _NONE_TYPE),
+                "prompt_pack": (Mapping, _NONE_TYPE),
+            },
+        )
+        result_counts = (
+            result["iterations"],
+            result["tokens_used"],
+            result["subcalls"],
+            result["successful_subcalls"],
+        )
+        if any(value < 0 for value in result_counts):
+            raise ValueError("result counts must be non-negative")
+        if result["successful_subcalls"] > result["subcalls"]:
+            raise ValueError("result successful_subcalls cannot exceed subcalls")
+    elif event_type == "policy":
+        if body["outcome"] not in {"passed", "violated", "not_evaluated", "not_enforced"}:
+            raise ValueError("policy outcome is not recognized by Trace ABI v1")
+    elif event_type == "done":
+        if body["status"] not in {"success", "error", "cancelled"}:
+            raise ValueError("done status is not recognized by Trace ABI v1")
+        if body["iterations"] < 0:
+            raise ValueError("done iterations must be non-negative")
+        validate_event_body("usage", body["usage"])
+        validate_event_body("budget", body["budget"])
+        validate_event_body("policy", body["policy"])
+        retention = _require_exact_mapping(
+            body["retention"],
+            name="done.retention",
+            fields={
+                "policy_id": str,
+                "retain": list,
+                "expires_at": (str, _NONE_TYPE),
+                "host_managed_expiry": bool,
+                "replay_retained": bool,
+            },
+        )
+        if any(not isinstance(value, str) for value in retention["retain"]):
+            raise TypeError("done.retention.retain values must be strings")
+        if retention["replay_retained"] != ("replay" in retention["retain"]):
+            raise ValueError("done retention replay facts disagree")
+        for error_name in ("error", "extract_error", "recovered_error"):
+            if body[error_name] is not None:
+                _require_exact_mapping(
+                    body[error_name],
+                    name=f"done.{error_name}",
+                    fields={"type": str},
+                )
 
 
 def persistence_class_for(event_type: str) -> PersistenceClass:
@@ -95,25 +356,45 @@ class RunEvent:
     persistence_class: PersistenceClass = PersistenceClass.CONFIGURABLE
     body: Mapping[str, Any] = field(default_factory=dict)
     parent_run_id: str | None = None
-    depth: int | None = None
+    depth: int = 0
 
     def __post_init__(self) -> None:
-        if not self.run_id:
+        if not isinstance(self.run_id, str) or not self.run_id:
             raise ValueError("event run_id must not be empty")
-        if self.seq < 1:
+        if isinstance(self.seq, bool) or not isinstance(self.seq, int) or self.seq < 1:
             raise ValueError("event seq must be positive")
-        if not self.timestamp:
-            raise ValueError("event timestamp must not be empty")
+        if not isinstance(self.timestamp, str):
+            raise TypeError("event timestamp must be a string")
+        try:
+            timestamp = datetime.fromisoformat(self.timestamp.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("event timestamp must be an ISO-8601 timestamp") from exc
+        if timestamp.tzinfo is None or timestamp.utcoffset() != timezone.utc.utcoffset(timestamp):
+            raise ValueError("event timestamp must be UTC")
+        if isinstance(self.version, bool) or not isinstance(self.version, int):
+            raise TypeError("event version must be an integer")
         if self.version != TRACE_ABI_VERSION:
             raise ValueError(f"unsupported trace event version: {self.version}")
-        if self.depth is not None and self.depth < 0:
+        if not isinstance(self.type, str) or not self.type:
+            raise ValueError("event type must not be empty")
+        if self.parent_run_id is not None and (
+            not isinstance(self.parent_run_id, str) or not self.parent_run_id
+        ):
+            raise ValueError("event parent_run_id must be a non-empty string")
+        if isinstance(self.depth, bool) or not isinstance(self.depth, int) or self.depth < 0:
             raise ValueError("event depth must be non-negative")
+        if self.depth == 0 and self.parent_run_id is not None:
+            raise ValueError("root events cannot have parent_run_id")
+        if self.depth > 0 and not self.parent_run_id:
+            raise ValueError("child events require parent_run_id")
         expected = persistence_class_for(self.type)
         if self.persistence_class is not expected:
             raise ValueError(
                 f"event {self.type!r} must be {expected.value}, not {self.persistence_class.value}"
             )
-        object.__setattr__(self, "body", _freeze_json(self.body))
+        frozen_body = _freeze_json(self.body)
+        validate_event_body(self.type, _thaw_json(frozen_body))
+        object.__setattr__(self, "body", frozen_body)
 
     def as_dict(self) -> dict[str, Any]:
         """Return the canonical flat Trace ABI wire value."""
@@ -130,8 +411,7 @@ class RunEvent:
         )
         if self.parent_run_id is not None:
             wire["parent_run_id"] = self.parent_run_id
-        if self.depth is not None:
-            wire["depth"] = self.depth
+        wire["depth"] = self.depth
         return wire
 
 
@@ -160,6 +440,7 @@ def parse_event(value: RunEvent | Mapping[str, Any]) -> RunEvent:
         "type",
         "version",
         "persistence_class",
+        "depth",
     }
     missing = required - value.keys()
     if missing:
@@ -178,9 +459,7 @@ def parse_event(value: RunEvent | Mapping[str, Any]) -> RunEvent:
         raise TypeError("trace event persistence_class must be a string")
     if value.get("parent_run_id") is not None and not isinstance(value["parent_run_id"], str):
         raise TypeError("trace event parent_run_id must be a string")
-    if value.get("depth") is not None and (
-        isinstance(value["depth"], bool) or not isinstance(value["depth"], int)
-    ):
+    if isinstance(value["depth"], bool) or not isinstance(value["depth"], int):
         raise TypeError("trace event depth must be an integer")
     event_type = value["type"]
     persistence = PersistenceClass(value["persistence_class"])
@@ -194,7 +473,7 @@ def parse_event(value: RunEvent | Mapping[str, Any]) -> RunEvent:
         persistence_class=persistence,
         body=body,
         parent_run_id=(value["parent_run_id"] if value.get("parent_run_id") is not None else None),
-        depth=value["depth"] if value.get("depth") is not None else None,
+        depth=value["depth"],
     )
 
 
@@ -203,6 +482,9 @@ class TraceRetentionPolicy:
     """Host selection for configurable content; durable facts are unconditional."""
 
     retain: frozenset[str] = frozenset()
+    policy_id: str = "default-no-content"
+    expires_at: str | None = None
+    host_managed_expiry: bool = False
 
     def __post_init__(self) -> None:
         retain = frozenset(self.retain)
@@ -215,9 +497,31 @@ class TraceRetentionPolicy:
                 + ", ".join(sorted(invalid))
             )
         object.__setattr__(self, "retain", retain)
+        if not isinstance(self.policy_id, str):
+            raise TypeError("retention policy_id must be a string")
+        if not self.policy_id:
+            raise ValueError("retention policy_id must not be empty")
+        if not isinstance(self.host_managed_expiry, bool):
+            raise TypeError("host_managed_expiry must be a bool")
+        if self.expires_at is not None:
+            if not isinstance(self.expires_at, str):
+                raise TypeError("retention expires_at must be a string")
+            try:
+                expiry = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValueError("retention expires_at must be an ISO-8601 timestamp") from exc
+            if expiry.tzinfo is None:
+                raise ValueError("retention expires_at must include a timezone")
+            if not self.host_managed_expiry:
+                raise ValueError("expires_at requires host_managed_expiry=True")
 
     def as_dict(self) -> dict[str, Any]:
-        return {"retain": sorted(self.retain)}
+        return {
+            "policy_id": self.policy_id,
+            "retain": sorted(self.retain),
+            "expires_at": self.expires_at,
+            "host_managed_expiry": self.host_managed_expiry,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,13 +529,36 @@ class DataUseAuthorization:
     """Independent host authorization; retention never grants training use."""
 
     training_allowed: bool = False
+    authorization_ref: str | None = None
+    purposes: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not isinstance(self.training_allowed, bool):
             raise TypeError("training_allowed must be a bool")
+        purposes = frozenset(self.purposes)
+        if any(not isinstance(purpose, str) or not purpose for purpose in purposes):
+            raise TypeError("data-use purposes must be non-empty strings")
+        object.__setattr__(self, "purposes", purposes)
+        if self.authorization_ref is not None:
+            if not isinstance(self.authorization_ref, str):
+                raise TypeError("authorization_ref must be a string")
+            if not self.authorization_ref:
+                raise ValueError("authorization_ref must not be empty")
+        if purposes and self.authorization_ref is None:
+            raise ValueError("data-use purposes require authorization_ref")
+        if "training" in purposes and not self.training_allowed:
+            raise ValueError("purpose 'training' requires training_allowed=True")
+        if self.training_allowed and (self.authorization_ref is None or "training" not in purposes):
+            raise ValueError(
+                "training_allowed=True requires authorization_ref and purpose 'training'"
+            )
 
-    def as_dict(self) -> dict[str, bool]:
-        return {"training_allowed": self.training_allowed}
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "training_allowed": self.training_allowed,
+            "authorization_ref": self.authorization_ref,
+            "purposes": sorted(self.purposes),
+        }
 
 
 def select_retained_events(
@@ -258,17 +585,27 @@ class RunRecord:
     retention: TraceRetentionPolicy
     data_use: DataUseAuthorization
     parent_run_id: str | None = None
-    depth: int | None = None
+    depth: int = 0
     version: int = TRACE_ABI_VERSION
 
     def __post_init__(self) -> None:
         events = tuple(self.events)
-        if not self.run_id:
+        if not isinstance(self.run_id, str) or not self.run_id:
             raise ValueError("run record run_id must not be empty")
+        if isinstance(self.version, bool) or not isinstance(self.version, int):
+            raise TypeError("run record version must be an integer")
         if self.version != TRACE_ABI_VERSION:
             raise ValueError(f"unsupported run record version: {self.version}")
-        if self.depth is not None and self.depth < 0:
+        if self.parent_run_id is not None and (
+            not isinstance(self.parent_run_id, str) or not self.parent_run_id
+        ):
+            raise ValueError("run record parent_run_id must be a non-empty string")
+        if isinstance(self.depth, bool) or not isinstance(self.depth, int) or self.depth < 0:
             raise ValueError("run record depth must be non-negative")
+        if self.depth == 0 and self.parent_run_id is not None:
+            raise ValueError("root run records cannot have parent_run_id")
+        if self.depth > 0 and not self.parent_run_id:
+            raise ValueError("child run records require parent_run_id")
         if not isinstance(self.retention, TraceRetentionPolicy):
             raise TypeError("run record retention must be TraceRetentionPolicy")
         if not isinstance(self.data_use, DataUseAuthorization):
@@ -307,8 +644,7 @@ class RunRecord:
         }
         if self.parent_run_id is not None:
             value["parent_run_id"] = self.parent_run_id
-        if self.depth is not None:
-            value["depth"] = self.depth
+        value["depth"] = self.depth
         return value
 
 
@@ -327,7 +663,7 @@ class TraceRecorder:
 
     run_id: str = field(default_factory=lambda: str(uuid4()))
     parent_run_id: str | None = None
-    depth: int | None = None
+    depth: int = 0
     retention: TraceRetentionPolicy = field(default_factory=TraceRetentionPolicy)
     data_use: DataUseAuthorization = field(default_factory=DataUseAuthorization)
     clock: Clock = utc_now
@@ -338,10 +674,18 @@ class TraceRecorder:
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if not self.run_id:
+        if not isinstance(self.run_id, str) or not self.run_id:
             raise ValueError("trace run_id must not be empty")
-        if self.depth is not None and self.depth < 0:
+        if self.parent_run_id is not None and (
+            not isinstance(self.parent_run_id, str) or not self.parent_run_id
+        ):
+            raise ValueError("trace parent_run_id must be a non-empty string")
+        if isinstance(self.depth, bool) or not isinstance(self.depth, int) or self.depth < 0:
             raise ValueError("trace depth must be non-negative")
+        if self.depth == 0 and self.parent_run_id is not None:
+            raise ValueError("root traces cannot have parent_run_id")
+        if self.depth > 0 and not self.parent_run_id:
+            raise ValueError("child traces require parent_run_id")
 
     @property
     def events(self) -> tuple[RunEvent, ...]:
