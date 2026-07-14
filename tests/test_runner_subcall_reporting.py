@@ -85,6 +85,8 @@ def test_run_reports_actual_subcall_count() -> None:
 
 
 def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> None:
+    from importlib import import_module
+
     import droste_runner.runner as runner_module
     from droste.loop.step import RLMResult
     from droste.loop.trajectory import IterationRecord
@@ -111,7 +113,7 @@ def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> 
             ],
         )
 
-    monkeypatch.setattr(runner_module, "run_rlm", fake_run_rlm)
+    monkeypatch.setattr(import_module("droste_runner.run"), "run_rlm", fake_run_rlm)
     response = runner_module.run(
         {
             "protocol_version": 1,
@@ -149,6 +151,19 @@ def test_rejected_over_limit_attempt_is_not_counted() -> None:
         client.llm_query("b")
     assert context.stats.calls_made == 1
     assert context.stats.successful_calls == 1
+
+
+def test_subcall_depth_is_restored_after_request_failure() -> None:
+    client, _ = _client(max_calls=2)
+
+    def fail(_payload: dict[str, Any]) -> str:
+        raise RuntimeError("request failed")
+
+    client._request = fail  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="request failed"):
+        client.llm_query("a")
+
+    assert client._depth_get() == 0
 
 
 def test_concurrent_batch_counts_each_issued_call() -> None:

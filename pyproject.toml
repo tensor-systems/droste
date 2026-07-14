@@ -49,10 +49,5 @@ line-length = 100
 [tool.ruff.lint]
 extend-select = ["I"]
 
-[tool.ruff.lint.per-file-ignores]
-# The runner is also an extracted standalone entrypoint: the sys.path
-# bootstrap must run before package imports.
-"src/droste_runner/runner.py" = ["E402"]
-
 [tool.pytest.ini_options]
 pythonpath = ["."]

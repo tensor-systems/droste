@@ -57,6 +57,18 @@ evidence with that status rather than leaving the model to interpret prefixes.
 ## droste_runner Package
 
 - `droste_runner` is a shared HTTP-backed runner used by host apps (ModelRelay's hosted runner, in-process embedders). It reads the request JSON from `RLM_RUNNER_REQUEST_PATH` (or argv) and returns a JSON response payload.
+- Invoke the process runner as `python -m droste_runner` from an installed
+  package. Do not restore repository-layout `sys.path` mutation or rely on
+  direct execution of `runner.py`.
+- Module ownership is strict: `run.py` orchestrates, `protocol.py` shapes both
+  refusal and success envelopes, `http_clients.py` owns network clients, and
+  `sources.py` owns the remote wrapper plus declarative source construction.
+  `runner.py` only re-exports compatibility names; focused modules must not
+  import that facade or each other in a cycle.
+- The generic native `RunnerEnvironment` lives in
+  `droste.environments.inprocess`; `droste_runner.environment` and
+  `droste_runner.runner` are compatibility shims. Core/CLI code must not import
+  the runner package to obtain an execution environment.
 - Every request MUST carry `"protocol_version"` (currently 1) — missing/mismatched versions get a structured refusal, never partial work. See docs/architecture.md, "The runner protocol".
 - The runner wraps `droste` and supplies an HTTP `LLMClient` + `SubcallClient` plus a sandboxed `RunnerEnvironment`.
 - Timeouts in `RunnerEnvironment.execute` use `signal.setitimer` and restore the previous handler (`old_handler`) after each execution to avoid clobbering host signal handlers.

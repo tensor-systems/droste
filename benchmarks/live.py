@@ -15,10 +15,10 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from droste import ModelRelayClient, ModelRelaySubcallClient, RLMConfig, run_rlm
+from droste.environments import RunnerEnvironment
 from droste.execution.context import create_execution_context
 from droste.policy import PolicyHints
 from droste_cli.credentials import CredentialsError, load_credentials
-from droste_runner.runner import RunnerEnvironment
 
 from .models import ArmSpec, BenchmarkSpec, RunArtifact, RunStatus, SuiteManifest, Usage
 from .runner import (

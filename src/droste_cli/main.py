@@ -475,7 +475,7 @@ def run_ask(args: argparse.Namespace) -> int:
 
     # RunnerEnvironment provides the in-process REPL plus the context
     # name + size prompt description for free.
-    from droste_runner.runner import RunnerEnvironment
+    from droste.environments import RunnerEnvironment
 
     environment = RunnerEnvironment(
         context=loaded.context,
