@@ -427,6 +427,7 @@ def test_terminal_execution_error_extracts_partial_answer() -> None:
     assert "usable draft" in llm.calls[-1][1]["content"]
     assert "bad kwarg" in llm.calls[-1][1]["content"]
     assert "still bad" in llm.calls[-1][1]["content"]
+    assert "Status: error" in llm.calls[-1][1]["content"]
 
 
 def test_failed_only_trajectory_without_draft_skips_extraction() -> None:
@@ -482,6 +483,8 @@ def test_successful_error_prefixed_stdout_is_extractable_evidence() -> None:
     assert result.answer == "Recovered analysis from the successful step."
     assert len(llm.calls) == 2
     assert result.trajectory[0].execution_status == "success"
+    assert "Status: success" in llm.calls[-1][1]["content"]
+    assert "Output:\nERROR: line from analyzed log" in llm.calls[-1][1]["content"]
 
 
 def test_successful_ready_error_prefixed_stdout_is_the_answer() -> None:

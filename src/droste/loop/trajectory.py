@@ -23,4 +23,6 @@ class IterationRecord:
     tokens_used: int
     # Additive structured status: execution_result remains the exact feedback
     # text for compatibility and must never be parsed to recover this state.
-    execution_status: ExecutionStatus = EXECUTION_STATUS_SUCCESS
+    # Keep old positional construction valid, but fail closed when legacy code
+    # omits the authoritative status. Production records always pass it.
+    execution_status: ExecutionStatus = EXECUTION_STATUS_ERROR

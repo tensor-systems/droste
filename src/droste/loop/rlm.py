@@ -121,6 +121,7 @@ def _trajectory_summary(
             output = _truncate(raw_output, _EXTRACT_OUTPUT_CHARS)
         parts.append(
             f"--- Iteration {entry.iteration} ---\n"
+            f"Status: {entry.execution_status}\n"
             f"Code:\n{_truncate(entry.code_executed, _EXTRACT_CODE_CHARS)}\n"
             f"Output:\n{output}"
         )

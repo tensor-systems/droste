@@ -20,6 +20,9 @@ additive string field `execution_status`, currently `"success"` or `"error"`.
 Use it instead of interpreting the text in `execution_result`: successful
 stdout may legitimately begin with `ERROR:`. The existing `execution_result`
 field and runner protocol version are unchanged.
+Direct positional construction that omits the new field remains accepted and
+defaults conservatively to `"error"`; engine-created records always set the
+status from their typed step outcome.
 
 ### ModelRelay root request accounting
 

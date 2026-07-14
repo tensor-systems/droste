@@ -158,7 +158,7 @@ def test_record_iteration_keeps_error_text_and_status_separate() -> None:
 def test_iteration_record_positional_construction_remains_compatible() -> None:
     record = IterationRecord(1, [], "R", "pass", "legacy output", 2)
     assert record.execution_result == "legacy output"
-    assert record.execution_status == "success"
+    assert record.execution_status == "error"
 
 
 def test_finalize_reads_stats_and_readiness() -> None:
