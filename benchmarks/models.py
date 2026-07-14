@@ -265,8 +265,13 @@ class ExecutionLimits:
         _reject_unknown(
             data,
             {
-                "tokens", "subcalls", "depth", "wall_ms",
-                "root_output_tokens", "subcall_output_tokens", "concurrency",
+                "tokens",
+                "subcalls",
+                "depth",
+                "wall_ms",
+                "root_output_tokens",
+                "subcall_output_tokens",
+                "concurrency",
             },
             path,
         )
