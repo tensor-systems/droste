@@ -7,7 +7,9 @@ silently incomplete data, unlike the native executor path."""
 from __future__ import annotations
 
 from droste import RLMConfig, run_rlm
+from droste.capabilities import broker_subcalls
 from droste.protocols.llm_client import TokenUsage
+from droste.protocols.subcall_client import SubcallClient
 from droste.substrates.pyodide import RawExecutor
 from droste.testing import MockLLMClient, MockResponse, MockSubcallClient
 
@@ -31,6 +33,9 @@ class _RawExecutorEnvironment:
 
     def globals(self):
         return self._globals
+
+    def sandbox_subcalls(self, subcalls: SubcallClient) -> SubcallClient:
+        return broker_subcalls(subcalls)
 
     def prompt_fragment(self) -> str:
         return ""

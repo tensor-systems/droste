@@ -34,6 +34,52 @@ bridge back to language models:
   result blocks answer confirmation until the exact prompts, contexts, schema,
   and validator object later produce an error-free result.
 
+## Capability broker
+
+Generated code reaches data sources and sub-LLMs through one brokered path.
+At environment construction, trusted source verbs and the subcall client become
+an immutable `CapabilityManifest`. The native and Pyodide environments generate
+the same model-facing Python functions from that manifest; those functions
+submit immutable `CapabilityCall` values to an exact allowlist and unwrap the
+single typed `CapabilityResult` envelope for compatibility with existing code.
+Calls carry only a frozen `CapabilityId`—kind, reusable provider type,
+configured source ID, and operation. The broker resolves the complete descriptor
+from the manifest, keeping stable dispatch identity separate from documentation,
+schema, pagination, budget, and policy metadata that descriptors may gain.
+
+Each result envelope carries the capability kind, configured source or provider
+identifier, operation, call and run IDs, typed status/error, value or bounded
+handle, usage and budget deltas, evidence references, and optional parent/child
+run IDs. Most fields are empty until a host supplies facts through the broker's
+narrow annotator seam. A guard may deny a call before dispatch, and an observer
+may project the completed immutable envelope into a trace. Those are interfaces,
+not policy, ledger, or trace implementations; the corresponding subsystems own
+their semantics. Durable capability events use `CapabilityResult.to_trace_dict()`:
+it retains IDs, status, typed error code/type, accounting facts, evidence count,
+and optional result-handle media type and size, but no parameters, inline result,
+error message, evidence reference, or handle locator. Full envelopes are replay
+content and require an explicit content-retention policy.
+At registration, raw trusted handler values are normalized into one
+`CapabilityOutcome` convention. A provider can return a result or a typed
+provider failure with an extensible stable error code, together with usage and
+evidence metadata; unexpected exceptions remain broker `handler_error` values.
+Provider sequence facts precede the exactly-once finalizer's appended facts.
+Conflicting singular handle or child-run facts fail closed, so dispatch never
+needs a provider-specific parser or precedence convention.
+The annotator has exactly-once post-attempt semantics: it runs after success,
+handler error, invalid result, or propagated cancellation, but not when run
+identity, allowlist, arguments, or the guard reject a call before its handler is
+attempted. This lets a later call-ID-keyed ledger reconcile a guard reservation
+without making the broker own ledger policy.
+
+`llm_batch` is one broker operation and invokes the subcall client's batch method
+once. It is not decomposed into nested `llm_query` calls, so ordering,
+reservation, concurrency, and provider-native batch semantics stay intact.
+`llm_batch_json` remains local deterministic composition over the broker-backed
+batch adapter. The existing `DataSourceService` JSON envelope is a transport
+detail behind a data-source handler and is deliberately not a second capability
+ABI.
+
 The loop ends when the model sets `answer["ready"] = True`, or the iteration
 budget runs out — in which case, when the trajectory contains executed work,
 a single **extract pass** produces a best-effort answer from it, flagged `extracted=True` and never
@@ -77,9 +123,11 @@ the source itself via an `extra_methods` attribute (a tuple of method
 names); the registry binds exactly those callables into the sandbox —
 validated against engine verbs, reserved globals, and Python builtins,
 and a flattened default-source verb additionally may not collide with
-another source's namespace — and the bridge's `DataSourceService` honors
-the same declaration, so a source behaves identically in-process and
-across the Pyodide bridge.
+another source's namespace. The registry turns this inventory into broker
+registrations and generated bindings; it does not inject raw source methods
+into built-in sandbox environments. The bridge's `DataSourceService` honors
+the same declaration, so a source behaves identically in-process and across
+the Pyodide bridge.
 
 The bundled SQLite source is local-mode: SELECT-only policy gate (single
 statement, masked-identifier keyword scanning, LIMIT injection, row caps,

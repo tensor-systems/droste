@@ -130,8 +130,9 @@ consumer-validated before frozen:
 
 1. **Kernel ABI** — the REPL contract: the `answer` dict, stdout-as-feedback,
    persistent state across iterations, reserved globals.
-2. **Capability ABI** — the manifest (tool-shaped descriptors), Python binding
-   generation, parameter/result schemas, and **side-effect metadata**
+2. **Capability ABI** — stable capability IDs, the manifest (tool-shaped
+   descriptors), Python binding generation, parameter/result schemas, and
+   **side-effect metadata**
    (read-only vs effectful — the generalization of today's hard-coded
    SqlValidator gate, and the hook confirmation policies hang from).
 3. **Broker ABI** — `call`, `emit`, the budget ledger, policy/confirmation hooks.
@@ -234,7 +235,7 @@ future topology change, including nested recursion and the Worker evolution:
 
 | principle | issue |
 |---|---|
-| bridge (`call`/`emit`, JSON-RPC 2.0, register) + A′ split | shipped (Pyodide substrate); broker generalization: #9 |
+| bridge (`call`/`emit`, JSON-RPC 2.0, register) + A′ split | shipped; typed brokered path across native + Pyodide |
 | providers are MCP; registry unification; wrapper_v1 demotion | shipped; MCP spike: #5 |
 | one budget object; recursion as metered provider | #4 (budget) + #2 (recursion) |
 | event stream over `emit` | #1 |

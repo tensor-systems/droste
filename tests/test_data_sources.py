@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from droste.capabilities import CapabilityBroker
 from droste.registry import DataSourceRegistry
 from droste.testing import MockDataSource, MockSubcallClient
 from droste_runner.runner import (
@@ -27,6 +28,11 @@ def _clean_source_registry():
     _reset_source_types()
     yield
     _reset_source_types()
+
+
+def _broker_globals(registry: DataSourceRegistry):
+    broker = CapabilityBroker(registry.capability_registrations())
+    return registry.broker_globals(broker)
 
 
 # --- build_data_sources ----------------------------------------------------
@@ -257,7 +263,7 @@ def test_wrapper_capabilities_and_schema() -> None:
 
 def test_registry_exposes_wrapper_verbs_including_content() -> None:
     src = WrapperV1DataSource({"base_url": "https://x", "token": "t"}, name="partner")
-    env = DataSourceRegistry([src], default_source_name="partner").globals()
+    env = _broker_globals(DataSourceRegistry([src], default_source_name="partner"))
     ns = env["partner"]
     # Namespace is attribute-accessible (db.search), not a dict (db["search"]).
     assert all(hasattr(ns, v) for v in ("search", "get", "content", "get_stats"))
@@ -268,7 +274,9 @@ def test_registry_exposes_wrapper_verbs_including_content() -> None:
 
 
 def test_registry_sql_source_exposes_query_and_schema() -> None:
-    env = DataSourceRegistry([MockDataSource(schema="t")], default_source_name="mock").globals()
+    env = _broker_globals(
+        DataSourceRegistry([MockDataSource(schema="t")], default_source_name="mock")
+    )
     assert hasattr(env["mock"], "query")
     assert hasattr(env["mock"], "get_schema")  # schema capability -> callable
     assert env["query"] is env["mock"].query
@@ -284,14 +292,16 @@ def test_reserved_and_duplicate_names_rejected() -> None:
             return self._n
 
     with pytest.raises(ValueError, match="reserved"):
-        DataSourceRegistry([Named("context")]).globals()
+        _broker_globals(DataSourceRegistry([Named("context")]))
     with pytest.raises(ValueError, match="duplicate"):
-        DataSourceRegistry([Named("db"), Named("db")]).globals()
+        _broker_globals(DataSourceRegistry([Named("db"), Named("db")]))
 
 
 def test_unknown_default_source_rejected() -> None:
     with pytest.raises(ValueError, match="not a defined source"):
-        DataSourceRegistry([MockDataSource(schema="t")], default_source_name="nope").globals()
+        _broker_globals(
+            DataSourceRegistry([MockDataSource(schema="t")], default_source_name="nope")
+        )
 
 
 def test_non_list_data_sources_rejected() -> None:

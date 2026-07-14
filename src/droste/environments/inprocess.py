@@ -13,6 +13,14 @@ import json
 import signal
 from typing import Any
 
+from ..capabilities import (
+    BrokeredSubcallClient,
+    CapabilityAnnotator,
+    CapabilityBroker,
+    CapabilityGuard,
+    CapabilityObserver,
+    subcall_registrations,
+)
 from ..protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
 from ..protocols.subcall_client import SubcallClient
 from ..protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest
@@ -121,27 +129,60 @@ class RunnerEnvironment(RLMEnvironment):
         subcalls: SubcallClient,
         max_output_chars: int,
         exec_timeout_ms: int,
+        capability_run_id: str | None = None,
+        capability_parent_run_id: str | None = None,
+        capability_guard: CapabilityGuard | None = None,
+        capability_annotator: CapabilityAnnotator | None = None,
+        capability_observer: CapabilityObserver | None = None,
     ) -> None:
         self._context = context
         self._registry = registry
         self._subcalls = subcalls
         self._max_output_chars = max_output_chars
         self._exec_timeout_ms = exec_timeout_ms
+        registrations = list(subcall_registrations(subcalls))
+        if registry is not None:
+            registrations.extend(registry.capability_registrations())
+        self._broker = CapabilityBroker(
+            tuple(registrations),
+            run_id=capability_run_id,
+            parent_run_id=capability_parent_run_id,
+            guard=capability_guard,
+            annotator=capability_annotator,
+            observer=capability_observer,
+        )
+        self._sandbox_subcalls = BrokeredSubcallClient(self._broker)
+        llm_query = self._sandbox_subcalls.llm_query
+        llm_batch = self._sandbox_subcalls.llm_batch
         self._globals: dict[str, Any] = {
             "answer": {"content": "", "ready": False},
             "context": context,
-            "llm_query": subcalls.llm_query,
-            "llm_batch": subcalls.llm_batch,
-            "batch_llm_query": subcalls.llm_batch,
-            "llm_query_batched": subcalls.llm_batch,
+            "llm_query": llm_query,
+            "llm_batch": llm_batch,
+            "batch_llm_query": llm_batch,
+            "llm_query_batched": llm_batch,
         }
-        structured_batch = bind_structured_batch(subcalls)
+        structured_batch = bind_structured_batch(self._sandbox_subcalls)
         self._globals["llm_batch_json"] = structured_batch
         self._globals["llm_query_batched_json"] = structured_batch
         self._globals["aggregate_json_counts"] = aggregate_json_counts
         if registry is not None:
             # Namespaced (e.g. db.query / vault.search) + default-flattened globals.
-            self._globals.update(registry.globals())
+            self._globals.update(registry.broker_globals(self._broker))
+
+    def capability_broker(self) -> CapabilityBroker:
+        """Trusted host access to the manifest and typed result envelopes."""
+
+        return self._broker
+
+    def sandbox_subcalls(self, subcalls: SubcallClient) -> SubcallClient:
+        """Broker-backed client used by loop-installed compatibility helpers."""
+
+        if subcalls is not self._subcalls:
+            raise ValueError(
+                "run_rlm subcalls must be the same client brokered by RunnerEnvironment"
+            )
+        return self._sandbox_subcalls
 
     def capabilities(self) -> EnvCapabilities:
         return {

@@ -16,14 +16,6 @@ class PolicyError(SandboxError):
     pass
 
 
-class BatchLLMError(SandboxError):
-    """Raised when a batch sub-LLM request returns one or more errors."""
-
-    def __init__(self, message: str, errors: list[dict[str, Any]]) -> None:
-        super().__init__(message)
-        self.errors = errors
-
-
 class SubcallBudgetExceeded(RuntimeError):
     """A subcall dispatch was rejected before exceeding its call budget."""
 

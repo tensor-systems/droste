@@ -423,13 +423,40 @@ def test_structured_batch_uses_errors_to_disambiguate_valid_json_null() -> None:
     assert {item["index"] for item in result["errors"]} == {1}
 
 
-def test_structured_batch_supports_exact_legacy_budget_runtime_error() -> None:
+@pytest.mark.parametrize(
+    ("errors", "message"),
+    [
+        ([{"index": True, "error": "x"}], "invalid index"),
+        ([{"index": -1, "error": "x"}], "out of range"),
+        ([{"index": 1, "error": "x"}], "out of range"),
+        (
+            [{"index": 0, "error": "x"}, {"index": 0, "error": "again"}],
+            "duplicate",
+        ),
+        (["not an object"], "non-object"),
+    ],
+)
+def test_structured_batch_rejects_invalid_provider_error_indices(errors, message) -> None:
+    class InvalidErrors:
+        def llm_batch_with_errors(self, prompts, contexts=None):
+            return ['{"count":1}'], errors
+
+    with pytest.raises(RuntimeError, match=message):
+        structured_batch(InvalidErrors(), ["a"], SCHEMA)
+
+
+def test_structured_batch_rejects_non_string_schema_keys_cleanly() -> None:
+    with pytest.raises(ValueError, match="schema keys must be strings"):
+        structured_batch(ScriptedSubcalls([]), ["a"], {1: {"type": "string"}})
+
+
+def test_structured_batch_requires_typed_budget_errors() -> None:
     class LegacyBudgetClient(ScriptedSubcalls):
         def llm_batch_with_errors(self, prompts, contexts=None):
             raise RuntimeError("max subcalls exceeded")
 
     result = structured_batch(LegacyBudgetClient([]), ["a"], SCHEMA)
-    assert result["errors"][0]["type"] == "budget_exhausted"
+    assert result["errors"][0]["type"] == "provider_error"
 
     class SimilarProviderErrorClient(ScriptedSubcalls):
         def llm_batch_with_errors(self, prompts, contexts=None):

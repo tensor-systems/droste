@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..capabilities import CapabilityAnnotator, CapabilityGuard, CapabilityObserver
 from ..protocols.environment import ExecutionResult
 from ..protocols.subcall_client import SubcallClient
 from ..registry import DataSourceRegistry
@@ -27,6 +28,11 @@ class PyodideEnvironment(RunnerEnvironment):
         subcalls: SubcallClient,
         max_output_chars: int,
         exec_timeout_ms: int = 0,
+        capability_run_id: str | None = None,
+        capability_parent_run_id: str | None = None,
+        capability_guard: CapabilityGuard | None = None,
+        capability_annotator: CapabilityAnnotator | None = None,
+        capability_observer: CapabilityObserver | None = None,
     ) -> None:
         if exec_timeout_ms != 0:
             raise ValueError("PyodideEnvironment cannot enforce exec_timeout_ms")
@@ -36,6 +42,11 @@ class PyodideEnvironment(RunnerEnvironment):
             subcalls=subcalls,
             max_output_chars=max_output_chars,
             exec_timeout_ms=0,
+            capability_run_id=capability_run_id,
+            capability_parent_run_id=capability_parent_run_id,
+            capability_guard=capability_guard,
+            capability_annotator=capability_annotator,
+            capability_observer=capability_observer,
         )
         self._executor = RawExecutor(
             db=None,

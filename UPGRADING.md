@@ -13,6 +13,57 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.10.6)
 
+### Built-in sandbox capabilities use one brokered ABI
+
+`RunnerEnvironment` and `PyodideEnvironment` now generate their existing
+`llm_query*` and data-source Python APIs from one immutable capability manifest.
+Names, aliases, arguments, return values, and atomic batch behavior are
+preserved, but built-in environments no longer put raw `SubcallClient` or data
+source bound methods in the sandbox globals mapping. The loop's structured JSON
+batch replacement also uses the environment's broker-backed adapter.
+
+Hosts that need correlation may pass additive `capability_run_id` and
+`capability_parent_run_id` arguments to `create_environment`. Optional typed
+`capability_guard`, `capability_annotator`, and `capability_observer` callables
+are integration seams for policy/budget facts and trace projection; no default
+policy, shared ledger, persistence, or transport change is implied.
+Capability calls carry a frozen `CapabilityId` made of `kind`, `provider_type`,
+`source_id`, and `operation`; the broker resolves the full descriptor from its
+manifest so future schema, documentation, and policy metadata do not change the
+wire identity. Trace integrations should persist
+`CapabilityResult.to_trace_dict()`, the content-free projection. The full
+`to_dict()` includes arguments, inline results, error messages, evidence
+references, and result-handle locators and is suitable only for explicitly
+configured replay retention.
+`capability_annotator` is an exactly-once post-attempt finalizer: it runs after
+each attempted handler outcome, including invalid results and propagated
+cancellation, and is skipped for validation or guard exits before an attempt.
+Accounting integrations can therefore reconcile a guard reservation by
+`call_id` without a second broker callback.
+Trusted handlers may return `CapabilityOutcome(result=..., metadata=...)` or
+`CapabilityOutcome(error=CapabilityError(...), metadata=...)` to attach typed
+provider failures, usage, or evidence without raising or requiring a transport
+parser. Error `code` is now an extensible stable string; `CapabilityErrorCode`
+remains the set of broker-defined string constants. Raw handler return values
+are normalized automatically at registration. Provider sequence metadata is
+preserved first and finalizer sequence metadata is appended; conflicting
+singular handle/child-run facts become an annotator error rather than silently
+choosing one.
+The unused `BatchLLMError` compatibility type and repair branch are removed.
+Plain `llm_batch` reports its brokered typed failure as `CapabilityCallError`;
+callers that need ordered per-item failures use `llm_batch_json` or the trusted
+`llm_batch_with_errors` adapter, both of which remain single atomic broker calls.
+`DataSourceRegistry` no longer has a standalone `globals()` projection. Hosts
+construct one run broker from `capability_registrations()` and pass it to
+`broker_globals()`, preventing an accidental second broker without the run's
+identity, guard, accounting annotator, or observer.
+
+Custom `RLMEnvironment` implementations must now implement
+`sandbox_subcalls(subcalls)`. Return a broker-backed `SubcallClient`; the
+`droste.capabilities.broker_subcalls()` helper supplies the standard standalone
+adapter. `run_rlm` replaces all canonical subcall globals from that method and
+does not retain a raw-client fallback.
+
 ### Hosts select environments through one substrate factory
 
 New in-process hosts should build an immutable `EnvironmentConfig`, then call

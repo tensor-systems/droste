@@ -8,9 +8,16 @@ engine (codex review on the #10 domain-blind change).
 
 from __future__ import annotations
 
+from droste.capabilities import CapabilityBroker
 from droste.policy import PolicyHints, contract_violations
+from droste.registry import DataSourceRegistry
 
 COUNT = PolicyHints(count=True)
+
+
+def _broker_globals(registry: DataSourceRegistry):
+    broker = CapabilityBroker(registry.capability_registrations())
+    return registry.broker_globals(broker)
 
 
 def test_len_over_declared_extra_is_rejected() -> None:
@@ -80,7 +87,7 @@ def test_flattened_extra_may_not_overwrite_another_sources_namespace() -> None:
             return []
 
     with pytest.raises(ValueError, match="overwrite a registered source"):
-        DataSourceRegistry([Archive(), Default()], default_source_name="mock").globals()
+        _broker_globals(DataSourceRegistry([Archive(), Default()], default_source_name="mock"))
 
 
 def test_static_fallback_when_no_accessors_supplied() -> None:
@@ -122,7 +129,7 @@ def test_registry_namespaces_carry_no_marker_attributes() -> None:
     from droste.registry import DataSourceRegistry
     from droste.testing import MockDataSource
 
-    env = DataSourceRegistry([MockDataSource()], default_source_name="mock").globals()
+    env = _broker_globals(DataSourceRegistry([MockDataSource()], default_source_name="mock"))
     assert not any(attr.startswith("_droste") for attr in vars(env["mock"]))
 
 

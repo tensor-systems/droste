@@ -112,11 +112,11 @@ class SyntheticClassificationSubcalls:
         return self.batches.pop(0), errors
 
 
-def _runner_env(context: Any) -> RunnerEnvironment:
+def _runner_env(context: Any, subcalls: Any | None = None) -> RunnerEnvironment:
     return RunnerEnvironment(
         context=context,
         registry=None,
-        subcalls=MockSubcallClient(),
+        subcalls=subcalls or MockSubcallClient(),
         max_output_chars=10000,
         exec_timeout_ms=0,
     )
@@ -675,7 +675,8 @@ def test_terminal_subcall_budget_error_extracts_partial_answer() -> None:
     assert result.extracted is True
     assert result.error is None
     assert result.recovered_error is not None
-    assert result.recovered_error.type == "RuntimeError"
+    assert result.recovered_error.type == "CapabilityCallError"
+    assert "RuntimeError: max subcalls exceeded" in result.recovered_error.message
     assert "already assembled" in llm.calls[-1][1]["content"]
     assert "max subcalls exceeded" in llm.calls[-1][1]["content"]
 
@@ -816,7 +817,7 @@ answer['ready'] = False
         )
     )
     subcalls = SyntheticClassificationSubcalls([['{"label":"red,blue"}', "not json"]])
-    environment = _runner_env(None)
+    environment = _runner_env(None, subcalls)
 
     result = run_rlm(
         question="Assign labels to four synthetic records.",

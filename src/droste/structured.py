@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from .capabilities import CapabilityCallError
 from .exceptions import SubcallBudgetExceeded
 from .protocols.subcall_client import SubcallClient
 
@@ -119,6 +120,8 @@ def _is_number(value: Any) -> bool:
 def _validate_schema_definition(schema: Mapping[str, Any], *, path: str = "schema") -> None:
     if not isinstance(schema, Mapping):
         raise ValueError(f"{path} must be an object")
+    if not all(isinstance(key, str) for key in schema):
+        raise ValueError(f"{path} keys must be strings")
     unknown = sorted(set(schema) - _SCHEMA_KEYWORDS)
     if unknown:
         raise ValueError(f"unsupported JSON schema keywords: {', '.join(unknown)}")
@@ -366,13 +369,12 @@ def structured_batch(
         try:
             raw_values, raw_errors = subcalls.llm_batch_with_errors(call_prompts, call_contexts)
         except Exception as exc:
-            # Third-party clients predating SubcallBudgetExceeded commonly
-            # used this exact RuntimeError. Keep that narrow compatibility
-            # fallback while every Droste-owned client raises the typed form.
-            legacy_budget_error = type(exc) is RuntimeError and str(exc) == "max subcalls exceeded"
+            broker_budget_error = (
+                isinstance(exc, CapabilityCallError) and exc.error.type == "SubcallBudgetExceeded"
+            )
             kind = (
                 "budget_exhausted"
-                if isinstance(exc, SubcallBudgetExceeded) or legacy_budget_error
+                if isinstance(exc, SubcallBudgetExceeded) or broker_budget_error
                 else "provider_error"
             )
             for index in indices:
@@ -386,7 +388,18 @@ def structured_batch(
             return
         if len(raw_values) != len(indices):
             raise RuntimeError("subcall client returned the wrong number of batch results")
-        provider_errors = {int(item["index"]): item for item in raw_errors}
+        provider_errors: dict[int, dict[str, Any]] = {}
+        for item in raw_errors:
+            if not isinstance(item, Mapping):
+                raise RuntimeError("subcall client returned a non-object batch error")
+            index = item.get("index")
+            if not isinstance(index, int) or isinstance(index, bool):
+                raise RuntimeError("subcall client returned a batch error with an invalid index")
+            if index < 0 or index >= len(indices):
+                raise RuntimeError("subcall client returned a batch error index out of range")
+            if index in provider_errors:
+                raise RuntimeError("subcall client returned duplicate batch error indices")
+            provider_errors[index] = dict(item)
         for local_index, index in enumerate(indices):
             attempts[index] += 1
             if local_index in provider_errors:

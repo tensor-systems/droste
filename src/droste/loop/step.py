@@ -14,7 +14,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..exceptions import BatchLLMError, PolicyError, RLMError, SandboxError
+from ..exceptions import PolicyError, RLMError, SandboxError
 from ..execution.config import (
     DEFAULT_MAX_CALLS,
     DEFAULT_MAX_DEPTH,
@@ -499,9 +499,6 @@ def execute_step(
         if violations:
             raise PolicyError("Policy violation: " + " | ".join(violations))
     except Exception as exec_error:
-        details = None
-        if isinstance(exec_error, BatchLLMError):
-            details = {"errors": exec_error.errors}
         # Failed code cannot submit a confirmed answer, even if it set ready
         # before raising or rebound the answer dict entirely. Keep accumulated
         # content for repair/extraction, but always revoke readiness. Policy
@@ -519,7 +516,6 @@ def execute_step(
                 type=exec_error.__class__.__name__,
                 message=str(exec_error),
                 code=code,
-                details=details,
             ),
             exception=exec_error,
         )

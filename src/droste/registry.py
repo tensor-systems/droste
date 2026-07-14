@@ -3,6 +3,15 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+from .capabilities import (
+    CapabilityBroker,
+    CapabilityDescriptor,
+    CapabilityId,
+    CapabilityKind,
+    CapabilityRegistration,
+    SideEffect,
+    generate_binding,
+)
 from .protocols.data_source import DataSource
 from .protocols.verbs import (
     RESERVED_NAMES,
@@ -61,15 +70,63 @@ class DataSourceRegistry:
 
         return ns
 
-    def globals(self) -> dict[str, Any]:
+    def capability_registrations(self) -> tuple[CapabilityRegistration, ...]:
+        """Describe the current configured sources as trusted registrations."""
+
+        registrations: list[CapabilityRegistration] = []
+        for source in self._validated_sources():
+            for operation, handler in self._bound_verbs(source).items():
+                registrations.append(
+                    CapabilityRegistration(
+                        CapabilityDescriptor(
+                            CapabilityId(
+                                kind=CapabilityKind.DATA,
+                                source_id=source.name(),
+                                operation=operation,
+                            ),
+                            # The DataSource contract contains accessors only;
+                            # effectful host tools require a different explicit
+                            # registration rather than an ambiguous extra.
+                            side_effect=SideEffect.READ,
+                        ),
+                        handler,
+                    )
+                )
+        return tuple(registrations)
+
+    def broker_globals(self, broker: CapabilityBroker) -> dict[str, Any]:
+        """Generate namespaced and default-flat model APIs over ``broker``."""
+
         env: dict[str, Any] = {}
+        sources = self._validated_sources()
+        all_source_names = {source.name() for source in sources}
+        manifest = broker.describe()
+        for source in sources:
+            bindings: dict[str, Any] = {}
+            descriptors = (
+                descriptor
+                for descriptor in manifest.descriptors
+                if descriptor.capability_id.kind is CapabilityKind.DATA
+                and descriptor.capability_id.source_id == source.name()
+            )
+            for descriptor in descriptors:
+                operation = descriptor.capability_id.operation
+                bindings[operation] = generate_binding(broker, descriptor, name=operation)
+            env[source.name()] = SimpleNamespace(**bindings)
+            if self._default_source_name == source.name():
+                for operation, binding in bindings.items():
+                    if operation in all_source_names:
+                        raise ValueError(
+                            f"flattened verb {operation!r} of default source "
+                            f"{source.name()!r} would overwrite a registered source's namespace"
+                        )
+                    env[operation] = binding
+        return env
+
+    def _validated_sources(self) -> tuple[DataSource, ...]:
+        """Validate names once for every registry projection."""
+
         seen: set[str] = set()
-        # All source names up front: a flattened default-source verb (core or
-        # extra) must never overwrite another source's namespace object —
-        # e.g. a default source with extra_methods=("archive",) next to a
-        # source named "archive" would silently replace env["archive"] with
-        # a bound method.
-        all_source_names = {s.name() for s in self._sources}
         for source in self._sources:
             name = source.name()
             if name in RESERVED_NAMES:
@@ -77,29 +134,11 @@ class DataSourceRegistry:
             if name in seen:
                 raise ValueError(f"duplicate data source name: {name!r}")
             seen.add(name)
-
-            ns = self._bound_verbs(source)
-
-            # Expose an attribute-accessible namespace so the model can write
-            # `db.query(...)` (a dict would force `db["query"](...)`). The verbs
-            # return Python values into the sandbox — they are not tool calls.
-            env[name] = SimpleNamespace(**ns)
-
-            if self._default_source_name == name:
-                for key, value in ns.items():
-                    if key in all_source_names:
-                        raise ValueError(
-                            f"flattened verb {key!r} of default source {name!r} would "
-                            "overwrite a registered source's namespace"
-                        )
-                    env[key] = value
-
         if self._default_source_name is not None and self._default_source_name not in seen:
             raise ValueError(
                 f"default_source {self._default_source_name!r} is not a defined source"
             )
-
-        return env
+        return tuple(self._sources)
 
     def accessor_manifest(self) -> AccessorManifest:
         """Explicit inventory of the data accessors globals() binds, for the

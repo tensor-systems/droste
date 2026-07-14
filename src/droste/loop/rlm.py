@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from ..exceptions import BatchLLMError, PolicyError, RLMError, SubcallBudgetExceeded
+from ..exceptions import PolicyError, RLMError, SubcallBudgetExceeded
 from ..execution.context import ExecutionContext, create_execution_context
 from ..execution.progress import (
     EventCallback,
@@ -292,23 +292,6 @@ def _extract_final_answer(
         return "", RLMError(type=exc.__class__.__name__, message=str(exc))
 
 
-def _apply_batch_error_guard(subcalls: SubcallClient, env_globals: dict[str, Any]) -> None:
-    if hasattr(subcalls, "llm_batch_with_errors"):
-
-        def _wrapped_batch(prompts: list[str], contexts: list[str] | None = None) -> list[str]:
-            results, errors = subcalls.llm_batch_with_errors(prompts, contexts)
-            if errors:
-                raise BatchLLMError(
-                    f"batch_llm_query failed for {len(errors)}/{len(prompts)} items",
-                    errors,
-                )
-            return results
-
-        env_globals["llm_batch"] = _wrapped_batch
-        env_globals["batch_llm_query"] = _wrapped_batch
-        env_globals["llm_query_batched"] = _wrapped_batch
-
-
 def run_rlm(
     question: str,
     *,
@@ -361,6 +344,9 @@ def run_rlm(
         bind_context(context)
 
     env_globals = environment.globals()
+    # The environment contract owns one brokered subcall surface. The host's
+    # raw client remains trusted loop state for context binding/accounting.
+    sandbox_subcalls = environment.sandbox_subcalls(subcalls)
     answer = env_globals.get("answer")
     if not isinstance(answer, dict):
         answer = {"content": "", "ready": False}
@@ -371,32 +357,26 @@ def run_rlm(
         if cfg.enforce_contract and cfg.policy_hints is not None and cfg.policy_hints.semantic
         else None
     )
-    subcall_gate = _SubcallGate(subcalls)
-    sandbox_subcalls: SubcallClient = subcall_gate if semantic_evidence is not None else subcalls
-    if semantic_evidence is not None:
-        # Every model-visible subcall binding goes through the run-scoped gate.
-        # In particular, code may save one in a persistent variable; the saved
-        # wrapper must still be revocable during terminal finalization.
-        env_globals["llm_query"] = subcall_gate.llm_query
-        env_globals["llm_batch"] = subcall_gate.llm_batch
-        env_globals["batch_llm_query"] = subcall_gate.llm_batch
-        env_globals["llm_query_batched"] = subcall_gate.llm_batch
-    else:
-        env_globals.setdefault("llm_query", subcalls.llm_query)
-        env_globals.setdefault("llm_batch", subcalls.llm_batch)
-        env_globals.setdefault("batch_llm_query", subcalls.llm_batch)
-        # llm_query_batched is the name models primed on RLM conventions reach
-        # for first, so the sandbox must answer to it.
-        env_globals.setdefault("llm_query_batched", subcalls.llm_batch)
+    # The semantic finalization gate wraps the brokered adapter, never the raw
+    # trusted client, so revocable saved bindings cannot become an egress bypass.
+    subcall_gate = _SubcallGate(sandbox_subcalls)
+    model_subcalls: SubcallClient = (
+        subcall_gate if semantic_evidence is not None else sandbox_subcalls
+    )
+    env_globals["llm_query"] = model_subcalls.llm_query
+    env_globals["llm_batch"] = model_subcalls.llm_batch
+    env_globals["batch_llm_query"] = model_subcalls.llm_batch
+    # llm_query_batched is the name models primed on RLM conventions reach
+    # for first, so the sandbox must answer to it.
+    env_globals["llm_query_batched"] = model_subcalls.llm_batch
 
-    structured_batch = bind_structured_batch(sandbox_subcalls, semantic_evidence)
+    structured_batch = bind_structured_batch(model_subcalls, semantic_evidence)
     # These two aliases are one core helper, so bind Droste's version even when
     # an environment pre-populated a custom helper during setup. Semantic runs
     # use the evidence-tracked form selected above.
     env_globals["llm_batch_json"] = structured_batch
     env_globals["llm_query_batched_json"] = structured_batch
-    env_globals.setdefault("aggregate_json_counts", aggregate_json_counts)
-    _apply_batch_error_guard(sandbox_subcalls, env_globals)
+    env_globals["aggregate_json_counts"] = aggregate_json_counts
 
     manifest = _accessor_manifest(environment)
     data_accessor_names = set(manifest.flat)

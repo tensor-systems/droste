@@ -14,6 +14,7 @@ import threading
 
 import pytest
 
+from droste.capabilities import CapabilityBroker, CapabilityCallError
 from droste.registry import DataSourceRegistry
 from droste.sources.sql_local import (
     DEFAULT_LOCAL_SQL_POLICY,
@@ -488,7 +489,9 @@ def test_register_end_to_end(tmp_path) -> None:
     spec = {"type": "sql", "name": "db", "sqlite_path": path}
     sources, default = build_data_sources({"data_sources": [spec], "default_source": "db"}, None)
     assert len(sources) == 1 and default == "db"
-    env = DataSourceRegistry(sources, default_source_name=default).globals()
+    registry = DataSourceRegistry(sources, default_source_name=default)
+    broker = CapabilityBroker(registry.capability_registrations())
+    env = registry.broker_globals(broker)
 
     # Schema introspection describes the users table.
     assert "users(" in env["db"].get_schema()
@@ -497,8 +500,9 @@ def test_register_end_to_end(tmp_path) -> None:
     assert env["db"].query("SELECT name FROM users WHERE plan = 'pro'") == [{"name": "ada"}]
 
     # Non-SELECT is rejected with the policy message surfaced to the model.
-    with pytest.raises(SqlPolicyError) as exc_info:
+    with pytest.raises(CapabilityCallError) as exc_info:
         env["db"].query("DELETE FROM users")
+    assert exc_info.value.error.type == "SqlPolicyError"
     assert "only SELECT" in str(exc_info.value)
 
     # Writes fail at the SQLite layer (mode=ro defense in depth).

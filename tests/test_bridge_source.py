@@ -14,12 +14,18 @@ from typing import Any
 
 import pytest
 
+from droste.capabilities import CapabilityBroker
 from droste.registry import DataSourceRegistry
 from droste.sources.bridge import BridgeDataSource, DataSourceService
 from droste.sources.sql_local import LocalSqlDataSource, SqlPolicyError
 from droste.testing import MockDataSource
 
 # --- loopback round-trip over a full-capability source ----------------------
+
+
+def _broker_globals(registry: DataSourceRegistry):
+    broker = CapabilityBroker(registry.capability_registrations())
+    return registry.broker_globals(broker)
 
 
 def test_describe_reports_capabilities_schema_and_optional_methods() -> None:
@@ -109,7 +115,7 @@ def test_source_declared_extra_methods_forward_and_reach_the_registry() -> None:
     assert bridged.get_messages(limit=5) == [{"text": "hi"}]
     assert bridged.extra_methods == ("get_chats", "get_messages")
 
-    env = DataSourceRegistry([bridged], default_source_name="mock").globals()
+    env = _broker_globals(DataSourceRegistry([bridged], default_source_name="mock"))
     assert env["get_chats"]() == [{"chat": "c1"}]
     assert env["mock"].get_messages() == [{"text": "hi"}]
 
@@ -263,7 +269,7 @@ def test_extra_method_may_not_shadow_a_disabled_core_verb() -> None:
             return caps
 
     with pytest.raises(ValueError, match="collides with an engine verb"):
-        DataSourceRegistry([ShadowingSource()]).globals()
+        _broker_globals(DataSourceRegistry([ShadowingSource()]))
 
 
 def test_extra_methods_forward_like_any_other_optional_verb() -> None:
@@ -304,7 +310,7 @@ def test_registry_composes_a_bridged_source_like_any_other() -> None:
     bridged = BridgeDataSource(service.handle, name="mock")
 
     registry = DataSourceRegistry([bridged], default_source_name="mock")
-    env = registry.globals()
+    env = _broker_globals(registry)
 
     assert env["mock"].query("SELECT") == [{"row": 1}]
     # Default source is also flattened unprefixed.

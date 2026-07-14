@@ -60,7 +60,17 @@ HASATTR_GATED_VERBS: tuple[str, ...] = tuple(
 
 # Base globals the runner owns; a data source may not shadow them.
 RESERVED_NAMES = frozenset(
-    {"answer", "context", "llm_query", "llm_batch", "batch_llm_query", "llm_query_batched"}
+    {
+        "answer",
+        "context",
+        "llm_query",
+        "llm_batch",
+        "batch_llm_query",
+        "llm_query_batched",
+        "llm_batch_json",
+        "llm_query_batched_json",
+        "aggregate_json_counts",
+    }
 )
 
 # Protocol/bridge machinery surface a bridged client also binds as attributes
