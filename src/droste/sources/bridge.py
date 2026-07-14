@@ -7,7 +7,14 @@ import json
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from ..capabilities import CapabilityOutcome, SideEffect
+from ..capabilities import (
+    CapabilityError,
+    CapabilityErrorCode,
+    CapabilityOutcome,
+    SideEffect,
+    freeze_value,
+    thaw_value,
+)
 from ..providers import (
     BoundSource,
     ConfiguredSource,
@@ -74,10 +81,46 @@ class ProviderService:
         handler = self._source.runtime.handlers.get(operation_id)
         if handler is None:
             raise PermissionError(f"operation {operation_id!r} is not in the provider manifest")
-        result = handler(*args, **kwargs)
+        try:
+            result = handler(*args, **kwargs)
+        except Exception as exc:
+            return {
+                "kind": "capability_outcome",
+                "value": CapabilityOutcome(
+                    error=CapabilityError(
+                        CapabilityErrorCode.HANDLER_ERROR,
+                        _exception_type(exc),
+                        str(exc),
+                    )
+                ).to_dict(),
+            }
         if isinstance(result, CapabilityOutcome):
-            return {"kind": "capability_outcome", "value": result.to_dict()}
-        return {"kind": "value", "value": result}
+            try:
+                value = result.to_dict()
+            except (TypeError, ValueError) as exc:
+                value = CapabilityOutcome(
+                    error=CapabilityError(
+                        CapabilityErrorCode.INVALID_RESULT,
+                        _exception_type(exc),
+                        str(exc),
+                    ),
+                    metadata=result.metadata,
+                ).to_dict()
+            return {"kind": "capability_outcome", "value": value}
+        try:
+            portable = thaw_value(freeze_value(result))
+        except (TypeError, ValueError) as exc:
+            return {
+                "kind": "capability_outcome",
+                "value": CapabilityOutcome(
+                    error=CapabilityError(
+                        CapabilityErrorCode.INVALID_RESULT,
+                        _exception_type(exc),
+                        str(exc),
+                    )
+                ).to_dict(),
+            }
+        return {"kind": "value", "value": portable}
 
 
 class BridgeProvider:
@@ -165,3 +208,10 @@ class BridgeProvider:
 
 
 __all__ = ["BridgeCall", "BridgeProvider", "ProviderService"]
+
+
+def _exception_type(exc: Exception) -> str:
+    """Return a capability-safe exception class name for the typed envelope."""
+
+    name = type(exc).__name__
+    return name if name.isidentifier() and name.isascii() else "Exception"

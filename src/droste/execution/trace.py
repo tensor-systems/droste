@@ -65,7 +65,7 @@ EVENT_BODY_SCHEMAS: Mapping[str, EventBodySchema] = MappingProxyType(
             {"engine_version": str},
             {
                 "runner_protocol": (int, _NONE_TYPE),
-                "source_protocol": (int, _NONE_TYPE),
+                "provider_protocol": (int, _NONE_TYPE),
             },
         ),
         "progress": ({"status": str}, {}),

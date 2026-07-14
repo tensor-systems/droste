@@ -61,13 +61,12 @@ class RLMEnvironment(Protocol):
 class AccessorManifestEnvironment(Protocol):
     """Optional companion protocol to ``RLMEnvironment`` (#31).
 
-    Kept separate so existing environments type-check unchanged: the loop
-    probes for the method at runtime. An environment composing data sources
+    Kept separate so environments without providers type-check unchanged: the
+    loop probes for the method at runtime. An environment composing providers
     should forward its registry's ``accessor_manifest()`` (as
     RunnerEnvironment does) so the count contract's len() check enforces the
-    environment's actual accessor names. Without it — or with an empty
-    manifest — the policy layer falls back to its static generic verbs,
-    which do NOT cover custom accessor names.
+    environment's actual accessor names. Without it, the manifest is empty;
+    there is no guessed or fixed accessor vocabulary.
     """
 
     def accessor_manifest(self) -> AccessorManifest:

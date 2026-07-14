@@ -211,6 +211,22 @@ def test_parser_requires_v1_envelope_and_rejects_false_classification() -> None:
     )
     assert parsed.body["code"] == "print(1)"
 
+    startup = parse_event(
+        {
+            "type": "startup",
+            "run_id": "run",
+            "seq": 2,
+            "timestamp": "2026-07-14T00:00:00Z",
+            "version": 1,
+            "persistence_class": "transient",
+            "depth": 0,
+            "engine_version": "0.10.6",
+            "runner_protocol": 2,
+            "provider_protocol": 3,
+        }
+    )
+    assert startup.body["provider_protocol"] == 3
+
     with pytest.raises(ValueError, match="must be configurable"):
         parse_event(
             {

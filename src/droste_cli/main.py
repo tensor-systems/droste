@@ -201,7 +201,6 @@ def _load_sql_registry(db_path: str) -> Any:
             ),
             default_source_id="db",
         )
-        registry.sources[0].runtime.handlers["schema"]()
     except Exception as exc:
         raise CLIError(f"cannot open {db_path} as a SQLite database: {exc}") from exc
     return registry

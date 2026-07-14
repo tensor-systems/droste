@@ -122,13 +122,60 @@ def test_bridge_fails_typed_json_serialization_instead_of_stringifying() -> None
         )
     )
     bridge = BridgeProvider(service.handle)
-    registration = bridge.registration(
-        effects={"records.search": SideEffect.READ, "records.fetch": SideEffect.READ}
-    )
-    runtime = registration.bind(ConfiguredSource("records", "fake_records")).runtime
+    registry = ProviderCatalog(
+        (
+            bridge.registration(
+                effects={"records.search": SideEffect.READ, "records.fetch": SideEffect.READ}
+            ),
+        )
+    ).bind((ConfiguredSource("records", "fake_records"),))
+    from droste.capabilities import CapabilityBroker, CapabilityCallError, CapabilityErrorCode
 
-    with pytest.raises(RuntimeError, match="not JSON serializable"):
-        runtime.handlers["records.fetch"]("1")
+    fetch = registry.broker_globals(CapabilityBroker(registry.capability_registrations()))[
+        "records"
+    ].fetch
+
+    with pytest.raises(CapabilityCallError) as exc_info:
+        fetch("1")
+    assert exc_info.value.error.code == CapabilityErrorCode.INVALID_RESULT
+
+
+def test_bridge_normalizes_handler_exceptions_as_typed_outcomes() -> None:
+    from droste.capabilities import CapabilityBroker, CapabilityCallError, CapabilityErrorCode
+    from droste.providers import BoundSource, ProviderRuntime
+
+    source = (
+        ProviderCatalog((fake_records_provider(),))
+        .bind((ConfiguredSource("records", "fake_records"),))
+        .sources[0]
+    )
+    handlers = dict(source.runtime.handlers)
+
+    def fail(record_id: str) -> object:
+        raise LookupError(f"missing {record_id}")
+
+    handlers["records.fetch"] = fail
+    bridge = BridgeProvider(
+        ProviderService(
+            BoundSource(source.source, source.registration, ProviderRuntime(handlers))
+        ).handle
+    )
+    registry = ProviderCatalog(
+        (
+            bridge.registration(
+                effects={"records.search": SideEffect.READ, "records.fetch": SideEffect.READ}
+            ),
+        )
+    ).bind((ConfiguredSource("records", "fake_records"),))
+    fetch = registry.broker_globals(CapabilityBroker(registry.capability_registrations()))[
+        "records"
+    ].fetch
+
+    with pytest.raises(CapabilityCallError) as exc_info:
+        fetch("404")
+    assert exc_info.value.error.code == CapabilityErrorCode.HANDLER_ERROR
+    assert exc_info.value.error.type == "LookupError"
+    assert exc_info.value.error.message == "missing 404"
 
 
 def test_bridge_preserves_capability_outcomes_without_provider_specific_errors() -> None:

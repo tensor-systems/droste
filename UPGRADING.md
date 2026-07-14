@@ -109,6 +109,10 @@ callers that need ordered per-item failures use `llm_batch_json` or the trusted
 construct one run broker from `capability_registrations()` and pass it to
 `broker_globals()`, preventing an accidental second broker without the run's
 identity, guard, accounting annotator, or observer.
+Custom environments must expose the resulting registry's
+`accessor_manifest()` as well. There is no fixed generic-verb fallback: an
+environment that omits this manifest supplies no provider accessors to the
+count-policy check, so its custom bindings are not covered.
 
 Custom `RLMEnvironment` implementations must now implement
 `sandbox_subcalls(subcalls)`. Return a broker-backed `SubcallClient`; the

@@ -351,6 +351,11 @@ class ProviderRegistry:
             bindings: dict[str, Any] = {}
             for descriptor in self._descriptors(source_id):
                 broker_descriptor = broker_manifest.find(descriptor.capability_id)
+                if broker_descriptor is None:
+                    raise ValueError(
+                        f"broker manifest is missing source {source_id!r} operation "
+                        f"{descriptor.capability_id.operation!r}"
+                    )
                 if broker_descriptor != descriptor:
                     raise ValueError(
                         f"broker descriptor drift for source {source_id!r} operation "
