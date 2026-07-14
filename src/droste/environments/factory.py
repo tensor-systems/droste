@@ -116,11 +116,7 @@ def create_environment(
     environment_type = select_environment(config.kind)
     if execution_context.budget != config.budget or execution_context.sandbox != config.sandbox:
         raise ValueError("environment config must match its execution context")
-    accounting = BrokerBudget(
-        execution_context.ledger,
-        guard_after_budget=capability_guard,
-        annotator_after_budget=capability_annotator,
-    )
+    accounting = BrokerBudget(execution_context.ledger)
     return environment_type(
         context=context,
         registry=registry,
@@ -130,7 +126,8 @@ def create_environment(
         budget_ledger=execution_context.ledger,
         capability_run_id=capability_run_id,
         capability_parent_run_id=capability_parent_run_id,
-        capability_guard=accounting.guard,
-        capability_annotator=accounting.annotate,
+        capability_guard=capability_guard,
+        capability_annotator=capability_annotator,
         capability_observer=capability_observer,
+        capability_attempt_authority=accounting,
     )

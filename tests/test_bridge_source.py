@@ -6,7 +6,16 @@ import json
 
 import pytest
 
-from droste import ConfiguredSource, ProviderCatalog, SideEffect
+from droste import (
+    CapabilityAdmission,
+    CapabilityBroker,
+    CapabilityCheckpoint,
+    CapabilityMetadata,
+    CapabilityReservation,
+    ConfiguredSource,
+    ProviderCatalog,
+    SideEffect,
+)
 from droste.sources.bridge import BridgeProvider, ProviderService
 from droste.testing import fake_records_provider
 
@@ -18,6 +27,18 @@ def _service() -> ProviderService:
         .sources[0]
     )
     return ProviderService(source)
+
+
+def _execution() -> dict:
+    return {
+        "version": 1,
+        "call_id": "call-1",
+        "run_id": "run-1",
+        "parent_run_id": None,
+        "deadline_remaining_ms": 1_000,
+        "reservation": {"tokens": 0, "subcalls": 0, "wall_ms": 1_000, "depth": 0},
+        "cancellation_requested": False,
+    }
 
 
 def _remote_registry(*, effect: SideEffect = SideEffect.READ):
@@ -45,13 +66,75 @@ def test_bridge_round_trips_raw_operations_and_generic_bindings() -> None:
     assert descriptor.operation.binding_name == "search"
 
 
+def test_bridge_round_trips_execution_facts_and_cumulative_checkpoint() -> None:
+    from droste.providers import BoundSource, ProviderRuntime
+
+    source = (
+        ProviderCatalog((fake_records_provider(),))
+        .bind((ConfiguredSource("records", "fake_records"),))
+        .sources[0]
+    )
+    observed = []
+    handlers = dict(source.runtime.handlers)
+
+    def fetch(execution, record_id):
+        observed.append(execution)
+        execution.checkpoint(tokens=3, subcalls=1)
+        return {"id": record_id}
+
+    handlers["records.fetch"] = fetch
+    bridge = BridgeProvider(
+        ProviderService(
+            BoundSource(source.source, source.registration, ProviderRuntime(handlers))
+        ).handle
+    )
+    registry = ProviderCatalog(
+        (
+            bridge.registration(
+                effects={"records.search": SideEffect.READ, "records.fetch": SideEffect.READ}
+            ),
+        )
+    ).bind((ConfiguredSource("records", "fake_records"),))
+
+    checkpoints = []
+
+    class CapturingAuthority:
+        def admit(self, call):
+            return CapabilityAdmission(CapabilityReservation(10, 2, 1_000, 0))
+
+        def checkpoint(self, call, cumulative):
+            checkpoints.append(cumulative)
+            return cumulative
+
+        def settle(self, call, result, error, checkpoint, *, attempted):
+            return CapabilityMetadata()
+
+    broker = CapabilityBroker(
+        registry.capability_registrations(), attempt_authority=CapturingAuthority()
+    )
+    fetch_binding = registry.broker_globals(broker)["records"].fetch
+
+    assert fetch_binding("7") == {"id": "7"}
+    assert checkpoints == [CapabilityCheckpoint(3, 1)]
+    assert observed[0].call_id
+    assert observed[0].run_id == broker.run_id
+    assert observed[0].reservation == CapabilityReservation(10, 2, 1_000, 0)
+
+
 def test_service_denies_unknown_control_and_operation_names() -> None:
     service = _service()
     unknown_control = json.loads(service.handle("getattr", "{}"))
     unknown_operation = json.loads(
         service.handle(
             "invoke",
-            json.dumps({"operation_id": "records.delete", "args": [], "kwargs": {}}),
+            json.dumps(
+                {
+                    "operation_id": "records.delete",
+                    "args": [],
+                    "kwargs": {},
+                    "execution": _execution(),
+                }
+            ),
         )
     )
 
@@ -62,6 +145,67 @@ def test_service_denies_unknown_control_and_operation_names() -> None:
     }
     assert unknown_operation["ok"] is False
     assert unknown_operation["error"]["type"] == "PermissionError"
+
+
+def test_service_observes_dispatch_cancellation_before_remote_handler() -> None:
+    payload = {
+        "operation_id": "records.fetch",
+        "args": ["1"],
+        "kwargs": {},
+        "execution": {**_execution(), "cancellation_requested": True},
+    }
+
+    envelope = json.loads(_service().handle("invoke", json.dumps(payload)))
+
+    assert envelope["ok"] is True
+    outcome = envelope["result"]
+    assert outcome["kind"] == "capability_outcome"
+    assert outcome["value"]["error"]["code"] == "cancelled"
+    assert outcome["checkpoint"] == {"tokens": 0, "subcalls": 0}
+
+
+def test_service_observes_dispatched_deadline() -> None:
+    payload = {
+        "operation_id": "records.fetch",
+        "args": ["1"],
+        "kwargs": {},
+        "execution": {**_execution(), "deadline_remaining_ms": 0},
+    }
+
+    envelope = json.loads(_service().handle("invoke", json.dumps(payload)))
+
+    assert envelope["ok"] is True
+    outcome = envelope["result"]
+    assert outcome["kind"] == "capability_outcome"
+    assert outcome["value"]["error"]["code"] == "deadline_exceeded"
+
+
+def test_bridge_rejects_checkpoint_beyond_receiving_reservation() -> None:
+    service = _service()
+
+    def overflow(method: str, payload: str) -> str:
+        envelope = json.loads(service.handle(method, payload))
+        if method == "invoke" and envelope.get("ok"):
+            envelope["result"]["checkpoint"] = {"tokens": 1, "subcalls": 0}
+        return json.dumps(envelope)
+
+    bridge = BridgeProvider(overflow)
+    registry = ProviderCatalog(
+        (
+            bridge.registration(
+                effects={"records.search": SideEffect.READ, "records.fetch": SideEffect.READ}
+            ),
+        )
+    ).bind((ConfiguredSource("records", "fake_records"),))
+    from droste import CapabilityCallError
+
+    fetch = registry.broker_globals(CapabilityBroker(registry.capability_registrations()))[
+        "records"
+    ].fetch
+    with pytest.raises(CapabilityCallError) as exc_info:
+        fetch("1")
+    assert exc_info.value.error.code == "handler_error"
+    assert "exceed reservation" in exc_info.value.error.message
 
 
 def test_receiving_host_effects_are_authoritative() -> None:
@@ -123,7 +267,7 @@ def test_bridge_fails_typed_json_serialization_instead_of_stringifying() -> None
         .sources[0]
     )
     handlers = dict(source.runtime.handlers)
-    handlers["records.fetch"] = lambda record_id: b"not-json"
+    handlers["records.fetch"] = lambda _execution, record_id: b"not-json"
     from droste.providers import BoundSource, ProviderRuntime
 
     service = ProviderService(
@@ -163,7 +307,7 @@ def test_bridge_normalizes_handler_exceptions_as_typed_outcomes() -> None:
     )
     handlers = dict(source.runtime.handlers)
 
-    def fail(record_id: str) -> object:
+    def fail(_execution, record_id: str) -> object:
         raise LookupError(f"missing {record_id}")
 
     handlers["records.fetch"] = fail
@@ -207,7 +351,7 @@ def test_bridge_preserves_capability_outcomes_without_provider_specific_errors()
         .sources[0]
     )
     handlers = dict(source.runtime.handlers)
-    handlers["records.fetch"] = lambda record_id: CapabilityOutcome(
+    handlers["records.fetch"] = lambda _execution, record_id: CapabilityOutcome(
         error=CapabilityError(
             "records.not_found", "RecordNotFound", f"record {record_id} was not found"
         ),

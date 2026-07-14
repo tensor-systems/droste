@@ -187,6 +187,7 @@ class BudgetLedger:
     _reservations: dict[str, BudgetReservation] = field(
         default_factory=dict, init=False, repr=False
     )
+    _checkpoints: dict[str, BudgetRequest] = field(default_factory=dict, init=False, repr=False)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _parent: BudgetLedger | None = field(default=None, init=False, repr=False)
     _parent_call_id: str | None = field(default=None, init=False, repr=False)
@@ -205,13 +206,19 @@ class BudgetLedger:
         return max(0, round((self.clock() - self._started_at) * 1000))
 
     def _reserved_locked(self) -> BudgetRequest:
-        values = tuple(item.request for item in self._reservations.values())
+        values = tuple(
+            (
+                item.request,
+                self._checkpoints.get(item.call_id, BudgetRequest()),
+            )
+            for item in self._reservations.values()
+        )
         return BudgetRequest(
-            tokens=sum(item.tokens for item in values),
-            subcalls=sum(item.subcalls for item in values),
+            tokens=sum(request.tokens - checkpoint.tokens for request, checkpoint in values),
+            subcalls=sum(request.subcalls - checkpoint.subcalls for request, checkpoint in values),
             # Wall time is one shared run deadline, not additive capacity.
-            wall_ms=max((item.wall_ms for item in values), default=0),
-            depth=max((item.depth for item in values), default=0),
+            wall_ms=max((request.wall_ms for request, _ in values), default=0),
+            depth=max((request.depth for request, _ in values), default=0),
         )
 
     def _remaining_locked(self) -> BudgetRequest:
@@ -309,6 +316,7 @@ class BudgetLedger:
                     started_at=started_at,
                 )
                 self._reservations[call_id] = reservation
+                self._checkpoints[call_id] = BudgetRequest()
                 for resource in (*_RESERVABLE_RESOURCES, "depth"):
                     amount = getattr(request, resource)
                     if amount:
@@ -318,6 +326,59 @@ class BudgetLedger:
             raise exhaustion
         assert reservation is not None
         return reservation
+
+    def checkpoint(self, call_id: str, cumulative: BudgetRequest) -> BudgetRequest:
+        """Commit a cumulative in-flight usage fact idempotently.
+
+        Handlers report only token and subcall progress. Wall time remains a
+        broker-measured fact and child depth is settled by the child ledger.
+        Repeating the same cumulative value is a no-op; moving any dimension
+        backward or beyond the reservation fails without changing accounting.
+        """
+
+        if not isinstance(cumulative, BudgetRequest):
+            raise TypeError("budget checkpoint requires a BudgetRequest")
+        if cumulative.wall_ms or cumulative.depth:
+            raise ValueError("budget checkpoints may report only tokens and subcalls")
+        exhaustion: BudgetExhausted | None = None
+        with self._lock:
+            reservation = self._reservations.get(call_id)
+            if reservation is None:
+                raise ValueError(f"unknown budget reservation call_id: {call_id}")
+            previous = self._checkpoints[call_id]
+            for resource in ("tokens", "subcalls"):
+                value = getattr(cumulative, resource)
+                prior = getattr(previous, resource)
+                authorized = getattr(reservation.request, resource)
+                if value < prior:
+                    raise ValueError(
+                        f"budget checkpoint {resource} cannot move backward: {value} < {prior}"
+                    )
+                if value > authorized:
+                    self._queue_event_locked("exhaust", resource, value - authorized, call_id)
+                    exhaustion = BudgetExhausted(resource, value, authorized)
+                    break
+            if exhaustion is not None:
+                delta = BudgetRequest()
+            else:
+                delta = BudgetRequest(
+                    tokens=cumulative.tokens - previous.tokens,
+                    subcalls=cumulative.subcalls - previous.subcalls,
+                )
+            if exhaustion is None and delta == BudgetRequest():
+                return previous
+            if exhaustion is None:
+                self._checkpoints[call_id] = cumulative
+                self._consumed_tokens += delta.tokens
+                self._consumed_subcalls += delta.subcalls
+                for resource in ("tokens", "subcalls"):
+                    amount = getattr(delta, resource)
+                    if amount:
+                        self._queue_event_locked("commit", resource, amount, call_id)
+        self._drain_events()
+        if exhaustion is not None:
+            raise exhaustion
+        return cumulative
 
     def commit(self, call_id: str, actual: BudgetRequest) -> BudgetRequest:
         """Commit actual spend and refund every unused reserved unit."""
@@ -329,6 +390,7 @@ class BudgetLedger:
             reservation = self._reservations.get(call_id)
             if reservation is None:
                 raise ValueError(f"unknown budget reservation call_id: {call_id}")
+            checkpoint = self._checkpoints[call_id]
             elapsed = max(0, round((self.clock() - reservation.started_at) * 1000))
             actual = BudgetRequest(
                 tokens=actual.tokens,
@@ -344,6 +406,15 @@ class BudgetLedger:
                 ),
                 None,
             )
+            # The checkpoint is an already-committed fact. A stale final
+            # estimate can never retract it; reconciliation takes the
+            # component-wise maximum and still closes the reservation.
+            actual = BudgetRequest(
+                tokens=max(actual.tokens, checkpoint.tokens),
+                subcalls=max(actual.subcalls, checkpoint.subcalls),
+                wall_ms=actual.wall_ms,
+                depth=actual.depth,
+            )
             if overrun is not None:
                 requested = getattr(actual, overrun)
                 authorized = getattr(reservation.request, overrun)
@@ -356,11 +427,16 @@ class BudgetLedger:
                     depth=min(actual.depth, reservation.request.depth),
                 )
             del self._reservations[call_id]
-            self._consumed_tokens += actual.tokens
-            self._consumed_subcalls += actual.subcalls
+            del self._checkpoints[call_id]
+            self._consumed_tokens += actual.tokens - checkpoint.tokens
+            self._consumed_subcalls += actual.subcalls - checkpoint.subcalls
             for resource in (*_RESERVABLE_RESOURCES, "depth"):
-                consumed = getattr(actual, resource)
+                consumed = getattr(actual, resource) - (
+                    getattr(checkpoint, resource) if resource in {"tokens", "subcalls"} else 0
+                )
                 refunded = getattr(reservation.request, resource) - consumed
+                if resource in {"tokens", "subcalls"}:
+                    refunded -= getattr(checkpoint, resource)
                 if consumed:
                     self._queue_event_locked("commit", resource, consumed, call_id)
                 if refunded:
@@ -377,8 +453,11 @@ class BudgetLedger:
             reservation = self._reservations.pop(call_id, None)
             if reservation is None:
                 raise ValueError(f"unknown budget reservation call_id: {call_id}")
+            checkpoint = self._checkpoints.pop(call_id)
             for resource in (*_RESERVABLE_RESOURCES, "depth"):
-                amount = getattr(reservation.request, resource)
+                amount = getattr(reservation.request, resource) - (
+                    getattr(checkpoint, resource) if resource in {"tokens", "subcalls"} else 0
+                )
                 if amount:
                     self._queue_event_locked("refund", resource, amount, call_id)
         self._drain_events()

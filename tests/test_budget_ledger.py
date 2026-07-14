@@ -89,6 +89,83 @@ def test_commit_charges_actual_and_refunds_unused_reservation() -> None:
     assert any(event["action"] == "refund" and event["resource"] == "tokens" for event in events)
 
 
+def test_cumulative_checkpoints_are_idempotent_and_final_reconciliation_is_monotonic() -> None:
+    events: list[dict] = []
+    ledger = BudgetLedger(_budget(), on_event=events.append)
+    ledger.reserve("call-1", BudgetRequest(tokens=200, subcalls=4))
+
+    first = ledger.checkpoint("call-1", BudgetRequest(tokens=50, subcalls=1))
+    repeated = ledger.checkpoint("call-1", BudgetRequest(tokens=50, subcalls=1))
+    second = ledger.checkpoint("call-1", BudgetRequest(tokens=80, subcalls=2))
+
+    assert first == repeated == BudgetRequest(tokens=50, subcalls=1)
+    assert second == BudgetRequest(tokens=80, subcalls=2)
+    assert ledger.snapshot().consumed.tokens == 80
+    assert ledger.snapshot().reserved.tokens == 120
+    committed = ledger.commit("call-1", BudgetRequest(tokens=60, subcalls=1))
+    assert committed.tokens == 80
+    assert committed.subcalls == 2
+    assert ledger.snapshot().reserved == BudgetRequest()
+    token_commits = [
+        event["amount"]
+        for event in events
+        if event["action"] == "commit" and event["resource"] == "tokens"
+    ]
+    assert token_commits == [50, 30]
+
+
+def test_checkpoint_regression_and_overflow_do_not_change_accounting() -> None:
+    events: list[dict] = []
+    ledger = BudgetLedger(_budget(), on_event=events.append)
+    ledger.reserve("call-1", BudgetRequest(tokens=100, subcalls=2))
+    ledger.checkpoint("call-1", BudgetRequest(tokens=40, subcalls=1))
+
+    with pytest.raises(ValueError, match="cannot move backward"):
+        ledger.checkpoint("call-1", BudgetRequest(tokens=39, subcalls=1))
+    with pytest.raises(BudgetExhausted, match="tokens"):
+        ledger.checkpoint("call-1", BudgetRequest(tokens=101, subcalls=1))
+
+    snapshot = ledger.snapshot()
+    assert snapshot.consumed.tokens == 40
+    assert snapshot.reserved.tokens == 60
+    assert any(
+        event["action"] == "exhaust"
+        and event["resource"] == "tokens"
+        and event["call_id"] == "call-1"
+        for event in events
+    )
+
+
+def test_concurrent_identical_checkpoints_commit_once() -> None:
+    events: list[dict] = []
+    ledger = BudgetLedger(_budget(), on_event=events.append)
+    ledger.reserve("call-1", BudgetRequest(tokens=100, subcalls=1))
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        results = list(
+            pool.map(
+                lambda _: ledger.checkpoint("call-1", BudgetRequest(tokens=50, subcalls=1)),
+                range(32),
+            )
+        )
+
+    assert results == [BudgetRequest(tokens=50, subcalls=1)] * 32
+    assert ledger.snapshot().consumed.tokens == 50
+    assert [
+        event for event in events if event["action"] == "commit" and event["resource"] == "tokens"
+    ] == [
+        {
+            "type": "budget",
+            "kind": "mutation",
+            "source": "budget_ledger",
+            "action": "commit",
+            "resource": "tokens",
+            "amount": 50,
+            "call_id": "call-1",
+        }
+    ]
+
+
 def test_overrun_settles_reservation_before_raising() -> None:
     ledger = BudgetLedger(_budget())
     ledger.reserve("call-1", BudgetRequest(tokens=20, subcalls=1))

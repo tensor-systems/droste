@@ -47,16 +47,19 @@ from droste import ConfiguredSource, ProviderCatalog, ProviderRegistration, Prov
 from droste.sources.bridge import ProviderService
 from droste.sources.sql_local import SQLITE_PROVIDER_MANIFEST
 
-def _query(sql):
+def _query(execution, sql):
+    execution.check()
+    execution.checkpoint(tokens=0, subcalls=0)
     return [{"id": 1, "name": "ada"}, {"id": 2, "name": "grace"}]
 
-def _schema():
+def _schema(execution):
+    execution.check()
     return "people(id INTEGER, name TEXT)"
 
 def _bind(source, context=None):
     return ProviderRuntime(
         handlers={"query": _query, "schema": _schema},
-        source_description=_schema(),
+        source_description="people(id INTEGER, name TEXT)",
     )
 
 _registration = ProviderRegistration(
@@ -151,6 +154,15 @@ raw = run_sync(bridge_call("invoke", json.dumps({
     "operation_id": "search",
     "args": ["anything"],
     "kwargs": {},
+    "execution": {
+        "version": 1,
+        "call_id": "forged-call",
+        "run_id": "forged-run",
+        "parent_run_id": None,
+        "deadline_remaining_ms": 1000,
+        "reservation": {"tokens": 0, "subcalls": 0, "wall_ms": 1000, "depth": 0},
+        "cancellation_requested": False,
+    },
 })))
 json.dumps(json.loads(raw))
 `);

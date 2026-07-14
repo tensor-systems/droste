@@ -514,7 +514,16 @@ def test_provider_passes_ctx_connection(tmp_path) -> None:
     path = _make_db(tmp_path)
     ctx = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
     source = sqlite_provider().bind(ConfiguredSource("db", "sqlite"), ctx)
-    assert source.runtime.handlers["query"]("SELECT count(*) AS n FROM users") == [{"n": 2}]
+    from droste import CapabilityBroker
+    from droste.capabilities import thaw_value
+
+    registration = source.capability_registrations()[0]
+    result = CapabilityBroker(source.capability_registrations()).call(
+        registration.descriptor.capability_id,
+        "SELECT count(*) AS n FROM users",
+    )
+    assert result.ok is True
+    assert thaw_value(result.result) == [{"n": 2}]
 
 
 def test_provider_binding_direct(tmp_path) -> None:

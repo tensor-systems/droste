@@ -28,7 +28,7 @@ from .capabilities import (
 )
 from .protocols.verbs import RESERVED_NAMES, AccessorManifest, validate_binding_name
 
-PROVIDER_PROTOCOL_VERSION = 3
+PROVIDER_PROTOCOL_VERSION = 4
 _PROVIDER_TYPE_PATTERN = re.compile(r"[a-z][a-z0-9_.-]*\Z", re.ASCII)
 
 

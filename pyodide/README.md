@@ -139,9 +139,15 @@ pieces of loop wiring:
 ```python
 config = EnvironmentConfig(
     kind="pyodide",
-    max_calls=max_calls,
-    max_iterations=max_iterations,
-    max_output_chars=max_output_chars,
+    budget=Budget(
+        tokens=token_budget,
+        subcalls=subcall_budget,
+        depth=depth_budget,
+        wall_ms=wall_time_ms,
+        root_output_tokens=root_output_tokens,
+        subcall_output_tokens=subcall_output_tokens,
+    ),
+    sandbox=SandboxLimits(output_chars=max_output_chars, execution_timeout_ms=0),
     host_managed_timeout=True,
     host_managed_isolation=True,
 )
@@ -151,6 +157,7 @@ environment = create_environment(
     context=data,
     registry=registry,
     subcalls=subcalls,
+    execution_context=execution_context,
 )
 ```
 
@@ -359,6 +366,17 @@ Roughly three tiers of coverage:
   checkout and moved to that host's repo alongside its own adapter.
 
 ## Known gaps
+
+- **The unary provider bridge cannot deliver a new soft-cancellation request
+  during a synchronous remote call.** Provider protocol 4 carries the
+  cancellation snapshot and remaining deadline at dispatch, and returns a
+  validated cumulative checkpoint at completion. A remote handler can poll
+  `CapabilityExecutionContext.check()` and enforce that dispatched deadline,
+  but the current request/response bridge has no reverse channel for a
+  cancellation requested afterward and cannot stream mid-call checkpoints.
+  The Deno host's required wall-clock timeout and process termination remain
+  the hard Pyodide boundary. A graceful live-cancellation channel would require
+  a distinct bidirectional bridge transport, not a provider-specific callback.
 
 - **`RLM_DB_SERVICE=0` mounts the whole data directory into the untrusted
   interpreter — deliberate, documented, loud (#7, decided 2026-07-10).**

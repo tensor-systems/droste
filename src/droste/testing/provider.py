@@ -99,10 +99,12 @@ def fake_records_provider(
         page_size = int(source.config_dict().get("page_size", 10))
 
         def search(
+            execution,
             query: str,
             cursor: str | None = None,
             limit: int | None = None,
         ) -> dict[str, Any]:
+            execution.check()
             start = int(cursor or 0)
             size = min(limit or page_size, page_size)
             matches = [
@@ -116,7 +118,8 @@ def fake_records_provider(
                 "next_cursor": str(end) if end < len(matches) else None,
             }
 
-        def fetch(record_id: str) -> dict[str, Any] | None:
+        def fetch(execution, record_id: str) -> dict[str, Any] | None:
+            execution.check()
             record = snapshot.get(record_id)
             return None if record is None else {"id": record_id, **record}
 

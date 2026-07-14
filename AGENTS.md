@@ -81,6 +81,9 @@ evidence with that status rather than leaving the model to interpret prefixes.
   into its parent and returns unused capacity; it never creates compute.
 - Emit reservation facts through the ledger journal after releasing the state
   lock. Arbitrary event sinks must never run under that lock.
+- In-flight provider progress is one cumulative `(tokens, subcalls)` checkpoint
+  keyed by `call_id`. Equal checkpoints are idempotent; values cannot move
+  backward or exceed the reservation. Wall time remains broker-measured.
 - Keep `SandboxLimits` separate. Output capture and local execution timeout are
   REPL guardrails, not provider/model compute spend.
 
@@ -163,10 +166,10 @@ evidence with that status rather than leaving the model to interpret prefixes.
   attach either a result or an extensible stable-code `CapabilityError` plus
   provider usage/evidence metadata. Dispatch must consume only the normalized
   outcome convention; unexpected exceptions remain `handler_error`.
-- The guard, annotator, and observer are seams only. The run ledger composes
-  into the guard/finalizer; policy semantics, trace storage/retention, and MCP
-  transport belong to their own issues. Observers are observational and must
-  never become an authority or alternate dispatch path. Durable traces consume
+- The guard, annotator, attempt authority, and observer are seams only. The run
+  ledger is the attempt authority; policy semantics, trace storage/retention,
+  and MCP transport belong to their own issues. Observers are observational and
+  must never become an authority or alternate dispatch path. Durable traces consume
   `CapabilityResult.to_trace_dict()`, which excludes parameters, inline results,
   error messages, evidence references, and result-handle locators; full
   `to_dict()` envelopes are replay content and require a separately configured
@@ -174,10 +177,18 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - The annotator is also the exactly-once post-attempt finalizer. It runs once
   after every attempted handler outcome (success, handler error, invalid result,
   or propagated cancellation) and never on run/allowlist/argument/guard exits
-  where the handler was not attempted. Keep reservation/reconciliation logic
-  keyed by the immutable `call_id`; do not add a parallel finalization path.
+  where the handler was not attempted. The attempt authority separately settles
+  every successful admission. Keep reservation/reconciliation logic keyed by
+  the immutable `call_id`; do not add a parallel finalization path.
   Provider metadata is ordered before finalizer metadata; sequence facts append,
   while conflicting singular result handles or child-run IDs fail closed.
+- Every trusted capability handler is context-first:
+  `handler(CapabilityExecutionContext, *args, **kwargs)`. Do not add signature
+  introspection, legacy adapters, provider-owned ledgers, trace access, or
+  callback registration. The frozen context exposes only facts, `check()`, and
+  cumulative `checkpoint()`; the broker owns cancellation and the mutable
+  attempt lifecycle. Admission starts the exactly-once settlement boundary,
+  including policy denial and cancellation before handler dispatch.
 
 ## Provider Manifests
 
@@ -198,6 +209,10 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - Evidence uses structured `EvidenceLocation` values with source, path,
   optional revision, and explicit byte/line/section ranges. Cursor pagination
   must describe both the input cursor and output `next_cursor`.
+- Bridge invokes carry exact frozen execution facts and return a validated
+  cumulative checkpoint. The unary bridge cannot stream checkpoints or observe
+  a new cancellation request while a synchronous remote handler is running;
+  Pyodide hosts still own hard timeout and process termination.
 
 
 ## Login

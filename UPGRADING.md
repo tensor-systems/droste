@@ -13,6 +13,26 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.10.6)
 
+### Capability handlers receive one execution context (breaking)
+
+Trusted capability and `ProviderRuntime` handlers now have the single required
+signature `handler(CapabilityExecutionContext, *args, **kwargs)`. Migrate every
+registration atomically; there is no signature introspection or legacy adapter.
+Generated sandbox bindings are unchanged and never receive the context.
+
+The frozen context carries call/run identity, the caller-authorized monotonic
+deadline, and immutable reservation facts. Long-running trusted handlers call
+`check()` to observe cancellation/deadlines and may report cumulative token and
+subcall usage with `checkpoint()`. Providers do not receive the ledger or trace.
+Cancellation and deadline results use stable `cancelled` and
+`deadline_exceeded` codes. Admission begins the exactly-once settlement
+boundary, including policy denial before handler dispatch.
+
+The provider protocol is now 4. `ProviderService` bridge invokes require the
+versioned execution facts and return a validated cumulative checkpoint. Upgrade
+both bridge interpreters and the staged relay atomically; the startup event's
+`provider_protocol` detects drift.
+
 ### Batch-item errors expose safe structured details
 
 Native response-batch item failures keep the existing human-readable error
@@ -97,7 +117,9 @@ the old SQL factory. Use `ProviderManifest`, `ProviderOperation`,
 `PROVIDER_PROTOCOL_VERSION` instead. `EvidenceRef` is also replaced by
 structured `EvidenceLocation`/`EvidenceRange` values.
 
-`RUNNER_PROTOCOL_VERSION` is now 3 and the provider protocol is 3. Requests
+`RUNNER_PROTOCOL_VERSION` is now 3. The manifest migration introduced provider
+protocol 3; the context-first handler migration above makes the current provider
+protocol 4. Requests
 must use `data_sources` as a list of `{type, name, ...config}` objects. The
 relay startup event now reports `provider_protocol` instead of
 `source_protocol`. Upgrade the runner request, staged relay, and provider

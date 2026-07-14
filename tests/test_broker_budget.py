@@ -40,16 +40,13 @@ def _broker(
     guard=None,
     annotator=None,
 ) -> CapabilityBroker:
-    accounting = BrokerBudget(
-        ledger,
-        guard_after_budget=guard,
-        annotator_after_budget=annotator,
-    )
+    accounting = BrokerBudget(ledger)
     return CapabilityBroker(
         subcall_registrations(subcalls),
         run_id="run",
-        guard=accounting.guard,
-        annotator=accounting.annotate,
+        guard=guard,
+        annotator=annotator,
+        attempt_authority=accounting,
     )
 
 

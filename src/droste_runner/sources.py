@@ -261,12 +261,22 @@ def _bind_wrapper(source: ConfiguredSource, context: Any = None) -> ProviderRunt
     allowed_hosts = config.get("allowed_hosts")
     if isinstance(allowed_hosts, list) and allowed_hosts:
         parts.append("Allowed hosts: " + ", ".join(str(item) for item in allowed_hosts))
+
+    def contextual(handler):
+        def invoke(execution, *args, **kwargs):
+            execution.check()
+            result = handler(*args, **kwargs)
+            execution.check()
+            return result
+
+        return invoke
+
     return ProviderRuntime(
         handlers={
-            "search": transport.search,
-            "get": transport.get,
-            "content": transport.content,
-            "stats": lambda: {"requests_made": transport.requests_made},
+            "search": contextual(transport.search),
+            "get": contextual(transport.get),
+            "content": contextual(transport.content),
+            "stats": contextual(lambda: {"requests_made": transport.requests_made}),
         },
         source_description=" ".join(parts),
         stats=lambda: {"requests_made": transport.requests_made},

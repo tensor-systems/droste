@@ -25,6 +25,11 @@ those descriptors for the run. Changing a description, schema, revision,
 digest, effect, or policy value does not change the stable `CapabilityId`
 `(kind, provider_type, source_id, operation_id)`.
 
+Every `ProviderRuntime` handler is context-first. Its first argument is a frozen
+`CapabilityExecutionContext`; operation parameters follow unchanged. Generated
+model bindings never expose this trusted argument. Providers use `check()` and
+cumulative `checkpoint()` only—they cannot mutate the run ledger or trace.
+
 ## Schemas, pagination, and delivery
 
 Every parameter schema and typed result schema names its dialect and
@@ -53,6 +58,12 @@ dispatches only raw operation IDs present in the bound runtime. It never
 publishes authoritative effects or policy. The receiving host constructs a
 `BridgeProvider`, supplies its own exact effects and policy, and binds the
 advertised source through its explicit catalog.
+
+Bridge `invoke` requests require a versioned `execution` object containing
+call/run identity, remaining deadline, reservation facts, and the cancellation
+snapshot. Every successful transport response includes a cumulative
+`{tokens, subcalls}` checkpoint, including typed provider-error outcomes. The
+receiving broker validates and applies that value before its final settlement.
 
 ## Example
 
