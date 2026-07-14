@@ -7,15 +7,6 @@ from droste.environments.inprocess import (
     RunnerEnvironment,
     describe_context,
 )
-from droste.environments.inprocess import (
-    _describe_files_context as _describe_files_context,
-)
-from droste.environments.inprocess import (
-    _safe_label as _safe_label,
-)
-from droste.environments.inprocess import (
-    _safe_preview as _safe_preview,
-)
 
 __all__ = [
     "CONTEXT_PREVIEW_CHARS",

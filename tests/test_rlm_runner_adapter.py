@@ -127,6 +127,7 @@ def test_worker_exception_envelope_is_version_stamped(tmp_path) -> None:
     req.write_text(json.dumps({"protocol_version": 1, "question": "q"}))
     proc = subprocess.run(
         [_sys.executable, "-m", "droste_runner"],
+        cwd=tmp_path,
         env={**os.environ, "RLM_RUNNER_REQUEST_PATH": str(req)},
         capture_output=True,
         text=True,

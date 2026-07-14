@@ -57,6 +57,9 @@ evidence with that status rather than leaving the model to interpret prefixes.
 ## droste_runner Package
 
 - `droste_runner` is a shared HTTP-backed runner used by host apps (ModelRelay's hosted runner, in-process embedders). It reads the request JSON from `RLM_RUNNER_REQUEST_PATH` (or argv) and returns a JSON response payload.
+- Invoke the process runner as `python -m droste_runner` from an installed
+  package. Do not restore repository-layout `sys.path` mutation or rely on
+  direct execution of `runner.py`.
 - Module ownership is strict: `run.py` orchestrates, `protocol.py` shapes both
   refusal and success envelopes, `http_clients.py` owns network clients, and
   `sources.py` owns the remote wrapper plus declarative source construction.

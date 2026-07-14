@@ -24,6 +24,10 @@ Existing imports from `droste_runner.runner` remain valid, including `run`,
 `RunnerEnvironment`, HTTP clients, source helpers, and protocol constants.
 This is a structure-only change: request/response fields, protocol versions,
 adapter dispatch, and process entrypoint behavior are unchanged.
+The supported process entrypoint remains `python -m droste_runner` from an
+installed package. Direct execution of an extracted `runner.py` file is not a
+supported entrypoint; the old repository-layout `sys.path` mutation was
+intentionally removed.
 
 ### Trajectory execution status is explicit
 
