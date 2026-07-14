@@ -31,7 +31,7 @@ SMOKE_MANIFEST = ROOT / "benchmarks" / "manifests" / "smoke-v1.json"
 PAPER_MANIFEST = ROOT / "benchmarks" / "manifests" / "rlm-paper-v1.json"
 
 
-def test_manifest_pins_paper_tasks_and_opens_verified_live_runs() -> None:
+def test_manifest_pins_paper_tasks_and_blocks_unpublished_live_runs() -> None:
     manifest = load_manifest(PAPER_MANIFEST)
 
     assert manifest.paper is not None
@@ -44,9 +44,9 @@ def test_manifest_pins_paper_tasks_and_opens_verified_live_runs() -> None:
         "longbench-v2-codeqa",
         "tag-bench",
     }
-    assert manifest.live_run.enabled
-    assert not manifest.live_run.blockers
-    assert all(arm.executor == "modelrelay" for arm in manifest.arms)
+    assert not manifest.live_run.enabled
+    assert manifest.live_run.blockers[0].issue == "#81"
+    assert all(arm.executor == "blocked" for arm in manifest.arms)
     oolong = next(item for item in manifest.benchmarks if item.benchmark_id == "oolong")
     assert oolong.status == "ready"
     assert oolong.tasks_sha256 == "28abaefcbcba1d843a384115a1217ea0017201b13074c95de6feb313c40c8da4"
@@ -159,7 +159,8 @@ def test_oolong_official_rejects_incomplete_reference() -> None:
 def test_live_cost_uses_integer_microusd_and_snapshotted_fee() -> None:
     manifest = load_manifest(PAPER_MANIFEST)
     arm = next(item for item in manifest.arms if item.method == "droste")
-    price = ModelPrice("gpt-5.6-luna", "openai", 100, 600)
+    assert arm.model is not None
+    price = ModelPrice(arm.model.root_model, "test-provider", 100, 600)
     pricing = PricingSnapshot("test", 5, {price.model_id: price}, {})
     usage = Usage(10, 2, 20, 3)
 

@@ -65,42 +65,30 @@ paper's S-NIAH, BrowseComp-Plus, OOLONG, OOLONG-Pairs, and LongBench-v2 CodeQA
 task families. TAG-Bench is tracked separately in the same manifest as a
 Droste-specific follow-on rather than being presented as part of the paper.
 
-The OOLONG 131K `trec_coarse` validation slice and its ModelRelay arms are ready
-after materialization; the other datasets remain `planned`. A planned benchmark
-cannot be run: it has no task path, and a blocked executor cannot silently
-degrade to a fixture or another provider. Dataset adapters promote each
-benchmark to `ready` only after its public source revision, split, integrity
-checks, and scorer are pinned.
+The OOLONG 131K `trec_coarse` validation slice is ready after materialization;
+its live arms remain blocked until a public model configuration and immutable
+result artifacts are published under [#81](https://github.com/tensor-systems/droste/issues/81).
+The other datasets remain `planned`. A planned benchmark cannot be run: it has
+no task path, and a blocked executor cannot silently degrade to a fixture or
+another provider. Dataset adapters promote each benchmark to `ready` only
+after its public source revision, split, integrity checks, and scorer are
+pinned.
 
-## Live-run gate
+## Live-run status
 
-The `reasoning_effort=none` gate was verified end to end against production on
-2026-07-13: the response usage reported zero reasoning tokens. Re-run that
-credentialed probe before publishing results if the model or relay deployment
-changes; otherwise reported cost and latency could differ from the manifest.
+Live execution is intentionally disabled in the checked-in manifest. Before
+publishing results, pin a public model and compatible endpoint for both matched
+arms, verify the requested reasoning settings from response usage, and record
+the exact configuration in the manifest. The runner then requires a new output
+directory, refuses to overwrite artifacts, snapshots the endpoint's public
+price table, and rejects additions if that snapshot changes.
 
-Authenticate once with `droste login`, then start with one task and a new output
-directory:
-
-```bash
-uv run python -m benchmarks run benchmarks/manifests/rlm-paper-v1.json \
-  --benchmark oolong \
-  --arm droste-openai-none \
-  --arm direct-openai-none \
-  --task-id 17000208 \
-  --max-cost-microusd 4000000 \
-  --output benchmark-results/oolong-pilot-1
-```
-
-Use another new output directory when expanding the task set. The runner
-refuses to overwrite artifacts, snapshots the current public price table, and
-rejects additions if that output directory's price snapshot has changed.
-The optional integer micro-USD cap includes existing artifacts in the output
-directory. Once actual cumulative cost reaches the cap, or an observed
-same-arm cost projects the next run past it, execution stops before another
-arm without inventing a skipped artifact (artifact v1 has no skipped status).
-ModelRelay's platform fee is currently 0%; model input and output tokens still
-incur the snapshotted provider prices.
+When enabling a public configuration, include `--max-cost-microusd <amount>` in
+the run command. That optional integer micro-USD cap includes existing
+artifacts in the output directory. Once actual cumulative cost reaches the cap,
+or an observed same-arm cost projects the next run past it, execution stops
+before dispatching more work without inventing a skipped artifact (artifact v1
+has no skipped status).
 
 ## Artifact rules
 

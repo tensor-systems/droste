@@ -8,8 +8,13 @@
     "url": "https://arxiv.org/abs/2512.24601v3"
   },
   "live_run": {
-    "enabled": true,
-    "blockers": []
+    "enabled": false,
+    "blockers": [
+      {
+        "issue": "#81",
+        "reason": "A public model configuration and immutable live result artifacts have not been published."
+      }
+    ]
   },
   "benchmarks": [
     {
@@ -71,13 +76,14 @@
   ],
   "arms": [
     {
-      "id": "droste-openai-none",
+      "id": "droste-public-pending",
       "method": "droste",
-      "executor": "modelrelay",
+      "executor": "blocked",
+      "blocker": "Select and pin a public model and compatible endpoint before running this arm.",
       "model": {
-        "provider": "modelrelay",
-        "root_model": "gpt-5.6-luna",
-        "subcall_model": "gpt-5.6-luna",
+        "provider": "unconfigured",
+        "root_model": "unconfigured",
+        "subcall_model": "unconfigured",
         "root_reasoning_effort": "none",
         "subcall_reasoning_effort": "none",
         "temperature": null,
@@ -92,12 +98,13 @@
       }
     },
     {
-      "id": "direct-openai-none",
+      "id": "direct-public-pending",
       "method": "direct-model",
-      "executor": "modelrelay",
+      "executor": "blocked",
+      "blocker": "Select and pin the same public model and compatible endpoint before running this arm.",
       "model": {
-        "provider": "modelrelay",
-        "root_model": "gpt-5.6-luna",
+        "provider": "unconfigured",
+        "root_model": "unconfigured",
         "subcall_model": null,
         "root_reasoning_effort": "none",
         "subcall_reasoning_effort": null,
