@@ -15,10 +15,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from droste import BatchItemError, BatchItemErrorDetails
+from droste.capabilities import broker_subcalls
 from droste.clients.modelrelay import ModelRelayClient, ModelRelaySubcallClient
+from droste.environments import RunnerEnvironment
 from droste.exceptions import SubcallBudgetExceeded
 from droste.execution.context import create_execution_context
-from droste.structured import structured_batch
+from droste.structured import _StructuredBatchEvidence, bind_structured_batch, structured_batch
 
 
 class StubResponsesServer:
@@ -40,6 +43,9 @@ class StubResponsesServer:
         self.stream_truncate = False  # drop the connection before completion
         self.usage = {"input_tokens": 7, "output_tokens": 3, "total_tokens": 10}
         self.batch_error_message = "provider exploded"
+        self.batch_error_fields: dict[str, object] = {}
+        self.batch_item_fields: dict[str, object] = {}
+        self.batch_response_fields: dict[str, object] = {}
         stub = self
 
         def subcall_content(prompt: str) -> str:
@@ -70,15 +76,18 @@ class StubResponsesServer:
                     for item in payload["requests"]:
                         prompt = item["input"][-1]["content"][0]["text"]
                         if prompt == "fail":
+                            error = {
+                                "status": 502,
+                                "message": stub.batch_error_message,
+                                "code": "PROVIDER_ERROR",
+                                **stub.batch_error_fields,
+                            }
                             results.append(
                                 {
                                     "id": item["id"],
                                     "status": "error",
-                                    "error": {
-                                        "status": 502,
-                                        "message": stub.batch_error_message,
-                                        "code": "PROVIDER_ERROR",
-                                    },
+                                    "error": error,
+                                    **stub.batch_item_fields,
                                 }
                             )
                             continue
@@ -113,6 +122,7 @@ class StubResponsesServer:
                                 "successful_requests": successful,
                                 "failed_requests": len(results) - successful,
                             },
+                            **stub.batch_response_fields,
                         }
                     ).encode("utf-8")
                     self.send_response(200)
@@ -443,6 +453,12 @@ def test_subcall_batch_reports_ordered_item_errors_without_retry(stub_native):
         {
             "index": 1,
             "error": "llm_batch item 1 failed (PROVIDER_ERROR): provider exploded",
+            "details": {
+                "batch_id": "batch-stub-1",
+                "item_id": "1",
+                "status_code": 502,
+                "code": "PROVIDER_ERROR",
+            },
         }
     ]
     assert context.stats.calls_made == 3
@@ -503,6 +519,154 @@ def test_subcall_batch_item_error_is_bounded_and_redacted(stub_native):
     assert "supersecret" not in message
     assert "[redacted]" in message
     assert len(message) < 600
+    assert set(errors[0]) == {"index", "error", "details"}
+    assert "message" not in errors[0]["details"]
+
+
+def test_subcall_batch_raises_typed_error_with_allowlisted_details(stub_native):
+    context = create_execution_context(max_calls=1, max_iterations=1)
+    client = ModelRelaySubcallClient(
+        model="sub-model",
+        context=context,
+        base_url=stub_native.base_url,
+        api_key="mr_sk_t",
+    )
+    stub_native.batch_error_fields = {
+        "request_id": "req-item-9",
+        "batch_id": "batch-error-9",
+        "item_id": "item-error-9",
+        "layer": "gateway",
+        "cause": "upstream_timeout",
+        "status_code": 504,
+        "code": "UPSTREAM_TIMEOUT",
+        "retryable": True,
+        "payload": {"must": "not survive"},
+        "headers": {"authorization": "must not survive"},
+    }
+
+    with pytest.raises(BatchItemError) as caught:
+        client.llm_batch(["fail"])
+
+    assert str(caught.value) == "llm_batch item 0 failed (UPSTREAM_TIMEOUT): provider exploded"
+    assert caught.value.details == BatchItemErrorDetails(
+        request_id="req-item-9",
+        batch_id="batch-error-9",
+        item_id="item-error-9",
+        layer="gateway",
+        cause="upstream_timeout",
+        status_code=504,
+        code="UPSTREAM_TIMEOUT",
+        retryable=True,
+    )
+    assert caught.value.details.to_dict() == {
+        "request_id": "req-item-9",
+        "batch_id": "batch-error-9",
+        "item_id": "item-error-9",
+        "layer": "gateway",
+        "cause": "upstream_timeout",
+        "status_code": 504,
+        "code": "UPSTREAM_TIMEOUT",
+        "retryable": True,
+    }
+
+
+def test_subcall_batch_error_details_drop_malformed_and_unknown_fields(stub_native):
+    context = create_execution_context(max_calls=1, max_iterations=1)
+    client = ModelRelaySubcallClient(
+        model="sub-model",
+        context=context,
+        base_url=stub_native.base_url,
+        api_key="mr_sk_t",
+    )
+    stub_native.batch_error_fields = {
+        "request_id": "token=supersecret " + ("r" * 400),
+        "batch_id": {"nested": "discard"},
+        "item_id": ["discard"],
+        "layer": {"nested": "discard"},
+        "cause": ["discard"],
+        "status_code": True,
+        "status": "502",
+        "code": "C" * 200,
+        "retryable": "yes",
+        "unknown": "discard",
+    }
+
+    _, errors = client.llm_batch_with_errors(["fail"])
+
+    details = errors[0]["details"]
+    assert details == {
+        "request_id": "token=[redacted] " + ("r" * 239),
+        "batch_id": "batch-stub-1",
+        "item_id": "0",
+        "code": "C" * 128,
+    }
+    assert len(details["request_id"]) == 256
+
+
+def test_batch_item_error_details_reject_out_of_contract_values() -> None:
+    with pytest.raises(ValueError, match="request_id"):
+        BatchItemErrorDetails(request_id="r" * 257)
+    with pytest.raises(ValueError, match="status_code"):
+        BatchItemErrorDetails(status_code=99)
+    with pytest.raises(ValueError, match="status_code"):
+        BatchItemErrorDetails(status_code=True)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="retryable"):
+        BatchItemErrorDetails(retryable="yes")  # type: ignore[arg-type]
+
+
+def test_batch_error_details_survive_broker_semantic_and_runner_paths(stub_native):
+    context = create_execution_context(max_calls=3, max_iterations=1)
+    client = ModelRelaySubcallClient(
+        model="sub-model",
+        context=context,
+        base_url=stub_native.base_url,
+        api_key="mr_sk_t",
+    )
+    stub_native.batch_error_fields = {
+        "layer": "gateway",
+        "cause": "rate_limited",
+        "status_code": 429,
+        "retryable": True,
+    }
+    stub_native.batch_item_fields = {"request_id": "req-end-to-end"}
+    stub_native.batch_response_fields = {"batch_id": "batch-end-to-end"}
+    expected = {
+        "request_id": "req-end-to-end",
+        "batch_id": "batch-end-to-end",
+        "item_id": "0",
+        "layer": "gateway",
+        "cause": "rate_limited",
+        "status_code": 429,
+        "code": "PROVIDER_ERROR",
+        "retryable": True,
+    }
+
+    brokered = broker_subcalls(client)
+    _, broker_errors = brokered.llm_batch_with_errors(["fail"])
+    assert broker_errors[0]["details"] == expected
+
+    evidence = _StructuredBatchEvidence()
+    semantic_batch = bind_structured_batch(brokered, evidence)
+    semantic_result = semantic_batch(
+        ["fail"],
+        {"type": "object"},
+        max_repair_attempts=0,
+    )
+    assert semantic_result["errors"][0]["details"] == expected
+    assert evidence.unresolved_batches == 1
+    assert evidence.unresolved_items == 1
+
+    environment = RunnerEnvironment(
+        context={},
+        registry=None,
+        subcalls=client,
+        max_output_chars=10_000,
+        exec_timeout_ms=0,
+    )
+    environment.execute(
+        "runner_result = llm_batch_json(['fail'], {'type': 'object'}, max_repair_attempts=0)"
+    )
+    assert environment.globals()["runner_result"]["errors"][0]["details"] == expected
 
 
 def test_native_batch_structured_repair_keeps_one_wire_request_per_attempt(stub_native):

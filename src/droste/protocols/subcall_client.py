@@ -28,7 +28,13 @@ class SubcallClient(Protocol):
         prompts: list[str],
         contexts: list[str] | None = None,
     ) -> tuple[list[str], list[dict[str, object]]]:
-        """Batch sub-LLM calls with structured per-item errors."""
+        """Batch sub-LLM calls with structured per-item errors.
+
+        Every error has an integer ``index`` and human-readable ``error``
+        string. Implementations may add ``type`` and an additive ``details``
+        object shaped by :class:`droste.BatchItemErrorDetails`; custom clients
+        that return only the original fields remain compatible.
+        """
         ...
 
 
