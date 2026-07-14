@@ -8,14 +8,15 @@ import pytest
 
 from droste import (
     DataUseAuthorization,
-    PolicyHints,
     RLMConfig,
     TraceRetentionPolicy,
     create_execution_context,
     parse_event,
     run_rlm,
 )
+from droste.exceptions import RLMError
 from droste.execution.trace import PersistenceClass, TraceRecorder
+from droste.loop.step import finalize
 from droste.protocols.llm_client import TokenUsage
 from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
 
@@ -263,7 +264,7 @@ def test_event_bodies_reject_missing_unknown_and_wrong_primitive_fields() -> Non
     with pytest.raises(ValueError, match="unknown body fields: detail"):
         recorder.append({"type": "progress", "status": "working", "detail": "private"})
     with pytest.raises(TypeError, match="iteration.*invalid type"):
-        recorder.append({"type": "iteration_start", "iteration": True, "max_iterations": 2})
+        recorder.append({"type": "iteration_start", "iteration": True, "remaining_tokens": 2})
     with pytest.raises(ValueError, match="unknown body fields: details"):
         recorder.append(
             {
@@ -300,7 +301,7 @@ def test_default_retention_cannot_smuggle_code_output_or_answer_into_done() -> N
         environment=MockEnvironment(),
         root_llm=MockLLMClient([_ready_reply(secret)]),
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1),
+        config=RLMConfig(),
         on_event=events.append,
     )
 
@@ -328,7 +329,6 @@ def test_configurable_replay_is_retained_only_when_selected() -> None:
         root_llm=MockLLMClient([_ready_reply("selected")]),
         subcalls=MockSubcallClient(),
         config=RLMConfig(
-            max_iterations=1,
             trace_retention=TraceRetentionPolicy(frozenset({"code", "output", "replay"})),
         ),
     )
@@ -353,7 +353,6 @@ def test_repair_attempts_are_first_class_configurable_events() -> None:
         root_llm=MockLLMClient([missing_code, _ready_reply()]),
         subcalls=MockSubcallClient(),
         config=RLMConfig(
-            max_iterations=1,
             enforce_contract=True,
             trace_retention=TraceRetentionPolicy(frozenset({"repair"})),
         ),
@@ -372,7 +371,6 @@ def test_terminal_reconciles_usage_and_training_permission_is_independent() -> N
         root_llm=MockLLMClient([_ready_reply()]),
         subcalls=MockSubcallClient(),
         config=RLMConfig(
-            max_iterations=1,
             trace_retention=TraceRetentionPolicy(frozenset({"replay"})),
         ),
     )
@@ -396,7 +394,6 @@ def test_host_record_sink_receives_explicit_training_authorization_without_conte
         root_llm=MockLLMClient([_ready_reply()]),
         subcalls=MockSubcallClient(),
         config=RLMConfig(
-            max_iterations=1,
             data_use=DataUseAuthorization(
                 training_allowed=True,
                 authorization_ref="consent://trace-training/1",
@@ -455,7 +452,7 @@ def test_non_policy_failure_is_not_recorded_as_policy_violation() -> None:
         environment=MockEnvironment(),
         root_llm=MockLLMClient([]),
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1, enforce_contract=True),
+        config=RLMConfig(enforce_contract=True),
     )
 
     assert result.error is not None and result.error.type != "PolicyError"
@@ -467,20 +464,20 @@ def test_non_policy_failure_is_not_recorded_as_policy_violation() -> None:
 
 def test_withheld_policy_content_cannot_enter_durable_terminal_errors() -> None:
     secret = "WITHHELD_PRIVATE_CONTENT"
-    violating = MockResponse(
-        text=(f"```python\nanswer['content'] = {secret!r}\nanswer['ready'] = True\n```"),
-        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    context = create_execution_context()
+    error = RLMError(
+        type="PolicyError",
+        message="withheld",
+        details={"withheld_content": secret},
     )
-    result = run_rlm(
-        question="q",
-        environment=MockEnvironment(),
-        root_llm=MockLLMClient([violating, violating]),
-        subcalls=MockSubcallClient(),
-        config=RLMConfig(
-            max_iterations=1,
-            enforce_contract=True,
-            policy_hints=PolicyHints(numeric_output=True),
-        ),
+    result = finalize(
+        answer_text="Error: policy violation",
+        answer={"content": secret, "ready": False},
+        iterations=1,
+        context=context,
+        trajectory=[],
+        error=error,
+        config=RLMConfig(enforce_contract=True),
     )
 
     assert result.error is not None and result.error.type == "PolicyError"
@@ -492,24 +489,15 @@ def test_withheld_policy_content_cannot_enter_durable_terminal_errors() -> None:
 
 
 def test_recovered_policy_violation_remains_a_durable_policy_fact() -> None:
-    violating = MockResponse(
-        text=("```python\nanswer['content'] = 'draft'\nanswer['ready'] = True\n```"),
-        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
-    )
-    extracted = MockResponse(
-        text="Recovered from the retained evidence.",
-        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
-    )
-    result = run_rlm(
-        question="q",
-        environment=MockEnvironment(),
-        root_llm=MockLLMClient([violating, violating, extracted]),
-        subcalls=MockSubcallClient(),
-        config=RLMConfig(
-            max_iterations=1,
-            enforce_contract=True,
-            policy_hints=PolicyHints(numeric_output=True),
-        ),
+    result = finalize(
+        answer_text="Recovered from the retained evidence.",
+        answer={"content": "draft", "ready": False},
+        iterations=1,
+        context=create_execution_context(),
+        trajectory=[],
+        extracted=True,
+        recovered_error=RLMError(type="PolicyError", message="recovered"),
+        config=RLMConfig(enforce_contract=True),
     )
 
     assert result.error is None
@@ -532,7 +520,6 @@ def test_injected_context_owns_trace_settings_and_conflicts_fail() -> None:
             root_llm=MockLLMClient([_ready_reply()]),
             subcalls=MockSubcallClient(),
             config=RLMConfig(
-                max_iterations=1,
                 run_id="config-run",
                 trace_retention=TraceRetentionPolicy(frozenset({"output"})),
             ),

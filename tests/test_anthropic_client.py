@@ -11,7 +11,6 @@ import pytest
 from droste import (
     AnthropicClient,
     AnthropicSubcallClient,
-    SubcallBudgetExceeded,
     create_execution_context,
 )
 from droste_cli.main import main
@@ -258,8 +257,8 @@ def test_http_error_is_bounded_and_redacted(stub):
 # --- subcall client ---
 
 
-def test_subcall_accounting_and_cap(stub):
-    ctx = create_execution_context(max_calls=2, max_iterations=5)
+def test_subcall_client_reports_usage_without_owning_budget_policy(stub):
+    ctx = create_execution_context()
     sub = AnthropicSubcallClient(
         model="sub-model", context=ctx, base_url=stub.base_url, api_key="sk-ant-k"
     )
@@ -269,14 +268,13 @@ def test_subcall_accounting_and_cap(stub):
     assert ctx.stats.calls_made == 2
     assert ctx.stats.successful_calls == 2
     assert ctx.stats.total_tokens == 20  # 2 x (7 + 3)
-    with pytest.raises(SubcallBudgetExceeded, match="max subcalls exceeded"):
-        sub.llm_query("gamma")
-    assert ctx.stats.calls_made == 2  # rejected attempt does not inflate
+    assert sub.llm_query("gamma") == "echo: gamma"
+    assert ctx.stats.calls_made == 3
     assert stub.requests[0]["max_tokens"] == 2048  # bounded by default
 
 
 def test_subcall_requires_positive_output_bound(stub):
-    ctx = create_execution_context(max_calls=5, max_iterations=5)
+    ctx = create_execution_context()
     with pytest.raises(ValueError, match="max_tokens"):
         AnthropicSubcallClient(
             model="sub-model",
@@ -288,7 +286,7 @@ def test_subcall_requires_positive_output_bound(stub):
 
 
 def test_batch_bounded_concurrency(stub):
-    ctx = create_execution_context(max_calls=20, max_iterations=5)
+    ctx = create_execution_context()
     sub = AnthropicSubcallClient(
         model="sub-model",
         context=ctx,
@@ -349,7 +347,7 @@ def test_cli_e2e_anthropic_via_env(stub, tmp_path, monkeypatch, capsys):
     stub.root_responses = [
         "```python\nanswer['content'] = context['files'][0]['text']\nanswer['ready'] = True\n```",
     ]
-    code = main([str(doc), "what does it say?", "--model", "claude-test", "--max-iterations", "2"])
+    code = main([str(doc), "what does it say?", "--model", "claude-test"])
     captured = capsys.readouterr()
     assert code == 0
     assert captured.out.strip() == "anthropic content"

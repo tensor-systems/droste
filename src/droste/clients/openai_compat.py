@@ -13,9 +13,8 @@ Two classes, one per protocol:
 - ``OpenAICompatSubcallClient`` implements ``SubcallClient`` (``llm_query`` /
   ``llm_batch`` / ``llm_batch_with_errors``) with bounded concurrency, a
   bounded per-subcall output budget (default 2048 tokens), and call/token
-  accounting into the shared ``ExecutionContext`` — mirroring
-  ``HTTPSubcallClient``'s counting semantics (count only issued calls, honor
-  ``max_calls``, thread-safe).
+  reporting into the shared ``ExecutionContext``. Budget authorization belongs
+  to the capability broker; this transport records only work actually issued.
 
 Config resolution: explicit constructor args win, then ``OPENAI_API_KEY`` /
 ``OPENAI_BASE_URL``, then the OpenAI default base URL. An empty api_key is
@@ -42,7 +41,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from ..exceptions import SubcallBudgetExceeded
+from ..execution.budget import DEFAULT_SUBCALL_OUTPUT_TOKENS
 from ..execution.context import ExecutionContext
 from ..protocols.llm_client import TokenUsage
 from ..protocols.subcall_client import SubcallClient
@@ -50,7 +49,6 @@ from .errors import http_error_excerpt
 from .useragent import USER_AGENT
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS = 2048
 DEFAULT_MAX_PARALLEL = 5
 MAX_BATCH_PROMPTS = 50
 DEFAULT_TIMEOUT_SECONDS = 120.0
@@ -401,13 +399,10 @@ class OpenAICompatClient:
 class OpenAICompatSubcallClient(SubcallClient):
     """``SubcallClient`` over an OpenAI-compatible chat-completions endpoint.
 
-    Mirrors ``HTTPSubcallClient``'s accounting semantics: check-then-increment
-    of ``context.stats.calls_made`` under a lock (a rejected over-limit attempt
-    must not inflate the count, and concurrent llm_batch threads must not race
-    the check), per-thread depth tracking against ``max_depth``, bounded batch
-    concurrency. Unlike the ModelRelay transport — where the server owns token
-    accounting — subcall token usage here is read from the response's standard
-    usage block and added to ``context.stats.total_tokens``, so
+    Reports issued calls under a lock and bounds batch concurrency. Unlike the
+    ModelRelay transport — where the server owns token accounting — subcall
+    token usage here is read from the response's standard usage block and
+    added to ``context.stats.total_tokens``, so
     ``RLMResult.tokens_used`` covers root + subcall tokens.
 
     ``max_output_tokens`` bounds every subcall's output (cost control; default
@@ -422,9 +417,7 @@ class OpenAICompatSubcallClient(SubcallClient):
         context: ExecutionContext,
         base_url: str | None = None,
         api_key: str | None = None,
-        max_calls: int | None = None,
-        max_depth: int | None = None,
-        max_output_tokens: int = DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS,
+        max_output_tokens: int = DEFAULT_SUBCALL_OUTPUT_TOKENS,
         temperature: float | None = None,
         reasoning_effort: str = "",
         extra_body: dict[str, Any] | None = None,
@@ -442,8 +435,6 @@ class OpenAICompatSubcallClient(SubcallClient):
         )
         self._model = str(model)
         self._context = context
-        self._max_calls = int(context.max_calls if max_calls is None else max_calls)
-        self._max_depth = int(context.max_depth if max_depth is None else max_depth)
         self._max_output_tokens = int(max_output_tokens)
         self._temperature = temperature
         self._reasoning_effort = str(reasoning_effort or "")
@@ -451,23 +442,14 @@ class OpenAICompatSubcallClient(SubcallClient):
         self._token_param: dict[str, str] = {}  # per-model migration memory
         self._max_parallel = int(max_parallel)
         self._lock = threading.Lock()
-        self._depth = threading.local()
 
     @property
     def output_token_limit(self) -> int | None:
         """Effective maximum output tokens for each subcall, or no limit."""
         return self._max_output_tokens or None
 
-    def _depth_get(self) -> int:
-        return getattr(self._depth, "value", 0)
-
-    def _depth_set(self, value: int) -> None:
-        self._depth.value = value
-
     def _increment_calls(self) -> None:
         with self._lock:
-            if self._max_calls >= 0 and self._context.stats.calls_made >= self._max_calls:
-                raise SubcallBudgetExceeded("max subcalls exceeded")
             self._context.record_subcall_attempts()
 
     def _account_usage(self, usage: TokenUsage) -> None:
@@ -481,33 +463,26 @@ class OpenAICompatSubcallClient(SubcallClient):
     def llm_query(self, prompt: str, context: str = "") -> str:
         if context:
             prompt = f"{context}\n\n{prompt}"
-        depth = self._depth_get() + 1
-        self._depth_set(depth)
-        try:
-            if self._max_depth >= 0 and depth > self._max_depth:
-                raise RuntimeError("max depth exceeded")
-            self._increment_calls()
-            payload: dict[str, Any] = {
-                "model": self._model,
-                "messages": [{"role": "user", "content": prompt}],
-            }
-            if self._max_output_tokens > 0:
-                payload[_token_param_for(self._token_param, self._model)] = self._max_output_tokens
-            if self._temperature is not None:
-                payload["temperature"] = self._temperature
-            if self._reasoning_effort:
-                payload["reasoning_effort"] = self._reasoning_effort
-            payload.update(self._extra_body)
-            data = _complete_with_token_param_migration(
-                self._transport, payload, self._token_param, self._model
-            )
-            result = _message_content(data, label="llm_query")
-            self._account_usage(_usage_from(data))
-            if result.strip():
-                self._increment_successful_calls()
-            return result
-        finally:
-            self._depth_set(depth - 1)
+        self._increment_calls()
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if self._max_output_tokens > 0:
+            payload[_token_param_for(self._token_param, self._model)] = self._max_output_tokens
+        if self._temperature is not None:
+            payload["temperature"] = self._temperature
+        if self._reasoning_effort:
+            payload["reasoning_effort"] = self._reasoning_effort
+        payload.update(self._extra_body)
+        data = _complete_with_token_param_migration(
+            self._transport, payload, self._token_param, self._model
+        )
+        result = _message_content(data, label="llm_query")
+        self._account_usage(_usage_from(data))
+        if result.strip():
+            self._increment_successful_calls()
+        return result
 
     def llm_batch(self, prompts: list[str], contexts: list[str] | None = None) -> list[str]:
         results, errors = self._run_batch(prompts, contexts)
@@ -523,13 +498,7 @@ class OpenAICompatSubcallClient(SubcallClient):
     ) -> tuple[list[str], list[dict[str, object]]]:
         results, errors = self._run_batch(prompts, contexts)
         structured = [
-            {
-                "index": idx,
-                "error": str(err),
-                **({"type": "budget_exhausted"} if isinstance(err, SubcallBudgetExceeded) else {}),
-            }
-            for idx, err in enumerate(errors)
-            if err is not None
+            {"index": idx, "error": str(err)} for idx, err in enumerate(errors) if err is not None
         ]
         return results, structured
 

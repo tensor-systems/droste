@@ -38,7 +38,12 @@ from droste.capabilities import (
     thaw_value,
     validate_call,
 )
-from droste.environments import EnvironmentConfig, RunnerEnvironment, create_environment
+from droste.environments import (
+    EnvironmentConfig,
+    RunnerEnvironment,
+    create_environment,
+    create_environment_context,
+)
 from droste.protocols.llm_client import TokenUsage
 from droste.providers import ConfiguredSource, ProviderCatalog
 from droste.testing import (
@@ -629,7 +634,10 @@ def test_brokered_subcalls_fail_fast_when_required_batch_contract_is_missing() -
             return []
 
     with pytest.raises(TypeError, match="llm_batch_with_errors"):
-        broker_subcalls(IncompleteSubcalls())  # type: ignore[arg-type]
+        broker_subcalls(
+            IncompleteSubcalls(),  # type: ignore[arg-type]
+            create_environment_context(EnvironmentConfig(kind="native")).ledger,
+        )
 
 
 def _runner(
@@ -704,7 +712,10 @@ def test_runner_rejects_a_different_runtime_subcall_client() -> None:
     environment = _runner(RecordingSubcalls())
 
     with pytest.raises(ValueError, match="same client"):
-        environment.sandbox_subcalls(RecordingSubcalls())
+        environment.sandbox_subcalls(
+            RecordingSubcalls(),
+            create_environment_context(EnvironmentConfig(kind="native")).ledger,
+        )
 
 
 def test_run_loop_keeps_canonical_query_and_batch_on_the_broker_path() -> None:
@@ -732,7 +743,7 @@ def test_run_loop_keeps_canonical_query_and_batch_on_the_broker_path() -> None:
         environment=environment,
         root_llm=root,
         subcalls=subcalls,
-        config=RLMConfig(max_iterations=1),
+        config=RLMConfig(),
     )
 
     assert result.ready is True
@@ -779,7 +790,7 @@ def test_run_loop_replaces_custom_environment_raw_subcall_globals() -> None:
         environment=environment,
         root_llm=root,
         subcalls=subcalls,
-        config=RLMConfig(max_iterations=1),
+        config=RLMConfig(),
     )
 
     assert result.answer == "answer:brokered:"
@@ -811,6 +822,7 @@ def test_native_and_pyodide_publish_the_same_manifest_and_brokered_results(
         context={},
         registry=registry,
         subcalls=subcalls,
+        execution_context=create_environment_context(config),
         capability_run_id="run-parity",
     )
 

@@ -8,10 +8,9 @@ testing shim), so first-class Claude support gets its own client pair speaking
   (``responses_create`` with ``return_usage``), including ``on_delta`` SSE
   streaming for the CLI's --verbose view.
 - ``AnthropicSubcallClient`` implements ``SubcallClient`` with the same
-  accounting semantics as ``OpenAICompatSubcallClient``: check-then-increment
-  of ``context.stats.calls_made`` under a lock, per-thread depth tracking,
-  bounded batch concurrency, and subcall usage added to
-  ``context.stats.total_tokens``.
+  reporting semantics as ``OpenAICompatSubcallClient``: bounded batch
+  concurrency and subcall usage recorded in ``context.stats``. Authorization
+  belongs to the capability broker.
 
 API notes encoded here:
 - headers are ``x-api-key`` + ``anthropic-version`` (not Authorization);
@@ -41,7 +40,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from ..exceptions import SubcallBudgetExceeded
+from ..execution.budget import DEFAULT_SUBCALL_OUTPUT_TOKENS
 from ..execution.context import ExecutionContext
 from ..protocols.llm_client import TokenUsage
 from ..protocols.subcall_client import SubcallClient
@@ -51,7 +50,6 @@ from .useragent import USER_AGENT
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_ANTHROPIC_MAX_TOKENS = 4096
-DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS = 2048
 DEFAULT_MAX_PARALLEL = 5
 MAX_BATCH_PROMPTS = 50
 DEFAULT_TIMEOUT_SECONDS = 120.0
@@ -342,12 +340,9 @@ class AnthropicClient:
 class AnthropicSubcallClient(SubcallClient):
     """``SubcallClient`` over Anthropic's native Messages API.
 
-    Mirrors ``OpenAICompatSubcallClient``'s accounting semantics exactly:
-    check-then-increment of ``context.stats.calls_made`` under a lock (a
-    rejected over-limit attempt must not inflate the count, and concurrent
-    llm_batch threads must not race the check), per-thread depth tracking
-    against ``max_depth``, bounded batch concurrency, and subcall usage
-    added to ``context.stats.total_tokens``.
+    Reports issued calls under a lock, bounds batch concurrency, and records
+    subcall usage in ``context.stats``. Budget authorization belongs to the
+    capability broker.
 
     ``max_output_tokens`` bounds every subcall's output (cost control;
     default 2048). The Messages API requires ``max_tokens``, so 0 is not a
@@ -361,9 +356,7 @@ class AnthropicSubcallClient(SubcallClient):
         context: ExecutionContext,
         base_url: str | None = None,
         api_key: str | None = None,
-        max_calls: int | None = None,
-        max_depth: int | None = None,
-        max_output_tokens: int = DEFAULT_SUBCALL_MAX_OUTPUT_TOKENS,
+        max_output_tokens: int = DEFAULT_SUBCALL_OUTPUT_TOKENS,
         temperature: float | None = None,
         extra_body: dict[str, Any] | None = None,
         max_parallel: int = DEFAULT_MAX_PARALLEL,
@@ -380,30 +373,19 @@ class AnthropicSubcallClient(SubcallClient):
         )
         self._model = str(model)
         self._context = context
-        self._max_calls = int(context.max_calls if max_calls is None else max_calls)
-        self._max_depth = int(context.max_depth if max_depth is None else max_depth)
         self._max_output_tokens = int(max_output_tokens)
         self._temperature = temperature
         self._extra_body = dict(extra_body) if extra_body else {}
         self._max_parallel = int(max_parallel)
         self._lock = threading.Lock()
-        self._depth = threading.local()
 
     @property
     def output_token_limit(self) -> int | None:
         """Effective maximum output tokens for each subcall."""
         return self._max_output_tokens
 
-    def _depth_get(self) -> int:
-        return getattr(self._depth, "value", 0)
-
-    def _depth_set(self, value: int) -> None:
-        self._depth.value = value
-
     def _increment_calls(self) -> None:
         with self._lock:
-            if self._max_calls >= 0 and self._context.stats.calls_made >= self._max_calls:
-                raise SubcallBudgetExceeded("max subcalls exceeded")
             self._context.record_subcall_attempts()
 
     def _account_usage(self, usage: TokenUsage) -> None:
@@ -417,28 +399,21 @@ class AnthropicSubcallClient(SubcallClient):
     def llm_query(self, prompt: str, context: str = "") -> str:
         if context:
             prompt = f"{context}\n\n{prompt}"
-        depth = self._depth_get() + 1
-        self._depth_set(depth)
-        try:
-            if self._max_depth >= 0 and depth > self._max_depth:
-                raise RuntimeError("max depth exceeded")
-            self._increment_calls()
-            payload: dict[str, Any] = {
-                "model": self._model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": self._max_output_tokens,
-            }
-            if self._temperature is not None:
-                payload["temperature"] = self._temperature
-            payload.update(self._extra_body)
-            data = self._transport.complete(payload)
-            result = _text_from_content(data, label="llm_query")
-            self._account_usage(_usage_from(data))
-            if result.strip():
-                self._increment_successful_calls()
-            return result
-        finally:
-            self._depth_set(depth - 1)
+        self._increment_calls()
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": self._max_output_tokens,
+        }
+        if self._temperature is not None:
+            payload["temperature"] = self._temperature
+        payload.update(self._extra_body)
+        data = self._transport.complete(payload)
+        result = _text_from_content(data, label="llm_query")
+        self._account_usage(_usage_from(data))
+        if result.strip():
+            self._increment_successful_calls()
+        return result
 
     def llm_batch(self, prompts: list[str], contexts: list[str] | None = None) -> list[str]:
         results, errors = self._run_batch(prompts, contexts)
@@ -454,13 +429,7 @@ class AnthropicSubcallClient(SubcallClient):
     ) -> tuple[list[str], list[dict[str, object]]]:
         results, errors = self._run_batch(prompts, contexts)
         structured = [
-            {
-                "index": idx,
-                "error": str(err),
-                **({"type": "budget_exhausted"} if isinstance(err, SubcallBudgetExceeded) else {}),
-            }
-            for idx, err in enumerate(errors)
-            if err is not None
+            {"index": idx, "error": str(err)} for idx, err in enumerate(errors) if err is not None
         ]
         return results, structured
 

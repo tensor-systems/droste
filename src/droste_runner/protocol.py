@@ -7,7 +7,7 @@ from typing import Any
 
 from droste.execution.report import project_result
 
-RUNNER_PROTOCOL_VERSION = 2
+RUNNER_PROTOCOL_VERSION = 3
 
 
 @dataclass(frozen=True)

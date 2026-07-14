@@ -57,7 +57,7 @@ Objects named below are JSON objects; all other types are primitive.
 | --- | --- |
 | `startup` | `engine_version: string`, `runner_protocol?: integer|null`, `provider_protocol?: integer|null` |
 | `progress` | `status: string` |
-| `iteration_start` | `iteration: integer`, `max_iterations: integer` |
+| `iteration_start` | `iteration: integer`, `remaining_tokens: integer` |
 | `llm_response` | `iteration: integer`, `response: string` |
 | `code` | `iteration: integer`, `code: string` |
 | `output` | `iteration: integer`, `stdout: string`, `calls_made: integer`, `answer_ready: boolean`, `answer_content_chars: integer` |
@@ -90,9 +90,9 @@ Legacy/custom-client tokens that cannot be assigned safely appear under
 `unattributed.total_tokens`; the three token scopes must sum to
 `total_tokens`. None of these facts is inferred by counting stream events.
 
-Budget v1 is a discriminated event. A pre-ledger compatibility snapshot uses
-`kind="snapshot"`, `source="legacy_execution_stats"`, and `configured`,
-`consumed`, and `remaining` objects. A ledger may emit any number of
+Budget v1 is a discriminated event. The terminal snapshot uses
+`kind="snapshot"`, `source="budget_ledger"`, and `configured`, `consumed`,
+and `remaining` objects. The ledger may emit any number of
 `kind="mutation"` values with `action` (`reserve`, `commit`, `refund`, or
 `exhaust`), `resource`, non-negative `amount`, and optional `call_id`.
 Consumers must not assume exactly one mutation.

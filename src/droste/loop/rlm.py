@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from ..exceptions import PolicyError, RLMError, SubcallBudgetExceeded
+from ..exceptions import PolicyError, RLMError
+from ..execution.budget import BudgetExhausted
 from ..execution.context import ExecutionContext, create_execution_context
 from ..execution.progress import (
     EventCallback,
@@ -93,7 +94,7 @@ class _SubcallGate:
 
     def _check(self) -> None:
         if self._blocked:
-            raise SubcallBudgetExceeded("subcalls are disabled during terminal finalization")
+            raise BudgetExhausted("subcalls", 1, 0)
 
     def llm_query(self, prompt: str, context: str = "") -> str:
         self._check()
@@ -132,6 +133,10 @@ def _validate_existing_context_trace(cfg: RLMConfig, context: ExecutionContext) 
     Default RLMConfig trace values mean "use the context's value".
     """
     conflicts: list[str] = []
+    if cfg.budget != context.budget:
+        conflicts.append("budget")
+    if cfg.sandbox != context.sandbox:
+        conflicts.append("sandbox")
     if cfg.run_id is not None and cfg.run_id != context.trace.run_id:
         conflicts.append("run_id")
     if cfg.parent_run_id is not None and cfg.parent_run_id != context.trace.parent_run_id:
@@ -208,9 +213,12 @@ def _budget_prompt(cfg: "RLMConfig", subcalls: SubcallClient) -> str:
         rendered_limit = f"{limit} (bounded)"
     return (
         "## Authorized compute\n"
-        f"iterations={cfg.max_iterations}; subcalls={cfg.max_calls}; "
-        f"depth={cfg.max_depth}; output_chars_per_iteration={cfg.max_output_chars}\n"
-        f"subcall_output_tokens_per_call={rendered_limit}"
+        f"tokens={cfg.budget.tokens}; subcalls={cfg.budget.subcalls}; "
+        f"depth={cfg.budget.depth}; wall_ms={cfg.budget.wall_ms}; "
+        f"root_output_tokens_per_call={cfg.budget.root_output_tokens}; "
+        f"subcall_output_tokens_per_call={cfg.budget.subcall_output_tokens}\n"
+        f"client_reported_subcall_output_limit={rendered_limit}\n"
+        f"Sandbox output_chars_per_iteration={cfg.sandbox.output_chars}."
     )
 
 
@@ -267,10 +275,10 @@ def _terminal_semantic_budget_error(
     context: ExecutionContext,
 ) -> RLMError | None:
     """Return a fail-closed policy error when exact recovery is impossible."""
-    if evidence is None or context.max_calls < 0:
+    if evidence is None:
         return None
     required = evidence.minimum_exact_retry_calls
-    remaining = max(context.max_calls - context.stats.calls_made, 0)
+    remaining = context.ledger.snapshot().remaining.subcalls
     if required <= remaining:
         return None
     return RLMError(
@@ -301,8 +309,8 @@ def _extract_final_answer(
     prompt_pack: PromptPack,
 ) -> tuple[str, RLMError | None]:
     """One extract pass:
-    when the loop exhausts max_iterations without answer['ready'], make a
-    single root-LLM call over a compact trajectory summary so the run returns
+    when a terminal budget handoff occurs without answer['ready'], make one
+    root-LLM call over a compact trajectory summary so the run returns
     the best answer learnable from the work done, instead of scraps.
 
     Returns (text, None) on success. On failure returns ("", RLMError(...)) —
@@ -334,13 +342,14 @@ def _extract_final_answer(
                 "content": render_prompt_template(prompt_pack.templates.extract_user, slots),
             },
         ]
-        context.record_root_attempt()
-        response, usage = root_llm.responses_create(
+        response, _usage, root_error = call_root(
+            root_llm,
             messages,
             model=cfg.root_model or "",
-            return_usage=True,
+            context=context,
         )
-        context.record_root_success(usage)
+        if root_error is not None:
+            return "", root_error
         text = str(response).strip()
         if not text:
             return "", RLMError(type="EmptyExtraction", message="extract call returned empty text")
@@ -388,10 +397,8 @@ def run_rlm(
     prompt_pack_record = resolved_prompt_pack.record()
     if context is None:
         context = create_execution_context(
-            max_depth=cfg.max_depth,
-            max_calls=cfg.max_calls,
-            max_iterations=cfg.max_iterations,
-            max_output_chars=cfg.max_output_chars,
+            budget=cfg.budget,
+            sandbox=cfg.sandbox,
             verbose=cfg.verbose,
             on_progress=on_progress or cfg.on_progress,
             # None -> NO emission (#35). Embedders that want the NDJSON
@@ -413,7 +420,7 @@ def run_rlm(
     env_globals = environment.globals()
     # The environment contract owns one brokered subcall surface. The host's
     # raw client remains trusted loop state for context binding/accounting.
-    sandbox_subcalls = environment.sandbox_subcalls(subcalls)
+    sandbox_subcalls = environment.sandbox_subcalls(subcalls, context.ledger)
     answer = env_globals.get("answer")
     if not isinstance(answer, dict):
         answer = {"content": "", "ready": False}
@@ -525,9 +532,11 @@ def run_rlm(
         )
 
     try:
-        while not answer.get("ready") and iterations < cfg.max_iterations:
+        while not answer.get("ready"):
             iterations += 1
-            context.emit_event(iteration_start_event(iterations, cfg.max_iterations))
+            context.emit_event(
+                iteration_start_event(iterations, context.ledger.snapshot().remaining.tokens)
+            )
 
             if iterations == 1:
                 messages = build_initial_messages(system_prompt, user_content)
@@ -551,9 +560,7 @@ def run_rlm(
                     rendered_prompt=rendered_refinement,
                 )
 
-            context.emit_progress(
-                f"Iteration {iterations}/{cfg.max_iterations}: Generating code..."
-            )
+            context.emit_progress(f"Iteration {iterations}: Generating code...")
 
             response, usage, root_error = call_root(
                 root_llm, messages, model=cfg.root_model or "", context=context
@@ -611,7 +618,7 @@ def run_rlm(
                         config=cfg,
                     )
 
-            context.emit_progress(f"Iteration {iterations}/{cfg.max_iterations}: Executing...")
+            context.emit_progress(f"Iteration {iterations}: Executing...")
             context.emit_event(build_code_event(iterations, code))
 
             finalization_base_messages = messages
@@ -657,9 +664,7 @@ def run_rlm(
                 terminal_budget_handoff = True
                 break
 
-            context.emit_progress(
-                f"Iteration {iterations}/{cfg.max_iterations}: Retrying with error feedback..."
-            )
+            context.emit_progress(f"Iteration {iterations}: Retrying with error feedback...")
             assert outcome.exception is not None
             error_repair_prompt = render_prompt_template(
                 resolved_prompt_pack.pack.templates.error_repair,
@@ -693,9 +698,7 @@ def run_rlm(
 
             repaired_code = extract_code_block(repair_response, "python")
             if repaired_code:
-                context.emit_progress(
-                    f"Iteration {iterations}/{cfg.max_iterations}: Executing repaired code..."
-                )
+                context.emit_progress(f"Iteration {iterations}: Executing repaired code...")
                 # The repaired code is what actually runs this iteration — emit
                 # it too, or event consumers see only the failed first attempt
                 # and miss the code/output that produced the answer.
@@ -826,7 +829,7 @@ def run_rlm(
         recovered_error: RLMError | None = None
         if (
             not answer.get("ready")
-            and (iterations >= cfg.max_iterations or terminal_budget_handoff)
+            and terminal_budget_handoff
             and trajectory
             and _has_extractable_work(answer, has_successful_step)
         ):

@@ -21,6 +21,14 @@ const DROSTE_SRC = new URL("../../src", import.meta.url).pathname;
 const RELAY_TS =
   new URL("../../src/droste/substrates/_relay/relay.ts", import.meta.url)
     .pathname;
+const TEST_BUDGET = {
+  tokens: 500_000,
+  subcalls: 50,
+  depth: 1,
+  wall_ms: 300_000,
+  root_output_tokens: 4_096,
+  subcall_output_tokens: 2_048,
+};
 
 // A minimal ModelRelay stand-in: any POST to /responses gets one scripted
 // reply telling the RLM to query the real (bridged) SQL source and finish.
@@ -207,7 +215,7 @@ Deno.test({
         root_model: "test-model",
         base_url: `http://127.0.0.1:${port}/api/v1`,
         api_key: "test-key",
-        max_iterations: 3,
+        budget: TEST_BUDGET,
       };
       // Pinned "on", not inherited: an ambient RLM_DB_SERVICE=0 in the
       // developer's or CI's environment would otherwise silently downgrade
@@ -233,7 +241,7 @@ Deno.test({
         .map((l) => JSON.parse(l))
         .find((e) => e.type === "startup");
       assert(startup, `no startup handshake event on stderr:\n${stderrText}`);
-      assertEquals(startup.runner_protocol, 2);
+      assertEquals(startup.runner_protocol, 3);
       assertEquals(startup.provider_protocol, 3);
       assert(
         typeof startup.engine_version === "string" &&
@@ -259,7 +267,7 @@ Deno.test({
         root_model: "test-model",
         base_url: `http://127.0.0.1:${port}/api/v1`,
         api_key: "test-key",
-        max_iterations: 3,
+        budget: TEST_BUDGET,
       };
       // build_db_service/bridge_call are never invoked on this path; the
       // adapter's run_for_host_pyodide must handle bridge_call=None,
@@ -295,7 +303,7 @@ Deno.test({
         root_model: "test-model",
         base_url: `http://127.0.0.1:${port}/api/v1`,
         api_key: "test-key",
-        max_iterations: 3,
+        budget: TEST_BUDGET,
       };
       const { lastLine: raw } = await runRelayRaw(
         sourcesDir,
@@ -333,7 +341,7 @@ Deno.test({
         root_model: "test-model",
         base_url: `http://127.0.0.1:${port}/api/v1`,
         api_key: "test-key",
-        max_iterations: 1,
+        budget: TEST_BUDGET,
       };
       const { resp } = await runRelay(sourcesDir, request, port, {});
       assertEquals(

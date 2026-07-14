@@ -79,9 +79,10 @@ reservation, concurrency, and provider-native batch semantics stay intact.
 batch adapter. `ProviderService` is a fixed bridge transport behind registered
 handlers and is deliberately not a second capability ABI.
 
-The loop ends when the model sets `answer["ready"] = True`, or the iteration
-budget runs out — in which case, when the trajectory contains executed work,
-a single **extract pass** produces a best-effort answer from it, flagged `extracted=True` and never
+The loop ends when the model sets `answer["ready"] = True`, or the resolved
+compute budget cannot authorize more work. On a supported terminal handoff,
+a trajectory containing executed work may use a single **extract pass** to
+produce a best-effort answer, flagged `extracted=True` and never
 presented as confirmed. Policy violations withhold gated content from the
 final answer rather than silently passing it through.
 
@@ -93,13 +94,13 @@ completeness gate.
 
 ## Budgets and cost
 
-Everything expensive is bounded and explicit: `max_iterations`, `max_calls`
-(subcalls; attempted calls are counted only when issued and successful calls
-are tracked separately, both enforced under a lock), `max_depth`,
-per-subcall `max_output_tokens` (default 2048 in the in-process clients), and
-`reasoning_effort` passthrough. Subcall usage is added to `result.tokens_used`.
-An HTTP-backed run may instead omit the field and leave its callback to choose
-the default.
+Everything expensive is authorized by one immutable `Budget`: total tokens,
+subcalls, child depth, wall time, and per-request root/subcall output ceilings.
+One run-scoped `BudgetLedger` owns mutable accounting. Root calls and brokered
+capabilities atomically reserve before dispatch, then commit actual work and
+refund unused authorization. A failed vector reservation changes nothing;
+concurrent work therefore cannot oversubscribe one dimension while another
+passes. See [Budgets](budgets.md).
 
 The root prompt reports the effective per-call subcall output ceiling separately
 from input capacity. Built-in clients implement the optional
@@ -163,10 +164,10 @@ Completed responses also carry the policy-resolved
 the same strict envelope and projection. Persistence remains a host I/O
 decision; the engine never opens a trace store.
 
-**Compatibility window**: the request/response schema and provider contract
+**Versioned boundary**: the request/response schema and provider contract
 are versioned, each by a single integer:
 
-- `RUNNER_PROTOCOL_VERSION` (currently 2) governs the request/response
+- `RUNNER_PROTOCOL_VERSION` (currently 3) governs the request/response
   envelope. Every request **must** carry `protocol_version` — requests are
   self-describing, the same discipline as JSON-RPC's mandatory `"jsonrpc"`
   field. A missing or mismatched version is answered with a structured
@@ -175,6 +176,8 @@ are versioned, each by a single integer:
   failing on a missing field. Responses carry `protocol_version`: the
   engine stamps its own everywhere except an `adapter_module` response
   that already claimed one (adapters own their response shape).
+  Protocol v3 also requires one exact six-field `budget` object; missing,
+  unknown, or invalid fields fail before endpoint dispatch.
 - `PROVIDER_PROTOCOL_VERSION` (currently 3) governs manifest parsing and
   provider binding. A mismatched manifest fails before a source is live.
 
@@ -201,14 +204,18 @@ Hosts select the execution substrate through one immutable configuration and
 derive the loop context and environment from it:
 
 ```python
-from droste import EnvironmentConfig, create_environment, create_environment_context
+from droste import (
+    Budget,
+    EnvironmentConfig,
+    SandboxLimits,
+    create_environment,
+    create_environment_context,
+)
 
 config = EnvironmentConfig(
     kind="native",
-    max_calls=50,
-    max_iterations=20,
-    max_output_chars=25_000,
-    exec_timeout_ms=5_000,
+    budget=Budget(subcalls=50, depth=1),
+    sandbox=SandboxLimits(output_chars=25_000, execution_timeout_ms=5_000),
 )
 execution_context = create_environment_context(config)
 environment = create_environment(
@@ -216,6 +223,7 @@ environment = create_environment(
     context=data,
     registry=registry,
     subcalls=subcalls,
+    execution_context=execution_context,
 )
 ```
 

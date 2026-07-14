@@ -13,14 +13,16 @@ import json
 import math
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
 from ..exceptions import PolicyError, RLMError, SandboxError
-from ..execution.config import (
-    DEFAULT_MAX_CALLS,
-    DEFAULT_MAX_DEPTH,
-    DEFAULT_MAX_ITERATIONS,
-    DEFAULT_MAX_OUTPUT_CHARS,
+from ..execution.budget import (
+    Budget,
+    BudgetExhausted,
+    BudgetRequest,
+    conservative_token_estimate,
 )
+from ..execution.config import SandboxLimits
 from ..execution.context import ExecutionContext
 from ..execution.progress import execution_error_event, output_event
 from ..execution.report import project_result
@@ -57,10 +59,8 @@ MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
 class RLMConfig:
     """Configuration for RLM execution."""
 
-    max_iterations: int = DEFAULT_MAX_ITERATIONS
-    max_depth: int = DEFAULT_MAX_DEPTH
-    max_calls: int = DEFAULT_MAX_CALLS
-    max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS
+    budget: Budget = field(default_factory=Budget)
+    sandbox: SandboxLimits = field(default_factory=SandboxLimits)
     # ``tips_profile`` remains the compatibility spelling; ``prompt_profile``
     # selects a complete pack when set and otherwise inherits it.
     tips_profile: str = "full"
@@ -94,8 +94,8 @@ class RLMResult:
     # than the model marking answer['ready'] — hosts may surface it as a
     # best-effort answer but must not present it as confirmed.
     extracted: bool = False
-    # Set when max_iterations was exhausted, extraction was attempted, and it
-    # failed (or returned empty) — `answer` is then raw loop output (the last
+    # Set when terminal extraction was attempted and failed (or returned
+    # empty) — `answer` is then raw loop output (the last
     # printed stdout), NOT prose a host should present verbatim as an answer.
     # None whenever extraction wasn't attempted or succeeded (extracted=True).
     extract_error: RLMError | None = None
@@ -427,12 +427,70 @@ def call_root(
     Returns ``(response, usage, None)`` on success or ``("", None, error)`` —
     a root failure always ends the run, so the caller finalizes immediately.
     """
+    call_id = "root:" + str(uuid4())
+    input_estimate = conservative_token_estimate(messages)
+    request = BudgetRequest(
+        tokens=input_estimate + context.budget.root_output_tokens,
+    )
+    try:
+        context.ledger.reserve(call_id, request, through_deadline=True)
+    except BudgetExhausted as exc:
+        return (
+            "",
+            None,
+            RLMError(
+                type="BudgetExhausted",
+                message=str(exc),
+                details={
+                    "resource": exc.resource,
+                    "requested": exc.requested,
+                    "remaining": exc.remaining,
+                },
+            ),
+        )
     context.record_root_attempt()
     try:
-        response, usage = root_llm.responses_create(messages, model=model, return_usage=True)
-    except Exception as exc:
+        response, usage = root_llm.responses_create(
+            messages,
+            model=model,
+            max_tokens=context.budget.root_output_tokens,
+            return_usage=True,
+        )
+    except BaseException as exc:
+        try:
+            context.ledger.commit(call_id, BudgetRequest(tokens=request.tokens))
+        except BudgetExhausted as budget_exc:
+            if not isinstance(exc, Exception):
+                raise
+            return "", None, RLMError(type="BudgetExhausted", message=str(budget_exc))
+        if not isinstance(exc, Exception):
+            raise
         return "", None, RLMError(type=exc.__class__.__name__, message=str(exc))
-    context.record_root_success(usage)
+    try:
+        actual = BudgetRequest(
+            tokens=max(
+                int(usage.total_tokens),
+                input_estimate
+                + min(
+                    conservative_token_estimate(response),
+                    context.budget.root_output_tokens,
+                ),
+            )
+        )
+    except Exception as exc:
+        try:
+            context.ledger.commit(call_id, BudgetRequest(tokens=request.tokens))
+        except BudgetExhausted as budget_exc:
+            return "", usage, RLMError(type="BudgetExhausted", message=str(budget_exc))
+        return "", usage, RLMError(type=exc.__class__.__name__, message=str(exc))
+    try:
+        context.ledger.commit(call_id, actual)
+    except BudgetExhausted as exc:
+        return "", usage, RLMError(type="BudgetExhausted", message=str(exc))
+    try:
+        context.record_root_success(usage)
+    except Exception as exc:
+        return "", usage, RLMError(type=exc.__class__.__name__, message=str(exc))
     return response, usage, None
 
 
@@ -471,7 +529,7 @@ def execute_step(
         # Enforce the output budget BEFORE emitting: an over-budget print
         # must raise here (error path), never stream its full contents to
         # the event channel — the guard gates the event, not just the loop.
-        _enforce_output_budget(last_output, cfg.max_output_chars)
+        _enforce_output_budget(last_output, cfg.sandbox.output_chars)
         answer = _refresh_answer(env_globals, answer)
 
         hints = cfg.policy_hints if enforce_contract else None
@@ -598,30 +656,15 @@ def finalize(
         answer_metadata=answer_metadata if answer.get("ready") and answer_metadata else {},
         prompt_pack=prompt_pack,
     )
-    cfg = config or RLMConfig(
-        max_iterations=context.max_iterations,
-        max_depth=context.max_depth,
-        max_calls=context.max_calls,
-        max_output_chars=context.max_output_chars,
-    )
+    cfg = config or RLMConfig(budget=context.budget, sandbox=context.sandbox)
     usage = context.stats.resolved_usage(context.trace.elapsed_ms()).as_dict()
+    snapshot = context.ledger.snapshot()
     budget = {
         "kind": "snapshot",
-        "source": "legacy_execution_stats",
-        "configured": {
-            "iterations": cfg.max_iterations,
-            "subcalls": cfg.max_calls,
-            "depth": cfg.max_depth,
-            "output_chars": cfg.max_output_chars,
-        },
-        "consumed": {
-            "iterations": result.iterations,
-            "subcalls": result.sub_calls_made,
-        },
-        "remaining": {
-            "iterations": max(0, cfg.max_iterations - result.iterations),
-            "subcalls": max(0, cfg.max_calls - result.sub_calls_made),
-        },
+        "source": "budget_ledger",
+        "configured": snapshot.configured.as_dict(),
+        "consumed": snapshot.consumed.as_dict(),
+        "remaining": snapshot.remaining.as_dict(),
     }
     observed_errors = (result.error, result.extract_error, result.recovered_error)
     policy_violation = next(

@@ -25,7 +25,7 @@ def test_run_rlm_basic():
         environment=mock_env,
         root_llm=mock_llm,
         subcalls=mock_subcalls,
-        config=RLMConfig(max_iterations=1),
+        config=RLMConfig(),
     )
 
     assert result.ready
@@ -48,7 +48,7 @@ def test_non_contract_plain_response_is_returned_as_answer():
             ]
         ),
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1, enforce_contract=False),
+        config=RLMConfig(enforce_contract=False),
     )
 
     assert result.answer == response
@@ -80,7 +80,7 @@ def test_run_rlm_preserves_confirmed_json_answer_metadata():
         environment=MockEnvironment(),
         root_llm=mock_llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1),
+        config=RLMConfig(),
     )
 
     assert result.ready
@@ -114,7 +114,7 @@ def test_run_rlm_repairs_non_json_answer_metadata():
         environment=MockEnvironment(),
         root_llm=mock_llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=2),
+        config=RLMConfig(),
     )
 
     assert result.ready
@@ -190,7 +190,7 @@ def test_run_rlm_rebound_answer_dict_registers_ready():
         environment=MockEnvironment(),
         root_llm=mock_llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=5),
+        config=RLMConfig(),
     )
     assert result.ready
     assert result.answer == "rebound"
@@ -218,7 +218,7 @@ def test_run_rlm_non_dict_rebind_is_normalized_not_fatal():
         environment=MockEnvironment(),
         root_llm=mock_llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=5),
+        config=RLMConfig(),
     )
     assert result.ready
     assert result.answer == "42"
@@ -250,7 +250,7 @@ def test_run_rlm_rebound_answer_in_repaired_code_registers_ready():
         environment=MockEnvironment(),
         root_llm=mock_llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=5),
+        config=RLMConfig(),
     )
     assert result.ready
     assert result.answer == "fixed"
@@ -288,7 +288,7 @@ def test_failed_rebound_answer_cannot_confirm_through_noop_repair():
         environment=MockEnvironment(),
         root_llm=mock_llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=3),
+        config=RLMConfig(),
     )
 
     assert result.ready is True

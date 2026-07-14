@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..capabilities import broker_subcalls
+from ..execution.budget import BudgetLedger
 from ..protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
 from ..protocols.subcall_client import SubcallClient
 from ..protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest
@@ -19,8 +20,8 @@ class MockEnvironment(RLMEnvironment):
     def globals(self) -> dict[str, Any]:
         return self._globals
 
-    def sandbox_subcalls(self, subcalls: SubcallClient) -> SubcallClient:
-        return broker_subcalls(subcalls)
+    def sandbox_subcalls(self, subcalls: SubcallClient, ledger: BudgetLedger) -> SubcallClient:
+        return broker_subcalls(subcalls, ledger)
 
     def accessor_manifest(self) -> AccessorManifest:
         return EMPTY_ACCESSOR_MANIFEST

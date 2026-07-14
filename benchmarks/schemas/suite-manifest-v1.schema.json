@@ -133,9 +133,7 @@
               "subcall_model",
               "root_reasoning_effort",
               "subcall_reasoning_effort",
-              "temperature",
-              "max_root_output_tokens",
-              "max_subcall_output_tokens"
+              "temperature"
             ],
             "properties": {
               "provider": { "type": "string", "minLength": 1 },
@@ -143,19 +141,23 @@
               "subcall_model": { "type": ["string", "null"] },
               "root_reasoning_effort": { "type": ["string", "null"] },
               "subcall_reasoning_effort": { "type": ["string", "null"] },
-              "temperature": { "type": ["number", "null"] },
-              "max_root_output_tokens": { "type": "integer", "minimum": 1 },
-              "max_subcall_output_tokens": { "type": ["integer", "null"], "minimum": 1 }
+              "temperature": { "type": ["number", "null"] }
             }
           },
           "limits": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["max_iterations", "max_subcalls", "timeout_seconds", "concurrency"],
+            "required": [
+              "tokens", "subcalls", "depth", "wall_ms",
+              "root_output_tokens", "subcall_output_tokens", "concurrency"
+            ],
             "properties": {
-              "max_iterations": { "type": "integer", "minimum": 1 },
-              "max_subcalls": { "type": "integer", "minimum": 0 },
-              "timeout_seconds": { "type": "integer", "minimum": 1 },
+              "tokens": { "type": "integer", "minimum": 1 },
+              "subcalls": { "type": "integer", "minimum": 0 },
+              "depth": { "type": "integer", "minimum": 0 },
+              "wall_ms": { "type": "integer", "minimum": 1 },
+              "root_output_tokens": { "type": "integer", "minimum": 1 },
+              "subcall_output_tokens": { "type": "integer", "minimum": 1 },
               "concurrency": { "type": "integer", "minimum": 1 }
             }
           }

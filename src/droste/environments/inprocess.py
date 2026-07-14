@@ -21,6 +21,7 @@ from ..capabilities import (
     CapabilityObserver,
     subcall_registrations,
 )
+from ..execution.budget import BudgetLedger
 from ..protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
 from ..protocols.subcall_client import SubcallClient
 from ..protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest
@@ -129,6 +130,7 @@ class RunnerEnvironment(RLMEnvironment):
         subcalls: SubcallClient,
         max_output_chars: int,
         exec_timeout_ms: int,
+        budget_ledger: BudgetLedger | None = None,
         capability_run_id: str | None = None,
         capability_parent_run_id: str | None = None,
         capability_guard: CapabilityGuard | None = None,
@@ -140,6 +142,7 @@ class RunnerEnvironment(RLMEnvironment):
         self._subcalls = subcalls
         self._max_output_chars = max_output_chars
         self._exec_timeout_ms = exec_timeout_ms
+        self._budget_ledger = budget_ledger
         registrations = list(subcall_registrations(subcalls))
         if registry is not None:
             registrations.extend(registry.capability_registrations())
@@ -178,9 +181,11 @@ class RunnerEnvironment(RLMEnvironment):
 
         return self._broker
 
-    def sandbox_subcalls(self, subcalls: SubcallClient) -> SubcallClient:
-        """Broker-backed client used by loop-installed compatibility helpers."""
+    def sandbox_subcalls(self, subcalls: SubcallClient, ledger: BudgetLedger) -> SubcallClient:
+        """Broker-backed client used by loop-installed structured helpers."""
 
+        if self._budget_ledger is not None and ledger is not self._budget_ledger:
+            raise ValueError("run_rlm must use the BudgetLedger brokered by RunnerEnvironment")
         if subcalls is not self._subcalls:
             raise ValueError(
                 "run_rlm subcalls must be the same client brokered by RunnerEnvironment"

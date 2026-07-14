@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol, TypedDict
 
+from ..execution.budget import BudgetLedger
 from .subcall_client import SubcallClient
 from .verbs import AccessorManifest
 
@@ -41,7 +42,7 @@ class RLMEnvironment(Protocol):
         """Return mutable globals dict used for code execution."""
         ...
 
-    def sandbox_subcalls(self, subcalls: SubcallClient) -> SubcallClient:
+    def sandbox_subcalls(self, subcalls: SubcallClient, ledger: BudgetLedger) -> SubcallClient:
         """Return the mandatory broker-backed subcall surface for generated code."""
         ...
 

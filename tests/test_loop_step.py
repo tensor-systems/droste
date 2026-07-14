@@ -179,7 +179,7 @@ def test_iteration_record_positional_construction_remains_compatible() -> None:
 
 
 def test_finalize_reads_stats_and_readiness() -> None:
-    context = create_execution_context(max_calls=10, max_depth=2)
+    context = create_execution_context()
     context.stats.total_tokens = 7
     context.stats.calls_made = 3
     context.stats.successful_calls = 2

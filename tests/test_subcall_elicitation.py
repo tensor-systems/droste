@@ -8,21 +8,19 @@
   violation that keeps (not wipes) the accumulated answer content.
 """
 
-from dataclasses import replace
 from typing import Any
 
 from droste import (
-    DEFAULT_MAX_CALLS,
-    DEFAULT_MAX_ITERATIONS,
+    DEFAULT_SUBCALL_BUDGET,
+    DEFAULT_TOKEN_BUDGET,
+    Budget,
     ExecutionConfig,
     PolicyHints,
     RLMConfig,
-    SubcallBudgetExceeded,
     run_rlm,
 )
 from droste.loop.rlm import EMPTY_OUTPUT_NUDGE
 from droste.prompts import TIPS_PROFILES, SystemPromptBuilder
-from droste.prompts.pack import load_prompt_pack_resource
 from droste.protocols.environment import ExecutionResult
 from droste.protocols.llm_client import TokenUsage
 from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
@@ -102,13 +100,10 @@ class SyntheticClassificationSubcalls:
     def llm_batch_with_errors(self, prompts: list[str], contexts=None):
         assert self.context is not None
         count = len(prompts)
-        stats = self.context.stats
-        if stats.calls_made + count > self.context.max_calls:
-            raise SubcallBudgetExceeded("max subcalls exceeded")
-        stats.calls_made += count
+        self.context.record_subcall_attempts(count)
         errors = self.errors.pop(0)
         failed = {int(item["index"]) for item in errors}
-        stats.successful_calls += count - len(failed)
+        self.context.record_subcall_successes(count - len(failed))
         return self.batches.pop(0), errors
 
 
@@ -117,7 +112,7 @@ def _runner_env(context: Any, subcalls: Any | None = None) -> RunnerEnvironment:
         context=context,
         registry=None,
         subcalls=subcalls or MockSubcallClient(),
-        max_output_chars=10000,
+        max_output_chars=25_000,
         exec_timeout_ms=0,
     )
 
@@ -167,7 +162,7 @@ def test_run_rlm_default_profile_carries_tips_to_root_llm() -> None:
         environment=MockEnvironment(),
         root_llm=llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1),
+        config=RLMConfig(),
     )
     system = llm.calls[0][0]
     assert system["role"] == "system"
@@ -238,7 +233,7 @@ def test_empty_stdout_becomes_nudge_in_feedback_and_trajectory() -> None:
         environment=MockEnvironment(),
         root_llm=llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=3),
+        config=RLMConfig(),
     )
     assert result.trajectory[0].execution_result == EMPTY_OUTPUT_NUDGE
     refinement = llm.calls[1][-1]
@@ -262,7 +257,7 @@ def test_non_empty_stdout_is_passed_through_unchanged() -> None:
         environment=StdoutEnvironment(),
         root_llm=llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1),
+        config=RLMConfig(),
     )
     assert result.trajectory[0].execution_result == "real output"
 
@@ -270,19 +265,17 @@ def test_non_empty_stdout_is_passed_through_unchanged() -> None:
 # --- raised defaults ----------------------------------------------------
 
 
-def test_loop_defaults_raised_for_explore_first_budget() -> None:
-    assert DEFAULT_MAX_ITERATIONS == 20
-    assert DEFAULT_MAX_CALLS == 50
-    assert RLMConfig().max_iterations == 20
-    assert RLMConfig().max_calls == 50
-    assert ExecutionConfig().max_iterations == 20
-    assert ExecutionConfig().max_calls == 50
+def test_resolved_budget_defaults_support_explore_first() -> None:
+    assert DEFAULT_TOKEN_BUDGET == 500_000
+    assert DEFAULT_SUBCALL_BUDGET == 50
+    assert RLMConfig().budget.tokens == DEFAULT_TOKEN_BUDGET
+    assert RLMConfig().budget.subcalls == DEFAULT_SUBCALL_BUDGET
+    assert ExecutionConfig().budget.tokens == DEFAULT_TOKEN_BUDGET
+    assert ExecutionConfig().budget.subcalls == DEFAULT_SUBCALL_BUDGET
 
 
-def test_runner_omitted_budgets_use_core_defaults_and_allow_subcalls() -> None:
-    """Omitted max_iterations/max_subcalls in the subprocess request must fall
-    back to the core defaults, not the old 1 iteration / 0 subcalls (0 meant
-    the FIRST llm_query raised 'max subcalls exceeded')."""
+def test_runner_complete_default_budget_allows_subcalls() -> None:
+    """The strict subprocess request carries one complete resolved budget."""
     import json as jsonlib
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -321,10 +314,10 @@ def test_runner_omitted_budgets_use_core_defaults_and_allow_subcalls() -> None:
     try:
         response = run(
             {
-                "protocol_version": 2,
+                "protocol_version": 3,
                 "model": "test-model",
                 "question": "q",
-                # max_iterations and max_subcalls deliberately omitted
+                "budget": Budget().as_dict(),
                 "token": "t",
                 "root_endpoint": f"{base}/root",
                 "subcall_endpoint": f"{base}/subcall",
@@ -342,9 +335,8 @@ def test_runner_omitted_budgets_use_core_defaults_and_allow_subcalls() -> None:
     assert response["prompt_pack"]["revision"] == "1.0.2"
 
 
-def test_runner_explicit_zero_subcalls_is_honored() -> None:
-    """max_subcalls=0 passed explicitly means NO subcalls — it must not be
-    coerced to the omitted-value default (codex catch)."""
+def test_runner_zero_subcall_budget_is_honored() -> None:
+    """A resolved zero subcall authorization means no subcalls."""
     import json as jsonlib
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -381,11 +373,10 @@ def test_runner_explicit_zero_subcalls_is_honored() -> None:
     try:
         response = run(
             {
-                "protocol_version": 2,
+                "protocol_version": 3,
                 "model": "test-model",
                 "question": "q",
-                "max_iterations": 2,
-                "max_subcalls": 0,
+                "budget": Budget(subcalls=0).as_dict(),
                 "token": "t",
                 "root_endpoint": f"{base}/root",
                 "subcall_endpoint": f"{base}/subcall",
@@ -395,70 +386,12 @@ def test_runner_explicit_zero_subcalls_is_honored() -> None:
         server.shutdown()
 
     assert response["answer"].startswith("blocked: ")
-    assert "max subcalls exceeded" in response["answer"]
+    assert "budget exhausted for subcalls" in response["answer"]
     assert response["subcalls"] == 0
 
 
-# --- extract fallback on exhaustion -------------------------------------
-
-
-def test_extract_fallback_fires_when_iterations_exhausted() -> None:
-    llm = RecordingLLMClient(
-        _responses(
-            """```python\nnotes = 'the total is 42'\nanswer['metadata'] = {'draft': True}\n```""",  # never sets ready
-            "The answer is 42.",  # extract pass (plain text, no code block)
-        )
-    )
-    result = run_rlm(
-        question="what is the total?",
-        environment=MockEnvironment(),
-        root_llm=llm,
-        subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1),
-    )
-    assert result.answer == "The answer is 42."
-    assert result.ready is False  # the loop itself never confirmed readiness
-    assert result.extracted is True  # hosts surface it as best-effort, not confirmed
-    assert result.answer_metadata == {}
-    assert result.iterations == 1
-    # The extract call saw the question and the compact trajectory, is told
-    # not to fabricate, and empty iterations show a neutral sentinel rather
-    # than the conversational nudge.
-    extract_messages = llm.calls[-1]
-    assert "ended without submitting" in extract_messages[0]["content"]
-    assert "do not guess, extrapolate, or fabricate" in extract_messages[0]["content"]
-    assert "unable to determine from the work so far" in extract_messages[0]["content"]
-    assert "what is the total?" in extract_messages[1]["content"]
-    assert extract_messages[1]["content"].count("Question: what is the total?") == 1
-    assert "notes = 'the total is 42'" in extract_messages[1]["content"]
-    assert "<empty stdout>" in extract_messages[1]["content"]
-    assert EMPTY_OUTPUT_NUDGE not in extract_messages[1]["content"]
-
-
-def test_extract_fallback_recognizes_punctuated_pack_sentinel() -> None:
-    pack = replace(
-        load_prompt_pack_resource("generic-none-v1.toml"),
-        unable_sentinel="Cannot determine.",
-    )
-    llm = RecordingLLMClient(
-        _responses(
-            "```python\nprint('work')\n```",
-            "Cannot determine.",
-        )
-    )
-
-    result = run_rlm(
-        question="q",
-        environment=MockEnvironment(),
-        root_llm=llm,
-        subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1),
-        prompt_pack=pack,
-    )
-
-    assert result.answer != "Cannot determine."
-    assert result.extract_error is not None
-    assert result.extract_error.type == "InsufficientEvidence"
+# --- terminal extraction is exercised through semantic budget handoff below;
+# direct synthesis/error behavior lives in test_extract_fallback.py. --------
 
 
 def test_extract_fallback_skipped_when_answer_ready() -> None:
@@ -470,7 +403,7 @@ def test_extract_fallback_skipped_when_answer_ready() -> None:
         environment=MockEnvironment(),
         root_llm=llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1),
+        config=RLMConfig(),
     )
     assert result.answer == "ok"
     assert len(llm.calls) == 1  # no extra extract call
@@ -485,95 +418,10 @@ def test_extract_fallback_failure_falls_back_to_best_answer() -> None:
         environment=MockEnvironment(),
         root_llm=llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1),
+        config=RLMConfig(),
     )
     assert result.answer == "partial"
     assert result.ready is False
-
-
-def test_terminal_execution_error_extracts_partial_answer() -> None:
-    llm = RecordingLLMClient(
-        _responses(
-            """```python\nanswer['content'] = 'usable draft'\nanswer['ready'] = True\nraise TypeError('bad kwarg')\n```""",
-            """```python\nraise TypeError('still bad')\n```""",
-            "Recovered answer from the usable draft.",
-        )
-    )
-    result = run_rlm(
-        question="q",
-        environment=MockEnvironment(),
-        root_llm=llm,
-        subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1),
-    )
-
-    assert result.answer == "Recovered answer from the usable draft."
-    assert result.ready is False
-    assert result.extracted is True
-    assert result.error is None
-    assert result.recovered_error is not None
-    assert result.recovered_error.type == "TypeError"
-    assert "usable draft" in llm.calls[-1][1]["content"]
-    assert "bad kwarg" in llm.calls[-1][1]["content"]
-    assert "still bad" in llm.calls[-1][1]["content"]
-    assert "Status: error" in llm.calls[-1][1]["content"]
-
-
-def test_failed_only_trajectory_without_draft_skips_extraction() -> None:
-    llm = RecordingLLMClient(
-        _responses(
-            """```python\nraise PermissionError('access denied')\n```""",
-            """```python\nraise PermissionError('still denied')\n```""",
-        )
-    )
-    result = run_rlm(
-        question="q",
-        environment=MockEnvironment(),
-        root_llm=llm,
-        subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1),
-    )
-
-    assert result.extracted is False
-    assert result.error is not None
-    assert result.error.type == "PermissionError"
-    assert result.error.message == "still denied"
-    assert len(llm.calls) == 2
-    assert len(result.trajectory) == 2
-
-
-def test_successful_error_prefixed_stdout_is_extractable_evidence() -> None:
-    class ErrorStdoutEnvironment(MockEnvironment):
-        def execute(self, code: str) -> ExecutionResult:
-            super().execute(code)
-            return ExecutionResult(
-                stdout="ERROR: line from analyzed log",
-                stderr="",
-                timed_out=False,
-                exit_code=0,
-                files_written=[],
-            )
-
-    llm = RecordingLLMClient(
-        _responses(
-            """```python\npass\n```""",
-            "Recovered analysis from the successful step.",
-        )
-    )
-    result = run_rlm(
-        question="q",
-        environment=ErrorStdoutEnvironment(),
-        root_llm=llm,
-        subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1),
-    )
-
-    assert result.extracted is True
-    assert result.answer == "Recovered analysis from the successful step."
-    assert len(llm.calls) == 2
-    assert result.trajectory[0].execution_status == "success"
-    assert "Status: success" in llm.calls[-1][1]["content"]
-    assert "Output:\nERROR: line from analyzed log" in llm.calls[-1][1]["content"]
 
 
 def test_successful_ready_error_prefixed_stdout_is_the_answer() -> None:
@@ -594,7 +442,7 @@ def test_successful_ready_error_prefixed_stdout_is_the_answer() -> None:
         environment=ErrorStdoutEnvironment(),
         root_llm=llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1),
+        config=RLMConfig(),
     )
 
     assert result.ready is True
@@ -613,7 +461,7 @@ def test_failed_attempt_is_retained_when_repair_root_call_fails() -> None:
         environment=MockEnvironment(),
         root_llm=llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=2),
+        config=RLMConfig(),
     )
 
     assert result.error is not None
@@ -636,7 +484,7 @@ def test_mid_run_failed_attempts_remain_in_ready_trajectory() -> None:
         environment=MockEnvironment(),
         root_llm=llm,
         subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=2),
+        config=RLMConfig(),
     )
 
     assert result.ready is True
@@ -650,37 +498,6 @@ def test_mid_run_failed_attempts_remain_in_ready_trajectory() -> None:
         "error",
         "success",
     ]
-
-
-def test_terminal_subcall_budget_error_extracts_partial_answer() -> None:
-    class ExhaustedSubcalls(MockSubcallClient):
-        def llm_query(self, prompt: str, context: str = "") -> str:
-            raise RuntimeError("max subcalls exceeded")
-
-    llm = RecordingLLMClient(
-        _responses(
-            """```python\nanswer['content'] = 'already assembled'\nllm_query('one more')\n```""",
-            """```python\nllm_query('retry')\n```""",
-            "Recovered answer within the exhausted budget.",
-        )
-    )
-    result = run_rlm(
-        question="q",
-        environment=MockEnvironment(),
-        root_llm=llm,
-        subcalls=ExhaustedSubcalls(),
-        config=RLMConfig(max_iterations=1),
-    )
-
-    assert result.answer == "Recovered answer within the exhausted budget."
-    assert result.ready is False
-    assert result.extracted is True
-    assert result.error is None
-    assert result.recovered_error is not None
-    assert result.recovered_error.type == "CapabilityCallError"
-    assert "RuntimeError: max subcalls exceeded" in result.recovered_error.message
-    assert "already assembled" in llm.calls[-1][1]["content"]
-    assert "max subcalls exceeded" in llm.calls[-1][1]["content"]
 
 
 # --- policy violation stays corrective and falls back to extraction -------
@@ -729,8 +546,7 @@ answer['ready'] = True
         root_llm=llm,
         subcalls=subcalls,
         config=RLMConfig(
-            max_iterations=1,
-            max_calls=2,
+            budget=Budget(subcalls=2),
             policy_hints=PolicyHints(semantic=True),
         ),
     )
@@ -772,8 +588,7 @@ answer['ready'] = True
         root_llm=llm,
         subcalls=subcalls,
         config=RLMConfig(
-            max_iterations=5,
-            max_calls=3,
+            budget=Budget(subcalls=3),
             policy_hints=PolicyHints(semantic=True),
         ),
     )
@@ -819,7 +634,7 @@ answer['ready'] = False
         )
     )
     subcalls = SyntheticClassificationSubcalls([['{"label":"red,blue"}', "not json"]])
-    environment = _runner_env(None, subcalls)
+    environment = MockEnvironment()
 
     result = run_rlm(
         question="Assign labels to four synthetic records.",
@@ -827,8 +642,7 @@ answer['ready'] = False
         root_llm=llm,
         subcalls=subcalls,
         config=RLMConfig(
-            max_iterations=5,
-            max_calls=3,
+            budget=Budget(subcalls=3),
             policy_hints=PolicyHints(semantic=True),
         ),
     )
@@ -865,8 +679,7 @@ answer['ready'] = True
         root_llm=llm,
         subcalls=subcalls,
         config=RLMConfig(
-            max_iterations=5,
-            max_calls=3,
+            budget=Budget(subcalls=3),
             policy_hints=PolicyHints(semantic=True),
         ),
         on_event=events.append,
@@ -920,8 +733,7 @@ blocked_structured = saved_structured(['new work'], schema, max_repair_attempts=
         root_llm=llm,
         subcalls=subcalls,
         config=RLMConfig(
-            max_iterations=5,
-            max_calls=3,
+            budget=Budget(subcalls=3),
             policy_hints=PolicyHints(semantic=True),
         ),
     )
@@ -933,13 +745,15 @@ blocked_structured = saved_structured(['new work'], schema, max_repair_attempts=
     assert result.error.details is not None
     assert result.error.details["reason"] == "semantic_exact_retry_budget_exhausted"
     assert environment.globals()["blocked_errors"] == [
-        "subcalls are disabled during terminal finalization",
-        "subcalls are disabled during terminal finalization",
+        "budget exhausted for subcalls: requested 1, remaining 0",
+        "budget exhausted for subcalls: requested 1, remaining 0",
     ]
     structured_errors = environment.globals()["blocked_structured"]["errors"]
     assert len(structured_errors) == 1
     assert structured_errors[0]["type"] == "budget_exhausted"
-    assert structured_errors[0]["error"] == ("subcalls are disabled during terminal finalization")
+    assert structured_errors[0]["error"] == (
+        "budget exhausted for subcalls: requested 1, remaining 0"
+    )
 
 
 def test_terminal_finalization_cannot_confirm_incomplete_exact_evidence() -> None:
@@ -965,8 +779,7 @@ answer['ready'] = True
         root_llm=llm,
         subcalls=subcalls,
         config=RLMConfig(
-            max_iterations=5,
-            max_calls=3,
+            budget=Budget(subcalls=3),
             policy_hints=PolicyHints(semantic=True),
         ),
     )
@@ -998,8 +811,7 @@ answer['content'] = 'retained successful-step draft'
         root_llm=llm,
         subcalls=subcalls,
         config=RLMConfig(
-            max_iterations=5,
-            max_calls=3,
+            budget=Budget(subcalls=3),
             policy_hints=PolicyHints(semantic=True),
         ),
     )
@@ -1047,8 +859,7 @@ answer['ready'] = True
         root_llm=llm,
         subcalls=subcalls,
         config=RLMConfig(
-            max_iterations=5,
-            max_calls=3,
+            budget=Budget(subcalls=3),
             policy_hints=PolicyHints(semantic=True),
         ),
     )
@@ -1087,8 +898,7 @@ answer['ready'] = True
         root_llm=llm,
         subcalls=subcalls,
         config=RLMConfig(
-            max_iterations=5,
-            max_calls=3,
+            budget=Budget(subcalls=3),
             policy_hints=PolicyHints(semantic=True),
         ),
     )
@@ -1128,8 +938,7 @@ answer['ready'] = True
         root_llm=llm,
         subcalls=subcalls,
         config=RLMConfig(
-            max_iterations=2,
-            max_calls=2,
+            budget=Budget(subcalls=2),
             policy_hints=PolicyHints(semantic=True),
         ),
     )
@@ -1173,8 +982,7 @@ answer['ready'] = True
         root_llm=llm,
         subcalls=subcalls,
         config=RLMConfig(
-            max_iterations=1,
-            max_calls=4,
+            budget=Budget(subcalls=4),
             policy_hints=PolicyHints(semantic=True),
         ),
     )
@@ -1233,8 +1041,7 @@ answer['ready'] = True
         root_llm=llm,
         subcalls=subcalls,
         config=RLMConfig(
-            max_iterations=1,
-            max_calls=4,
+            budget=Budget(subcalls=4),
             policy_hints=PolicyHints(semantic=True),
         ),
     )
@@ -1283,81 +1090,13 @@ answer['ready'] = True
         subcalls=SyntheticClassificationSubcalls(
             [['{"labels":["red","blue"]}', '{"labels":["green"]}']]
         ),
-        config=RLMConfig(max_iterations=1, max_calls=2),
+        config=RLMConfig(budget=Budget(subcalls=2)),
     )
 
     assert result.ready is True
     assert result.answer == "red,blue"
     assert result.extracted is False
     assert result.error is None
-
-
-def test_terminal_semantic_policy_violation_extracts_kept_content() -> None:
-    # Turn 1 makes zero subcalls before flipping ready -> semantic PolicyError.
-    # The old
-    # behavior wiped answer['content']; now the draft survives in-loop for the
-    # model's next attempt (only readiness is revoked, violation fed back as
-    # guidance). If the one repair still violates the hint, the bounded
-    # extract pass presents that draft as explicitly best-effort instead of
-    # converting a steering rule into a terminal run failure.
-    violating = (
-        """```python\n# plan: llm_query(chunk) later\n"""
-        """answer['content'] = 'draft findings'\nanswer['ready'] = True\n```"""
-    )
-    repair = (
-        """```python\nprint(llm_query('still zero real subcalls'))\n"""
-        """answer['ready'] = True\n```"""
-    )
-    llm = RecordingLLMClient(_responses(violating, repair, "Best-effort draft findings."))
-    result = run_rlm(
-        question="q",
-        environment=MockEnvironment(),
-        root_llm=llm,
-        subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1, policy_hints=PolicyHints(semantic=True)),
-    )
-    assert result.ready is False  # readiness gate still gates
-    assert result.answer == "Best-effort draft findings."
-    assert result.extracted is True
-    assert result.error is None
-    assert result.recovered_error is not None
-    assert result.recovered_error.type == "PolicyError"
-    # In-loop, the repair prompt carries guidance and the kept draft, not a
-    # destructive reset.
-    repair_prompt = llm.calls[1][-1]["content"]
-    assert "answer['content'] was kept" in repair_prompt
-    assert "Policy violation" in repair_prompt
-    extract_prompt = llm.calls[2][-1]["content"]
-    assert "Draft answer so far:\ndraft findings" in extract_prompt
-    assert "Policy violation" in extract_prompt
-
-
-def test_terminal_semantic_policy_violation_withholds_content_when_extract_fails() -> None:
-    violating = (
-        """```python\n# plan: llm_query(chunk) later\n"""
-        """answer['content'] = 'gated draft'\nanswer['ready'] = True\n```"""
-    )
-    repair = """```python\nanswer['ready'] = True\n# llm_query planned but not called\n```"""
-    llm = RecordingLLMClient(
-        _responses(violating, repair, "Unable to determine from the work so far.")
-    )
-    result = run_rlm(
-        question="q",
-        environment=MockEnvironment(),
-        root_llm=llm,
-        subcalls=MockSubcallClient(),
-        config=RLMConfig(max_iterations=1, policy_hints=PolicyHints(semantic=True)),
-    )
-
-    assert result.extracted is False
-    assert result.extract_error is not None
-    assert result.extract_error.type == "InsufficientEvidence"
-    assert result.error is not None
-    assert result.error.type == "PolicyError"
-    assert "gated draft" not in result.answer
-    assert result.answer.startswith("Error: Policy violation")
-    assert result.error.details is not None
-    assert result.error.details["withheld_content"] == "gated draft"
 
 
 def test_policy_violation_resolved_in_loop_returns_answer_normally() -> None:
@@ -1381,7 +1120,7 @@ def test_policy_violation_resolved_in_loop_returns_answer_normally() -> None:
 
     from droste import create_execution_context
 
-    exec_context = create_execution_context(max_iterations=2, max_calls=10)
+    exec_context = create_execution_context()
     repair = (
         """```python\nhint = llm_query('interpret the chunk')\n"""
         """answer['content'] = 'verified findings'\nanswer['ready'] = True\n```"""
@@ -1392,7 +1131,7 @@ def test_policy_violation_resolved_in_loop_returns_answer_normally() -> None:
         environment=MockEnvironment(),
         root_llm=llm,
         subcalls=CountingSubcalls(exec_context),
-        config=RLMConfig(max_iterations=2, policy_hints=PolicyHints(semantic=True)),
+        config=RLMConfig(policy_hints=PolicyHints(semantic=True)),
         context=exec_context,
     )
     assert result.ready is True

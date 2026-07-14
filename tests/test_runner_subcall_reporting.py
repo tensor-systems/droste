@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from droste.exceptions import SubcallBudgetExceeded
+from droste import Budget
 from droste.execution.context import create_execution_context
 from droste_runner.runner import HTTPSubcallClient, run
 
@@ -31,15 +31,17 @@ ROOT_REPLY = (
 )
 
 
+def _budget(**overrides: int) -> dict[str, int]:
+    return Budget(**overrides).as_dict()
+
+
 def test_http_subcall_reports_only_an_explicit_output_limit() -> None:
-    context = create_execution_context(max_calls=1, max_depth=1)
+    context = create_execution_context()
     kwargs = {
         "endpoint": "https://example.invalid/subcall",
         "token": "t",
         "session": "s",
         "session_index": 0,
-        "max_calls": 1,
-        "max_depth": 1,
         "context": context,
     }
 
@@ -77,12 +79,10 @@ def test_run_reports_actual_subcall_count() -> None:
     try:
         response = run(
             {
-                "protocol_version": 2,
+                "protocol_version": 3,
                 "model": "test-model",
                 "question": "is it spam?",
-                "max_iterations": 3,
-                "max_depth": 2,
-                "max_subcalls": 10,
+                "budget": _budget(subcalls=10, depth=2),
                 "token": "test-token",
                 "root_endpoint": f"{base}/root",
                 "subcall_endpoint": f"{base}/subcall",
@@ -175,9 +175,10 @@ def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> 
     monkeypatch.setattr(import_module("droste_runner.run"), "run_rlm", fake_run_rlm)
     response = runner_module.run(
         {
-            "protocol_version": 2,
+            "protocol_version": 3,
             "model": "test-model",
             "question": "q",
+            "budget": _budget(),
             "token": "unused",
             "root_endpoint": "http://127.0.0.1:1/root",
             "subcall_endpoint": "http://127.0.0.1:1/subcall",
@@ -188,32 +189,29 @@ def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> 
     assert "trajectory" not in response
 
 
-def _client(max_calls: int) -> tuple[HTTPSubcallClient, Any]:
-    context = create_execution_context(max_calls=max_calls, max_depth=5)
+def _client() -> tuple[HTTPSubcallClient, Any]:
+    context = create_execution_context()
     client = HTTPSubcallClient(
         endpoint="http://unused.invalid",
         token="t",
         session="",
         session_index=0,
-        max_calls=max_calls,
-        max_depth=5,
         context=context,
     )
     client._request = lambda payload: "ok"  # type: ignore[method-assign]
     return client, context
 
 
-def test_rejected_over_limit_attempt_is_not_counted() -> None:
-    client, context = _client(max_calls=1)
+def test_http_client_reports_each_issued_call_without_owning_budget_policy() -> None:
+    client, context = _client()
     assert client.llm_query("a") == "ok"
-    with pytest.raises(SubcallBudgetExceeded, match="max subcalls exceeded"):
-        client.llm_query("b")
-    assert context.stats.calls_made == 1
-    assert context.stats.successful_calls == 1
+    assert client.llm_query("b") == "ok"
+    assert context.stats.calls_made == 2
+    assert context.stats.successful_calls == 2
 
 
-def test_subcall_depth_is_restored_after_request_failure() -> None:
-    client, _ = _client(max_calls=2)
+def test_failed_request_is_attempted_but_not_successful() -> None:
+    client, context = _client()
 
     def fail(_payload: dict[str, Any]) -> str:
         raise RuntimeError("request failed")
@@ -222,11 +220,12 @@ def test_subcall_depth_is_restored_after_request_failure() -> None:
     with pytest.raises(RuntimeError, match="request failed"):
         client.llm_query("a")
 
-    assert client._depth_get() == 0
+    assert context.stats.calls_made == 1
+    assert context.stats.successful_calls == 0
 
 
 def test_concurrent_batch_counts_each_issued_call() -> None:
-    client, context = _client(max_calls=50)
+    client, context = _client()
     results = client.llm_batch([f"p{i}" for i in range(20)])
     assert results == ["ok"] * 20
     assert context.stats.calls_made == 20
@@ -237,7 +236,7 @@ def test_concurrent_batch_counts_each_issued_call() -> None:
 
 
 def test_llm_batch_with_errors_bounded_concurrency() -> None:
-    client, _ = _client(max_calls=200)
+    client, _ = _client()
     lock = threading.Lock()
     active = 0
     peak = 0
@@ -262,13 +261,13 @@ def test_llm_batch_with_errors_bounded_concurrency() -> None:
 
 
 def test_llm_batch_with_errors_enforces_prompt_cap() -> None:
-    client, _ = _client(max_calls=200)
+    client, _ = _client()
     with pytest.raises(ValueError, match="exceeds max 50"):
         client.llm_batch_with_errors(["p"] * 51)
 
 
 def test_llm_batch_with_errors_orders_errors_by_index() -> None:
-    client, _ = _client(max_calls=50)
+    client, _ = _client()
 
     def _request(payload: dict[str, Any]) -> str:
         prompt = payload["prompt"]
@@ -289,7 +288,7 @@ def test_llm_batch_with_errors_orders_errors_by_index() -> None:
 
 
 def test_llm_batch_raises_lowest_index_error_unwrapped() -> None:
-    client, _ = _client(max_calls=50)
+    client, _ = _client()
 
     class _Boom(RuntimeError):
         pass
@@ -305,8 +304,8 @@ def test_llm_batch_raises_lowest_index_error_unwrapped() -> None:
         client.llm_batch([f"p{i}" for i in range(5)])
 
 
-# --- Subcall cost controls: payload includes overrides when set, omits
-# them when unset (the server owns the defaults).
+# --- Subcall cost controls: the resolved budget always supplies the output
+# ceiling; optional model controls are included only when set.
 
 
 class _CapturingHandler(BaseHTTPRequestHandler):
@@ -342,12 +341,10 @@ def _run_with_capture(request_extra: dict[str, Any]) -> list[dict[str, Any]]:
     base = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         request: dict[str, Any] = {
-            "protocol_version": 2,
+            "protocol_version": 3,
             "model": "test-model",
             "question": "is it spam?",
-            "max_iterations": 3,
-            "max_depth": 2,
-            "max_subcalls": 10,
+            "budget": _budget(subcalls=10, depth=2),
             "token": "test-token",
             "root_endpoint": f"{base}/root",
             "subcall_endpoint": f"{base}/subcall",
@@ -365,7 +362,7 @@ def _run_with_capture(request_extra: dict[str, Any]) -> list[dict[str, Any]]:
 def test_subcall_payload_includes_cost_controls_when_set() -> None:
     payloads = _run_with_capture(
         {
-            "subcall_max_output_tokens": 1024,
+            "budget": _budget(subcalls=10, depth=2, subcall_output_tokens=1024),
             "subcall_model": "grok-4-fast-non-reasoning",
             "subcall_reasoning_effort": "none",
         }
@@ -376,30 +373,30 @@ def test_subcall_payload_includes_cost_controls_when_set() -> None:
     assert payload["model"] == "grok-4-fast-non-reasoning"
     assert payload["reasoning_effort"] == "none"
     system_prompt = _CapturingHandler.root_payloads[0]["messages"][0]["content"]
-    assert "subcall_output_tokens_per_call=1024 (bounded)" in system_prompt
+    assert "subcall_output_tokens_per_call=1024" in system_prompt
 
 
-def test_subcall_payload_omits_cost_controls_when_unset() -> None:
+def test_subcall_payload_uses_budget_ceiling_and_omits_optional_controls() -> None:
     payloads = _run_with_capture({})
     assert len(payloads) == 1
     payload = payloads[0]
-    assert "max_output_tokens" not in payload
+    assert payload["max_output_tokens"] == 2048
     assert "model" not in payload
     assert "reasoning_effort" not in payload
     system_prompt = _CapturingHandler.root_payloads[0]["messages"][0]["content"]
-    assert "subcall_output_tokens_per_call=unknown (client did not report)" in system_prompt
+    assert "subcall_output_tokens_per_call=2048" in system_prompt
 
 
-def test_explicit_zero_subcall_max_output_tokens_is_rejected() -> None:
-    """A subcall cannot answer in 0 tokens; silently treating explicit 0 as
-    unset would mask a caller bug (codex catch)."""
-    with pytest.raises(ValueError, match="subcall_max_output_tokens must be positive"):
+def test_zero_subcall_output_budget_is_rejected() -> None:
+    with pytest.raises(ValueError, match="budget.subcall_output_tokens must be positive"):
+        budget = _budget()
+        budget["subcall_output_tokens"] = 0
         run(
             {
-                "protocol_version": 2,
+                "protocol_version": 3,
                 "model": "m",
                 "question": "q",
-                "subcall_max_output_tokens": 0,
+                "budget": budget,
                 "token": "t",
                 "root_endpoint": "http://127.0.0.1:1/root",
                 "subcall_endpoint": "http://127.0.0.1:1/subcall",

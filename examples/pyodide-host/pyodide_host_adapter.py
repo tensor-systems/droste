@@ -33,10 +33,12 @@ from __future__ import annotations
 from typing import Any
 
 from droste import (
+    Budget,
     ConfiguredSource,
     EnvironmentConfig,
     ProviderCatalog,
     RLMConfig,
+    SandboxLimits,
     SideEffect,
     create_environment,
     create_environment_context,
@@ -131,12 +133,13 @@ def run_for_host_pyodide(
     else:
         registry = _sql_registry(request["db_path"])
     subcalls = MockSubcallClient()
+    raw_budget = request.get("budget")
+    budget = Budget.from_dict(raw_budget) if isinstance(raw_budget, dict) else Budget()
+    sandbox = SandboxLimits(output_chars=8_000)
     environment_config = EnvironmentConfig(
         kind="pyodide",
-        max_depth=int(request.get("max_depth") or 1),
-        max_calls=int(request.get("max_calls") or 0),
-        max_iterations=int(request.get("max_iterations") or 8),
-        max_output_chars=int(request.get("max_output_chars") or 8000),
+        budget=budget,
+        sandbox=sandbox,
         # The Deno/WASM process owns both boundaries; constructing a Pyodide
         # environment without these explicit declarations fails loudly.
         host_managed_timeout=True,
@@ -154,16 +157,15 @@ def run_for_host_pyodide(
         context=None,
         registry=registry,
         subcalls=subcalls,
+        execution_context=exec_context,
         capability_run_id=exec_context.trace.run_id,
         capability_parent_run_id=exec_context.trace.parent_run_id,
         capability_observer=exec_context.observe_capability,
     )
 
     config = RLMConfig(
-        max_iterations=environment_config.max_iterations,
-        max_depth=environment_config.max_depth,
-        max_calls=environment_config.max_calls,
-        max_output_chars=environment_config.max_output_chars,
+        budget=budget,
+        sandbox=sandbox,
         root_model=request.get("root_model"),
     )
 

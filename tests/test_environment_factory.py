@@ -16,6 +16,7 @@ from droste.environments import (
     create_environment_context,
     select_environment,
 )
+from droste.execution import Budget, SandboxLimits
 from droste.testing import MockSubcallClient
 
 
@@ -25,6 +26,7 @@ def _environment(config: EnvironmentConfig):
         context={"files": []},
         registry=None,
         subcalls=MockSubcallClient(),
+        execution_context=create_environment_context(config),
     )
 
 
@@ -40,42 +42,42 @@ def test_selection_is_pure_and_rejects_unknown_kinds() -> None:
 def test_environment_config_is_immutable_and_drives_execution_context() -> None:
     config = EnvironmentConfig(
         kind="native",
-        max_depth=3,
-        max_calls=4,
-        max_iterations=5,
-        max_output_chars=6,
-        exec_timeout_ms=7,
+        budget=Budget(
+            tokens=2_000,
+            subcalls=4,
+            depth=3,
+            wall_ms=8_000,
+            root_output_tokens=512,
+            subcall_output_tokens=256,
+        ),
+        sandbox=SandboxLimits(output_chars=6, execution_timeout_ms=7),
     )
     context = create_environment_context(config)
 
-    assert context.max_depth == 3
-    assert context.max_calls == 4
-    assert context.max_iterations == 5
-    assert context.max_output_chars == 6
+    assert context.budget == config.budget
+    assert context.sandbox == config.sandbox
     with pytest.raises(FrozenInstanceError):
-        config.max_calls = 99  # type: ignore[misc]
+        config.budget = Budget()  # type: ignore[misc]
 
 
 def test_native_config_can_preserve_distinct_loop_and_executor_output_caps() -> None:
     config = EnvironmentConfig(
         kind="native",
-        max_output_chars=25_000,
-        executor_max_output_chars=100_000,
+        sandbox=SandboxLimits(output_chars=25_000, capture_output_chars=100_000),
     )
 
     context = create_environment_context(config)
     environment = _environment(config)
 
-    assert context.max_output_chars == 25_000
+    assert context.sandbox.output_chars == 25_000
     assert environment.capabilities()["max_output_chars"] == 100_000
 
 
 def test_native_config_rejects_an_executor_cap_below_the_loop_cap() -> None:
-    with pytest.raises(ValueError, match="greater than or equal"):
+    with pytest.raises(ValueError, match="at least output_chars"):
         EnvironmentConfig(
             kind="native",
-            max_output_chars=25_000,
-            executor_max_output_chars=10_000,
+            sandbox=SandboxLimits(output_chars=25_000, capture_output_chars=10_000),
         )
 
 
@@ -93,7 +95,12 @@ def test_native_environment_owns_signal_timeout_wiring(monkeypatch) -> None:
         "droste.environments.inprocess.signal.setitimer",
         lambda which, seconds: timer_calls.append((which, seconds)),
     )
-    environment = _environment(EnvironmentConfig(kind="native", exec_timeout_ms=25))
+    environment = _environment(
+        EnvironmentConfig(
+            kind="native",
+            sandbox=SandboxLimits(execution_timeout_ms=25),
+        )
+    )
 
     result = environment.execute("print('ok')")
 
@@ -112,9 +119,9 @@ def test_native_environment_owns_signal_timeout_wiring(monkeypatch) -> None:
             {
                 "host_managed_timeout": True,
                 "host_managed_isolation": True,
-                "exec_timeout_ms": 1,
+                "sandbox": SandboxLimits(execution_timeout_ms=1),
             },
-            "cannot enforce exec_timeout_ms",
+            "cannot enforce execution_timeout_ms",
         ),
     ],
 )
@@ -134,7 +141,6 @@ def test_pyodide_environment_uses_shared_raw_namespace_without_signal_timers(
     )
     config = EnvironmentConfig(
         kind="pyodide",
-        max_output_chars=4,
         host_managed_timeout=True,
         host_managed_isolation=True,
     )
@@ -163,8 +169,7 @@ def test_pyodide_rejects_a_distinct_executor_output_cap() -> None:
     with pytest.raises(ValueError, match="one loop-owned output limit"):
         EnvironmentConfig(
             kind="pyodide",
-            max_output_chars=10,
-            executor_max_output_chars=20,
+            sandbox=SandboxLimits(output_chars=25_000, capture_output_chars=50_000),
             host_managed_timeout=True,
             host_managed_isolation=True,
         )
@@ -183,9 +188,9 @@ def test_host_entrypoints_use_factory_instead_of_copying_environment_wiring() ->
         assert "RunnerEnvironment(" not in source, path
         assert "create_execution_context(" not in source, path
 
-    for path in host_paths[:3]:
+    for path in host_paths:
         source = path.read_text(encoding="utf-8")
-        assert "max_output_chars=environment_config.max_output_chars" in source, path
+        assert "execution_context=" in source, path
 
     pyodide_adapter = host_paths[-1].read_text(encoding="utf-8")
     assert 'kind="pyodide"' in pyodide_adapter

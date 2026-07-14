@@ -15,11 +15,12 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from droste import (
-    DEFAULT_MAX_OUTPUT_CHARS,
+    Budget,
     EnvironmentConfig,
     ModelRelayClient,
     ModelRelaySubcallClient,
     RLMConfig,
+    SandboxLimits,
     create_environment,
     create_environment_context,
     run_rlm,
@@ -277,7 +278,7 @@ def _context_path(manifest: SuiteManifest, benchmark: BenchmarkSpec, task: dict[
 
 
 @contextmanager
-def _task_timeout(seconds: int) -> Iterator[None]:
+def _task_timeout(seconds: float) -> Iterator[None]:
     if not hasattr(signal, "setitimer"):
         yield
         return
@@ -316,9 +317,9 @@ def _direct_run(
         base_url=base_url,
         api_key=api_key,
         temperature=arm.model.temperature,
-        max_output_tokens=arm.model.max_root_output_tokens,
+        max_output_tokens=arm.limits.root_output_tokens,
         reasoning_effort=arm.model.root_reasoning_effort or "",
-        timeout=arm.limits.timeout_seconds,
+        timeout=arm.limits.wall_ms / 1000,
     )
     try:
         prediction = client.responses_create(
@@ -364,17 +365,23 @@ def _droste_run(
     diagnostic_path: Path,
 ) -> tuple[str, Usage, int, int]:
     assert arm.model is not None and arm.limits is not None
-    if arm.model.subcall_model is None or arm.model.max_subcall_output_tokens is None:
+    if arm.model.subcall_model is None:
         raise BenchmarkRunError(f"arm {arm.arm_id} has no subcall configuration")
+    budget = Budget(
+        tokens=arm.limits.tokens,
+        subcalls=arm.limits.subcalls,
+        depth=arm.limits.depth,
+        wall_ms=arm.limits.wall_ms,
+        root_output_tokens=arm.limits.root_output_tokens,
+        subcall_output_tokens=arm.limits.subcall_output_tokens,
+    )
     environment_config = EnvironmentConfig(
         kind="native",
-        max_calls=arm.limits.max_subcalls,
-        max_iterations=arm.limits.max_iterations,
-        max_output_chars=DEFAULT_MAX_OUTPUT_CHARS,
+        budget=budget,
         # Preserve the historical two-stage limits: the loop gates at its
         # 25k default while the native stdout buffer allows up to 100k so the
         # loop owns the repairable SandboxError at the lower threshold.
-        executor_max_output_chars=100_000,
+        sandbox=SandboxLimits(output_chars=25_000, capture_output_chars=100_000),
     )
     execution_context = create_environment_context(
         environment_config,
@@ -384,21 +391,20 @@ def _droste_run(
         base_url=base_url,
         api_key=api_key,
         temperature=arm.model.temperature,
-        max_output_tokens=arm.model.max_root_output_tokens,
+        max_output_tokens=budget.root_output_tokens,
         reasoning_effort=arm.model.root_reasoning_effort or "",
-        timeout=arm.limits.timeout_seconds,
+        timeout=arm.limits.wall_ms / 1000,
     )
     subcalls = ModelRelaySubcallClient(
         model=arm.model.subcall_model,
         context=execution_context,
         base_url=base_url,
         api_key=api_key,
-        max_calls=environment_config.max_calls,
-        max_output_tokens=arm.model.max_subcall_output_tokens,
+        max_output_tokens=budget.subcall_output_tokens,
         temperature=arm.model.temperature,
         reasoning_effort=arm.model.subcall_reasoning_effort or "",
         max_parallel=arm.limits.concurrency,
-        timeout=arm.limits.timeout_seconds,
+        timeout=arm.limits.wall_ms / 1000,
     )
     environment = create_environment(
         environment_config,
@@ -415,6 +421,7 @@ def _droste_run(
         },
         registry=None,
         subcalls=subcalls,
+        execution_context=execution_context,
         capability_run_id=execution_context.trace.run_id,
         capability_parent_run_id=execution_context.trace.parent_run_id,
         capability_observer=execution_context.observe_capability,
@@ -435,9 +442,8 @@ def _droste_run(
             root_llm=root,
             subcalls=subcalls,
             config=RLMConfig(
-                max_iterations=environment_config.max_iterations,
-                max_calls=environment_config.max_calls,
-                max_output_chars=environment_config.max_output_chars,
+                budget=budget,
+                sandbox=environment_config.sandbox,
                 root_model=arm.model.root_model,
                 policy_hints=PolicyHints(semantic=semantic),
             ),
@@ -643,7 +649,7 @@ def run_modelrelay_suite(
             error: str | None = None
             status = "ok"
             try:
-                with _task_timeout(arm.limits.timeout_seconds):
+                with _task_timeout(arm.limits.wall_ms / 1000):
                     if arm.method == "direct-model":
                         prediction, usage, iterations, subcalls_count = _direct_run(
                             task,
