@@ -4,6 +4,7 @@ VERB_SPECS — adding a verb is one row, and the transports cannot drift."""
 
 from __future__ import annotations
 
+from droste.capabilities import CapabilityBroker
 from droste.protocols.verbs import (
     CAPABILITY_GATED_VERBS,
     CORE_VERB_NAMES,
@@ -56,7 +57,9 @@ def test_registry_and_bridge_service_expose_the_same_verbs() -> None:
             return []
 
     source = WithExtra()
-    registry_verbs = set(vars(DataSourceRegistry([source]).globals()["mock"]))
+    registry = DataSourceRegistry([source])
+    broker = CapabilityBroker(registry.capability_registrations())
+    registry_verbs = set(vars(registry.broker_globals(broker)["mock"]))
 
     described = DataSourceService(source).describe()
     service_verbs = {

@@ -100,6 +100,42 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - Hosted subcalls negotiate `responses-stream/v2` NDJSON, ignore keepalive and reasoning events, assemble text from `update.delta`, require a terminal `completion`, and fail on error or truncated streams. Servers may still return plain JSON for compatibility with non-streaming local callback handlers.
 - `adapter_module` lets callers delegate the runner to a custom module with `run(request)` (used by in-process embedders).
 
+## Capability Broker ABI
+
+- Built-in environments expose generated compatibility bindings, never raw
+  `SubcallClient` or data-source bound methods. Loop-installed structured batch
+  helpers must use the required `environment.sandbox_subcalls(subcalls)` result
+  so they do not recreate a direct egress path. Custom environments can use
+  `droste.capabilities.broker_subcalls()`; there is no raw-client fallback.
+- `CapabilityId`, `CapabilityManifest`, `CapabilityCall`, and
+  `CapabilityResult` are immutable values. Calls carry only the stable
+  `(kind, provider_type, source_id, operation)` identity; the broker resolves
+  evolving descriptor documentation and policy metadata from its manifest.
+  Exact identity validation is the allowlist; transports stay behind registered
+  trusted handlers and must not add a parallel decoder or dispatch protocol.
+- Keep `llm_batch` atomic: one broker call invokes one client batch operation.
+  Do not expand it into nested `llm_query` calls.
+- Registrations normalize raw handler return values once into
+  `CapabilityOutcome`. Trusted providers may return that value directly to
+  attach either a result or an extensible stable-code `CapabilityError` plus
+  provider usage/evidence metadata. Dispatch must consume only the normalized
+  outcome convention; unexpected exceptions remain `handler_error`.
+- The guard, annotator, and observer are seams only. Budget ownership, policy
+  semantics, trace ordering/storage/retention, provider generalization, and MCP
+  transport belong to their own issues. Observers are observational and must
+  never become an authority or alternate dispatch path. Durable traces consume
+  `CapabilityResult.to_trace_dict()`, which excludes parameters, inline results,
+  error messages, evidence references, and result-handle locators; full
+  `to_dict()` envelopes are replay content and require a separately configured
+  retention policy.
+- The annotator is also the exactly-once post-attempt finalizer. It runs once
+  after every attempted handler outcome (success, handler error, invalid result,
+  or propagated cancellation) and never on run/allowlist/argument/guard exits
+  where the handler was not attempted. Keep reservation/reconciliation logic
+  keyed by the immutable `call_id`; do not add a parallel finalization path.
+  Provider metadata is ordered before finalizer metadata; sequence facts append,
+  while conflicting singular result handles or child-run IDs fail closed.
+
 
 ## Login
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from ..capabilities import CapabilityAnnotator, CapabilityGuard, CapabilityObserver
 from ..execution.config import (
     DEFAULT_MAX_CALLS,
     DEFAULT_MAX_DEPTH,
@@ -113,6 +114,11 @@ def create_environment(
     context: Any,
     registry: DataSourceRegistry | None,
     subcalls: SubcallClient,
+    capability_run_id: str | None = None,
+    capability_parent_run_id: str | None = None,
+    capability_guard: CapabilityGuard | None = None,
+    capability_annotator: CapabilityAnnotator | None = None,
+    capability_observer: CapabilityObserver | None = None,
 ) -> RLMEnvironment:
     """Construct the selected environment around host-supplied live dependencies."""
     environment_type = select_environment(config.kind)
@@ -122,4 +128,9 @@ def create_environment(
         subcalls=subcalls,
         max_output_chars=config.resolved_executor_max_output_chars,
         exec_timeout_ms=config.exec_timeout_ms,
+        capability_run_id=capability_run_id,
+        capability_parent_run_id=capability_parent_run_id,
+        capability_guard=capability_guard,
+        capability_annotator=capability_annotator,
+        capability_observer=capability_observer,
     )

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol, TypedDict
 
+from .subcall_client import SubcallClient
 from .verbs import AccessorManifest
 
 
@@ -38,6 +39,10 @@ class RLMEnvironment(Protocol):
 
     def globals(self) -> dict[str, Any]:
         """Return mutable globals dict used for code execution."""
+        ...
+
+    def sandbox_subcalls(self, subcalls: SubcallClient) -> SubcallClient:
+        """Return the mandatory broker-backed subcall surface for generated code."""
         ...
 
     def prompt_fragment(self) -> str:
