@@ -8,6 +8,7 @@ import pytest
 from droste import SubcallBudgetExceeded, aggregate_json_counts, structured_batch, validate_json
 from droste.execution.context import ExecutionContext, create_execution_context
 from droste.prompts.base import BASE_SYSTEM_PROMPT
+from droste.structured import _StructuredBatchEvidence
 
 SCHEMA = {
     "type": "object",
@@ -75,6 +76,50 @@ def test_structured_batch_valid_output_preserves_order_and_usage() -> None:
     assert client.context.stats.calls_made == 2
     assert client.context.stats.successful_calls == 2
     assert client.context.stats.total_tokens == 20
+
+
+def test_structured_evidence_requires_an_exact_validated_retry() -> None:
+    evidence = _StructuredBatchEvidence()
+    prompts = ["classify a", "classify b"]
+    contexts = ["record a", "record b"]
+
+    def validator(value: Any, index: int) -> None:
+        return None
+
+    evidence.record(
+        prompts=prompts,
+        schema=SCHEMA,
+        contexts=contexts,
+        validator=validator,
+        errors=[{"index": 1, "type": "validation_error", "error": "bad"}],
+    )
+    evidence.record(
+        prompts=["different task"],
+        schema=SCHEMA,
+        contexts=["different record"],
+        validator=validator,
+        errors=[],
+    )
+    evidence.record(
+        prompts=prompts,
+        schema=SCHEMA,
+        contexts=contexts,
+        validator=lambda value, index: None,
+        errors=[],
+    )
+
+    assert evidence.unresolved_batches == 1
+    assert evidence.unresolved_items == 1
+
+    evidence.record(
+        prompts=prompts,
+        schema=SCHEMA,
+        contexts=contexts,
+        validator=validator,
+        errors=[],
+    )
+    assert evidence.unresolved_batches == 0
+    assert evidence.unresolved_items == 0
 
 
 def test_structured_batch_repairs_only_malformed_items_once() -> None:

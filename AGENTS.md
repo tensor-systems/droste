@@ -16,6 +16,9 @@ If you want contract enforcement (e.g., require `llm_query` for semantic tasks
 or require SQL aggregates + numeric-only output for counts), the caller must
 pass explicit policy hints. Benchmarks should supply these hints; general use
 can omit them to keep behavior purely prompt-driven.
+With `PolicyHints(semantic=True)`, an incomplete structured batch remains
+unconfirmed until the exact prompts, contexts, schema, and validator object are
+rerun without errors; a different successful batch is not completion evidence.
 
 Terminal step failures with usable partial work go through the bounded extract
 fallback. A successful recovery is `extracted=True`, `error=None`, with the

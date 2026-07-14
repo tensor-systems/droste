@@ -83,6 +83,8 @@ def ready_violations(
     answer_ready: bool,
     successful_calls: int,
     resolved_output: str,
+    unresolved_semantic_batches: int = 0,
+    unresolved_semantic_items: int = 0,
 ) -> list[str]:
     """Ready-time contract checks — the answer-gate siblings of the pre-exec
     ``contract_violations``. Only a ready answer is gated; violations revoke
@@ -96,6 +98,14 @@ def ready_violations(
         violations.append(
             "semantic question must complete at least one successful "
             "llm_query/batch_llm_query subcall."
+        )
+
+    if hints.semantic and unresolved_semantic_batches:
+        violations.append(
+            "incomplete structured semantic batch evidence remains unresolved "
+            f"({unresolved_semantic_items} failed item(s) across "
+            f"{unresolved_semantic_batches} batch request(s)); rerun each exact "
+            "request successfully before confirming the answer."
         )
 
     if hints.numeric_output and not is_numeric_output(resolved_output):

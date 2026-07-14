@@ -16,6 +16,7 @@ from droste import (
     ExecutionConfig,
     PolicyHints,
     RLMConfig,
+    SubcallBudgetExceeded,
     run_rlm,
 )
 from droste.loop.rlm import EMPTY_OUTPUT_NUDGE
@@ -52,6 +53,36 @@ class RecordingLLMClient(MockLLMClient):
             temperature=temperature,
             return_usage=return_usage,
         )
+
+
+class SyntheticClassificationSubcalls:
+    """Deterministic structured responses for semantic completeness tests."""
+
+    def __init__(self, batches: list[list[str]]) -> None:
+        self.batches = list(batches)
+        self.context = None
+
+    def bind_context(self, context) -> None:
+        self.context = context
+
+    def llm_query(self, prompt: str, context: str = "") -> str:
+        raise NotImplementedError
+
+    def llm_batch(self, prompts: list[str], contexts=None) -> list[str]:
+        values, errors = self.llm_batch_with_errors(prompts, contexts)
+        if errors:
+            raise RuntimeError(str(errors[0]["error"]))
+        return values
+
+    def llm_batch_with_errors(self, prompts: list[str], contexts=None):
+        assert self.context is not None
+        count = len(prompts)
+        stats = self.context.stats
+        if stats.calls_made + count > self.context.max_calls:
+            raise SubcallBudgetExceeded("max subcalls exceeded")
+        stats.calls_made += count
+        stats.successful_calls += count
+        return self.batches.pop(0), []
 
 
 def _runner_env(context: Any) -> RunnerEnvironment:
@@ -556,6 +587,160 @@ def test_terminal_subcall_budget_error_extracts_partial_answer() -> None:
 
 
 # --- policy violation stays corrective and falls back to extraction -------
+
+
+def test_incomplete_structured_semantic_batch_is_not_confirmed() -> None:
+    root_code = """```python
+prompts = ['classify red blue', 'classify green yellow']
+schema = {
+    'type': 'object',
+    'required': ['labels'],
+    'properties': {
+        'labels': {'type': 'array', 'items': {'type': 'string'}},
+    },
+    'additionalProperties': False,
+}
+def require_two_labels(value, index):
+    if len(value['labels']) != 2:
+        raise ValueError(f'batch item {index} must classify exactly two records')
+result = llm_batch_json(
+    prompts, schema, max_repair_attempts=1, validator=require_two_labels
+)
+labels = [label for value in result['values'] if value for label in value['labels']]
+answer['content'] = ','.join(labels)
+answer['ready'] = True
+```"""
+    repair = """```python
+answer['ready'] = True
+```"""
+    llm = RecordingLLMClient(
+        _responses(root_code, repair, "Best-effort classification from partial evidence.")
+    )
+    subcalls = SyntheticClassificationSubcalls(
+        [['{"labels":["red","blue"]}', '{"labels":["green"]}']]
+    )
+
+    result = run_rlm(
+        question="Assign one color label to each of four synthetic records.",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=subcalls,
+        config=RLMConfig(
+            max_iterations=1,
+            max_calls=2,
+            policy_hints=PolicyHints(semantic=True),
+        ),
+    )
+
+    assert result.ready is False
+    assert result.extracted is True
+    assert result.answer == "Best-effort classification from partial evidence."
+    assert result.error is None
+    assert result.recovered_error is not None
+    assert result.recovered_error.type == "PolicyError"
+    assert "incomplete structured semantic batch" in result.recovered_error.message
+    assert len(result.trajectory) == 2
+    assert all(
+        "incomplete structured semantic batch" in item.execution_result
+        for item in result.trajectory
+    )
+    assert "red,blue" in llm.calls[-1][-1]["content"]
+
+
+def test_exact_complete_structured_semantic_retry_recovers_normally() -> None:
+    incomplete = """```python
+prompts = ['classify red blue', 'classify green yellow']
+schema = {
+    'type': 'object',
+    'required': ['labels'],
+    'properties': {
+        'labels': {'type': 'array', 'items': {'type': 'string'}},
+    },
+    'additionalProperties': False,
+}
+def require_two_labels(value, index):
+    if len(value['labels']) != 2:
+        raise ValueError(f'batch item {index} must classify exactly two records')
+result = llm_batch_json(
+    prompts, schema, max_repair_attempts=0, validator=require_two_labels
+)
+answer['content'] = 'partial'
+answer['ready'] = True
+```"""
+    complete_retry = """```python
+result = llm_batch_json(
+    prompts, schema, max_repair_attempts=0, validator=require_two_labels
+)
+answer['content'] = ','.join(
+    label for value in result['values'] for label in value['labels']
+)
+answer['ready'] = True
+```"""
+    llm = RecordingLLMClient(_responses(incomplete, complete_retry))
+    subcalls = SyntheticClassificationSubcalls(
+        [
+            ['{"labels":["red","blue"]}', '{"labels":["green"]}'],
+            [
+                '{"labels":["red","blue"]}',
+                '{"labels":["green","yellow"]}',
+            ],
+        ]
+    )
+
+    result = run_rlm(
+        question="Assign one color label to each of four synthetic records.",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=subcalls,
+        config=RLMConfig(
+            max_iterations=1,
+            max_calls=4,
+            policy_hints=PolicyHints(semantic=True),
+        ),
+    )
+
+    assert result.ready is True
+    assert result.extracted is False
+    assert result.answer == "red,blue,green,yellow"
+    assert result.error is None
+    assert result.recovered_error is None
+
+
+def test_incomplete_structured_batch_without_semantic_hint_is_unchanged() -> None:
+    root_code = """```python
+prompts = ['classify red blue', 'classify green yellow']
+schema = {
+    'type': 'object',
+    'required': ['labels'],
+    'properties': {
+        'labels': {'type': 'array', 'items': {'type': 'string'}},
+    },
+    'additionalProperties': False,
+}
+def require_two_labels(value, index):
+    if len(value['labels']) != 2:
+        raise ValueError(f'batch item {index} must classify exactly two records')
+result = llm_batch_json(
+    prompts, schema, max_repair_attempts=1, validator=require_two_labels
+)
+labels = [label for value in result['values'] if value for label in value['labels']]
+answer['content'] = ','.join(labels)
+answer['ready'] = True
+```"""
+    result = run_rlm(
+        question="Assign one color label to each of four synthetic records.",
+        environment=MockEnvironment(),
+        root_llm=RecordingLLMClient(_responses(root_code)),
+        subcalls=SyntheticClassificationSubcalls(
+            [['{"labels":["red","blue"]}', '{"labels":["green"]}']]
+        ),
+        config=RLMConfig(max_iterations=1, max_calls=2),
+    )
+
+    assert result.ready is True
+    assert result.answer == "red,blue"
+    assert result.extracted is False
+    assert result.error is None
 
 
 def test_terminal_semantic_policy_violation_extracts_kept_content() -> None:

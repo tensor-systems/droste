@@ -18,7 +18,7 @@ from ..protocols.environment import RLMEnvironment
 from ..protocols.llm_client import LLMClient, total_tokens_from_usage
 from ..protocols.subcall_client import SubcallClient
 from ..protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest
-from ..structured import aggregate_json_counts, bind_structured_batch
+from ..structured import _StructuredBatchEvidence, aggregate_json_counts, bind_structured_batch
 from .code_extractor import extract_code_block
 from .step import (
     EMPTY_OUTPUT_NUDGE,
@@ -248,9 +248,12 @@ def run_rlm(
     # llm_query_batched is the name models primed on RLM conventions reach
     # for first, so the sandbox must answer to it.
     env_globals.setdefault("llm_query_batched", subcalls.llm_batch)
-    structured_batch = bind_structured_batch(subcalls)
-    env_globals.setdefault("llm_batch_json", structured_batch)
-    env_globals.setdefault("llm_query_batched_json", structured_batch)
+    semantic_evidence = _StructuredBatchEvidence()
+    structured_batch = bind_structured_batch(subcalls, semantic_evidence)
+    # These two aliases are one core helper, so bind the tracked version even
+    # when an environment pre-populated the untracked helper during setup.
+    env_globals["llm_batch_json"] = structured_batch
+    env_globals["llm_query_batched_json"] = structured_batch
     env_globals.setdefault("aggregate_json_counts", aggregate_json_counts)
     _apply_batch_error_guard(subcalls, env_globals)
 
@@ -297,6 +300,7 @@ def run_rlm(
             context=context,
             data_accessor_names=data_accessor_names,
             namespaced_accessor_pairs=namespaced_accessor_pairs,
+            semantic_evidence=semantic_evidence,
         )
 
     def early_result(run_error: RLMError | None) -> RLMResult:
