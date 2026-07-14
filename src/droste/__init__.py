@@ -62,7 +62,12 @@ from .execution.budget import (
     BudgetReservation,
     BudgetSnapshot,
 )
-from .execution.config import DEFAULT_OUTPUT_CHARS, ExecutionConfig, SandboxLimits
+from .execution.config import (
+    DEFAULT_OUTPUT_CHARS,
+    DEFAULT_SUBCALL_CONCURRENCY,
+    ExecutionConfig,
+    SandboxLimits,
+)
 from .execution.context import ExecutionContext, create_execution_context
 from .execution.manifest import (
     SCAFFOLD_MANIFEST_VERSION,
@@ -103,7 +108,11 @@ from .prompts.pack import (
 )
 from .protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
 from .protocols.llm_client import LLMClient, TokenUsage
-from .protocols.subcall_client import SubcallClient, SubcallOutputTokenLimitProvider
+from .protocols.subcall_client import (
+    SubcallClient,
+    SubcallConcurrencyProvider,
+    SubcallOutputTokenLimitProvider,
+)
 from .providers import (
     PROVIDER_PROTOCOL_VERSION,
     BoundSource,
@@ -140,6 +149,7 @@ __all__ = [
     "DEFAULT_ROOT_OUTPUT_TOKENS",
     "DEFAULT_SUBCALL_OUTPUT_TOKENS",
     "DEFAULT_OUTPUT_CHARS",
+    "DEFAULT_SUBCALL_CONCURRENCY",
     "Budget",
     "BudgetExhausted",
     "BudgetLedger",
@@ -176,6 +186,7 @@ __all__ = [
     "LLMClient",
     "TokenUsage",
     "SubcallClient",
+    "SubcallConcurrencyProvider",
     "SubcallOutputTokenLimitProvider",
     "SystemPromptBuilder",
     "PromptPack",

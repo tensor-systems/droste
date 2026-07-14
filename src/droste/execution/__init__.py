@@ -12,7 +12,12 @@ from .budget import (
     BudgetReservation,
     BudgetSnapshot,
 )
-from .config import DEFAULT_OUTPUT_CHARS, ExecutionConfig, SandboxLimits
+from .config import (
+    DEFAULT_OUTPUT_CHARS,
+    DEFAULT_SUBCALL_CONCURRENCY,
+    ExecutionConfig,
+    SandboxLimits,
+)
 from .context import ExecutionContext, create_execution_context
 from .manifest import (
     SCAFFOLD_MANIFEST_VERSION,
@@ -41,6 +46,7 @@ from .trace import (
 
 __all__ = [
     "DEFAULT_OUTPUT_CHARS",
+    "DEFAULT_SUBCALL_CONCURRENCY",
     "DEFAULT_TOKEN_BUDGET",
     "DEFAULT_SUBCALL_BUDGET",
     "DEFAULT_DEPTH_BUDGET",

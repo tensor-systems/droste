@@ -10,7 +10,7 @@ from typing import Any
 
 from droste.environments import EnvironmentConfig, create_environment, create_environment_context
 from droste.execution.budget import Budget
-from droste.execution.config import SandboxLimits
+from droste.execution.config import DEFAULT_SUBCALL_CONCURRENCY, SandboxLimits
 from droste.execution.manifest import RolloutConfiguration, ScaffoldRequirements
 from droste.loop.rlm import RLMConfig, run_rlm
 from droste.providers import ProviderCatalog
@@ -240,6 +240,13 @@ def _run_valid_request(
     root_sampling = _optional_object(request, "root_sampling")
     subcall_sampling = _optional_object(request, "subcall_sampling")
     checkpoint_requirements = _checkpoint_requirements(request)
+    subcall_concurrency = _optional_integer(
+        request,
+        "subcall_concurrency",
+        default=DEFAULT_SUBCALL_CONCURRENCY,
+        positive=True,
+    )
+    assert subcall_concurrency is not None
 
     subcalls = HTTPSubcallClient(
         endpoint=subcall_endpoint,
@@ -250,6 +257,7 @@ def _run_valid_request(
         max_output_tokens=budget.subcall_output_tokens,
         model=subcall_model,
         reasoning_effort=subcall_reasoning_effort,
+        max_parallel=subcall_concurrency,
     )
 
     environment = create_environment(
@@ -283,7 +291,7 @@ def _run_valid_request(
                 if subcall_sampling is not None
                 else {"reasoning_effort": subcall_reasoning_effort or None}
             ),
-            concurrency=_optional_integer(request, "subcall_concurrency", default=1, positive=True),
+            concurrency=subcall_concurrency,
             seed=_optional_integer(request, "seed"),
             runner_protocol=RUNNER_PROTOCOL_VERSION,
             source_revision=_optional_text(request, "source_revision"),

@@ -382,7 +382,6 @@ def run_ask(args: argparse.Namespace) -> int:
             subcall_model=args.subcall_model or args.model or None,
             root_sampling={"reasoning_effort": args.reasoning_effort or None},
             subcall_sampling={"reasoning_effort": args.reasoning_effort or None},
-            concurrency=5,
         )
 
     try:
@@ -508,6 +507,7 @@ def run_ask(args: argparse.Namespace) -> int:
             api_key=creds.api_key,
             max_output_tokens=budget.subcall_output_tokens,
             reasoning_effort=args.reasoning_effort or "none",
+            max_parallel=rollout.concurrency,
         )
     elif provider == "anthropic":
         from droste import AnthropicClient, AnthropicSubcallClient
@@ -524,6 +524,7 @@ def run_ask(args: argparse.Namespace) -> int:
             context=exec_context,
             api_key=args.api_key,
             max_output_tokens=budget.subcall_output_tokens,
+            max_parallel=rollout.concurrency,
         )
     else:
         root = OpenAICompatClient(
@@ -539,6 +540,7 @@ def run_ask(args: argparse.Namespace) -> int:
             api_key=args.api_key,
             max_output_tokens=budget.subcall_output_tokens,
             reasoning_effort=args.reasoning_effort,
+            max_parallel=rollout.concurrency,
         )
 
     environment = create_environment(

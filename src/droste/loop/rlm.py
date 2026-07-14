@@ -7,6 +7,7 @@ from typing import Any
 from ..capabilities import CapabilityManifest
 from ..exceptions import PolicyError, RLMError
 from ..execution.budget import BudgetExhausted
+from ..execution.config import validate_subcall_concurrency
 from ..execution.context import ExecutionContext, create_execution_context
 from ..execution.manifest import (
     EngineIdentity,
@@ -89,6 +90,7 @@ _EXTRACT_SUMMARY_CHARS = 60000
 _EXTRACT_EMPTY_OUTPUT = "<empty stdout>"
 _EXTRACT_UNABLE = "unable to determine from the work so far"
 _UNKNOWN_OUTPUT_TOKEN_LIMIT = object()
+_UNKNOWN_SUBCALL_CONCURRENCY = object()
 
 
 ProgressCallback = Any
@@ -234,6 +236,16 @@ def _reported_output_token_limit(subcalls: SubcallClient) -> int | None | object
     if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
         return limit
     return _UNKNOWN_OUTPUT_TOKEN_LIMIT
+
+
+def _reported_subcall_concurrency(subcalls: SubcallClient) -> int | object:
+    """Read optional effective concurrency without making it a base protocol field."""
+
+    try:
+        concurrency = getattr(subcalls, "subcall_concurrency")
+    except AttributeError:
+        return _UNKNOWN_SUBCALL_CONCURRENCY
+    return validate_subcall_concurrency(concurrency)
 
 
 def _budget_prompt(cfg: "RLMConfig", subcalls: SubcallClient) -> str:
@@ -414,6 +426,15 @@ def run_rlm(
     consumer_prompt_catalog: PromptPackCatalog | None = None,
 ) -> RLMResult:
     cfg = config or RLMConfig()
+    reported_concurrency = _reported_subcall_concurrency(subcalls)
+    if (
+        reported_concurrency is not _UNKNOWN_SUBCALL_CONCURRENCY
+        and reported_concurrency != cfg.rollout.concurrency
+    ):
+        raise ValueError(
+            "rollout concurrency does not match the subcall client: "
+            f"{cfg.rollout.concurrency} != {reported_concurrency}"
+        )
     system_prompt_override = system_prompt
     requested_profile = cfg.prompt_profile or cfg.tips_profile or DEFAULT_PROMPT_PROFILE
     resolved_prompt_pack = resolve_prompt_pack(

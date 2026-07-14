@@ -50,3 +50,17 @@ class SubcallOutputTokenLimitProvider(Protocol):
     def output_token_limit(self) -> int | None:
         """Return the effective per-call output-token limit."""
         ...
+
+
+class SubcallConcurrencyProvider(Protocol):
+    """Optional read-only effective batch-concurrency metadata.
+
+    Built-in clients implement this companion protocol so the engine can
+    reject a rollout whose immutable provenance disagrees with the transport.
+    Existing third-party subcall clients remain compatible without it.
+    """
+
+    @property
+    def subcall_concurrency(self) -> int:
+        """Return the effective maximum number of in-flight batch items."""
+        ...

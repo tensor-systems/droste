@@ -34,6 +34,7 @@ from typing import Any
 
 from ..exceptions import BatchItemError, BatchItemErrorDetails
 from ..execution.budget import DEFAULT_SUBCALL_OUTPUT_TOKENS
+from ..execution.config import validate_subcall_concurrency
 from ..execution.context import ExecutionContext
 from ..protocols.llm_client import TokenUsage
 from ..protocols.subcall_client import SubcallClient
@@ -468,8 +469,7 @@ class ModelRelaySubcallClient(SubcallClient):
             raise ValueError("api_key is required (run `droste login`)")
         if max_output_tokens < 0:
             raise ValueError("max_output_tokens must be >= 0 (0 disables the bound)")
-        if max_parallel < 1:
-            raise ValueError("max_parallel must be >= 1")
+        resolved_concurrency = validate_subcall_concurrency(max_parallel)
         self._transport = _ResponsesTransport(
             base_url=base_url, api_key=api_key, timeout=timeout, label="llm_query"
         )
@@ -478,7 +478,7 @@ class ModelRelaySubcallClient(SubcallClient):
         self._max_output_tokens = int(max_output_tokens)
         self._temperature = temperature
         self._reasoning_effort = str(reasoning_effort or "")
-        self._max_parallel = int(max_parallel)
+        self._max_parallel = resolved_concurrency
         self._lock = threading.Lock()
         self._total_usage = TokenUsage(0, 0, 0)
 
@@ -486,6 +486,11 @@ class ModelRelaySubcallClient(SubcallClient):
     def output_token_limit(self) -> int | None:
         """Effective maximum output tokens for each subcall, or no limit."""
         return self._max_output_tokens or None
+
+    @property
+    def subcall_concurrency(self) -> int:
+        """Effective maximum number of in-flight batch items."""
+        return self._max_parallel
 
     @property
     def total_usage(self) -> TokenUsage:

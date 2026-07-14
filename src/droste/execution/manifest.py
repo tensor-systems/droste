@@ -20,7 +20,7 @@ from ..prompts.pack import (
     prompt_pack_content_sha256,
 )
 from .budget import Budget
-from .config import SandboxLimits
+from .config import DEFAULT_SUBCALL_CONCURRENCY, SandboxLimits, validate_subcall_concurrency
 from .trace import TRACE_ABI_VERSION
 
 SCAFFOLD_MANIFEST_VERSION = 1
@@ -319,7 +319,7 @@ class RolloutConfiguration:
     subcall_revision: str | None = None
     root_sampling: Mapping[str, Any] = field(default_factory=dict)
     subcall_sampling: Mapping[str, Any] = field(default_factory=dict)
-    concurrency: int = 1
+    concurrency: int = DEFAULT_SUBCALL_CONCURRENCY
     seed: int | None = None
     runner_protocol: int | None = None
     source_revision: str | None = None
@@ -329,10 +329,7 @@ class RolloutConfiguration:
             value = getattr(self, name)
             if value is not None and (not isinstance(value, str) or not value):
                 raise ValueError(f"rollout {name} must be a non-empty string")
-        if isinstance(self.concurrency, bool) or not isinstance(self.concurrency, int):
-            raise TypeError("rollout concurrency must be an integer")
-        if self.concurrency < 1:
-            raise ValueError("rollout concurrency must be positive")
+        validate_subcall_concurrency(self.concurrency)
         for name in ("seed", "runner_protocol"):
             value = getattr(self, name)
             if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
