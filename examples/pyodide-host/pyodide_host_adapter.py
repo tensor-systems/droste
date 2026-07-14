@@ -137,6 +137,9 @@ def run_for_host_pyodide(
         context=None,
         registry=registry,
         subcalls=subcalls,
+        capability_run_id=exec_context.trace.run_id,
+        capability_parent_run_id=exec_context.trace.parent_run_id,
+        capability_observer=exec_context.observe_capability,
     )
 
     config = RLMConfig(

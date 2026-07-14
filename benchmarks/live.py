@@ -415,6 +415,9 @@ def _droste_run(
         },
         registry=None,
         subcalls=subcalls,
+        capability_run_id=execution_context.trace.run_id,
+        capability_parent_run_id=execution_context.trace.parent_run_id,
+        capability_observer=execution_context.observe_capability,
     )
     semantic = task.get("answer_type") != "ANSWER_TYPE.USER"
     if semantic:

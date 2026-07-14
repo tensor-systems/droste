@@ -83,11 +83,35 @@ class HTTPSubcallClient(SubcallClient):
         with self._seq_lock:
             if self._max_calls >= 0 and self._context.stats.calls_made >= self._max_calls:
                 raise SubcallBudgetExceeded("max subcalls exceeded")
-            self._context.stats.calls_made += 1
+            self._context.record_subcall_attempts()
 
     def _increment_successful_calls(self) -> None:
         with self._seq_lock:
-            self._context.stats.successful_calls += 1
+            self._context.record_subcall_successes()
+
+    def _record_usage(self, payload: object) -> None:
+        if not isinstance(payload, dict):
+            return
+
+        def _token_count(name: str) -> int:
+            value = payload.get(name, 0)
+            return (
+                value
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                else 0
+            )
+
+        input_tokens = _token_count("input_tokens")
+        output_tokens = _token_count("output_tokens")
+        total_tokens = _token_count("total_tokens") or input_tokens + output_tokens
+        with self._seq_lock:
+            self._context.record_subcall_usage(
+                TokenUsage(
+                    prompt_tokens=input_tokens,
+                    completion_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                )
+            )
 
     def _request(self, payload: dict[str, Any]) -> str:
         body = json.dumps(payload).encode("utf-8")
@@ -111,12 +135,14 @@ class HTTPSubcallClient(SubcallClient):
                     result = data.get("result")
                     if not isinstance(result, str):
                         raise RuntimeError("missing subcall result")
+                    self._record_usage(data.get("usage"))
                     return result
 
                 parts: list[str] = []
                 completed = False
                 completion_has_content = False
                 completion_content = ""
+                completion_usage: object = None
                 for raw_line in resp:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line:
@@ -139,11 +165,13 @@ class HTTPSubcallClient(SubcallClient):
                             parts.append(str(delta))
                     elif event_type == "completion":
                         completed = True
+                        completion_usage = event.get("usage")
                         if isinstance(event.get("content"), str):
                             completion_has_content = True
                             completion_content = event["content"]
                 if not completed:
                     raise RuntimeError("llm_query stream ended without a completion event")
+                self._record_usage(completion_usage)
                 return completion_content if completion_has_content else "".join(parts)
         except urllib.error.HTTPError as exc:
             status = getattr(exc, "code", 0)

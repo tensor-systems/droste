@@ -17,6 +17,7 @@ from droste.execution.progress import (
     progress_event,
     render_verbose,
 )
+from droste.execution.trace import PERSISTENCE_BY_TYPE, TraceRecorder
 from droste.protocols.llm_client import TokenUsage
 from droste.substrates import relay_dir
 from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
@@ -36,6 +37,17 @@ def test_python_vocabulary_matches_relay_events_ts() -> None:
     assert match, "events.ts RLM_EVENT_TYPES set literal not found"
     ts_names = set(re.findall(r'"([a-z_]+)"', match.group(1)))
     assert ts_names == EVENT_TYPES
+
+    map_match = re.search(
+        r"export const PERSISTENCE_BY_TYPE:.*?= \{(.*?)\};",
+        ts,
+        re.S,
+    )
+    assert map_match, "events.ts PERSISTENCE_BY_TYPE object literal not found"
+    ts_persistence = dict(re.findall(r'^\s*([a-z_]+): "([a-z]+)"', map_match.group(1), re.M))
+    assert ts_persistence == {
+        event_type: persistence.value for event_type, persistence in PERSISTENCE_BY_TYPE.items()
+    }
 
 
 def test_unknown_event_type_fails_loudly() -> None:
@@ -80,23 +92,37 @@ def test_run_rlm_event_stream_through_attached_sink() -> None:
     assert result.ready
     assert [e["type"] for e in events] == [
         "iteration_start",
+        "progress",
         "llm_response",
+        "progress",
         "code",
         "output",
+        "usage",
+        "budget",
+        "policy",
+        "result",
+        "done",
     ]
     assert all(e["type"] in EVENT_TYPES for e in events)
-    output = events[-1]
+    assert [e["seq"] for e in events] == list(range(1, len(events) + 1))
+    assert all(e["run_id"] == result.run_record.run_id for e in events)
+    output = next(e for e in events if e["type"] == "output")
     assert output["calls_made"] == 0
     assert output["answer_ready"] is True
     assert output["answer_content_chars"] == len("ok")
 
 
 def test_render_verbose_projects_the_trace_view() -> None:
-    banner = render_verbose(progress_event("Iteration 1/5: Generating code..."))
+    recorder = TraceRecorder(run_id="render-test")
+    banner = render_verbose(
+        recorder.append(progress_event("Iteration 1/5: Generating code...")).as_dict()
+    )
     assert banner is not None and "=" * 60 in banner and "Iteration 1/5" in banner
 
     rendered = render_verbose(
-        output_event(1, "42\n", calls_made=3, answer_ready=True, answer_content_chars=2)
+        recorder.append(
+            output_event(1, "42\n", calls_made=3, answer_ready=True, answer_content_chars=2)
+        ).as_dict()
     )
     assert rendered is not None
     assert "Output:\n42" in rendered
@@ -105,8 +131,13 @@ def test_render_verbose_projects_the_trace_view() -> None:
     assert "answer['content'] length: 2 chars" in rendered
 
     # Events the trace view does not show project to None.
-    assert render_verbose({"type": "startup", "engine_version": "x"}) is None
-    assert render_verbose({"type": "reasoning_delta", "text": "t"}) is None
+    assert (
+        render_verbose(recorder.append({"type": "startup", "engine_version": "x"}).as_dict())
+        is None
+    )
+    assert (
+        render_verbose(recorder.append({"type": "reasoning_delta", "text": "t"}).as_dict()) is None
+    )
 
 
 def test_output_event_reports_post_gate_readiness() -> None:

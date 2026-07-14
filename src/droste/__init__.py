@@ -40,6 +40,15 @@ from .execution.config import (
 from .execution.context import ExecutionContext, create_execution_context
 from .execution.progress import ProgressCallback, emit_progress
 from .execution.stats import ExecutionStats
+from .execution.trace import (
+    TRACE_ABI_VERSION,
+    DataUseAuthorization,
+    PersistenceClass,
+    RunEvent,
+    RunRecord,
+    TraceRetentionPolicy,
+    parse_event,
+)
 from .loop.code_extractor import extract_code_block
 from .loop.rlm import RLMConfig, RLMResult, run_rlm
 from .policy import PolicyHints
@@ -133,4 +142,11 @@ __all__ = [
     "SideEffect",
     "generate_binding",
     "validate_call",
+    "TRACE_ABI_VERSION",
+    "DataUseAuthorization",
+    "PersistenceClass",
+    "RunEvent",
+    "RunRecord",
+    "TraceRetentionPolicy",
+    "parse_event",
 ]

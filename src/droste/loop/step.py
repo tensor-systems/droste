@@ -23,6 +23,13 @@ from ..execution.config import (
 )
 from ..execution.context import ExecutionContext
 from ..execution.progress import execution_error_event, output_event
+from ..execution.report import project_result
+from ..execution.trace import (
+    DataUseAuthorization,
+    RunRecord,
+    RunRecordCallback,
+    TraceRetentionPolicy,
+)
 from ..policy import PolicyHints, contract_violations, ready_violations
 from ..prompts.pack import PromptPackRecord
 from ..protocols.environment import ExecutionResult, RLMEnvironment
@@ -64,6 +71,12 @@ class RLMConfig:
     # None delegates to the resolved pack's immutable policy default.
     enforce_contract: bool | None = None
     policy_hints: PolicyHints | None = None
+    trace_retention: TraceRetentionPolicy = field(default_factory=TraceRetentionPolicy)
+    data_use: DataUseAuthorization = field(default_factory=DataUseAuthorization)
+    run_id: str | None = None
+    parent_run_id: str | None = None
+    trace_depth: int | None = None
+    on_run_record: RunRecordCallback | None = None
 
 
 @dataclass
@@ -101,6 +114,8 @@ class RLMResult:
     answer_metadata: dict[str, Any] = field(default_factory=dict)
     # Identity and provenance of the one immutable pack resolved at run start.
     prompt_pack: PromptPackRecord | None = None
+    # Policy-resolved terminal Trace ABI value.
+    run_record: RunRecord | None = None
 
 
 @dataclass
@@ -412,11 +427,12 @@ def call_root(
     Returns ``(response, usage, None)`` on success or ``("", None, error)`` —
     a root failure always ends the run, so the caller finalizes immediately.
     """
+    context.record_root_attempt()
     try:
         response, usage = root_llm.responses_create(messages, model=model, return_usage=True)
     except Exception as exc:
         return "", None, RLMError(type=exc.__class__.__name__, message=str(exc))
-    context.stats.total_tokens += total_tokens_from_usage(usage)
+    context.record_root_success(usage)
     return response, usage, None
 
 
@@ -564,9 +580,10 @@ def finalize(
     recovered_error: RLMError | None = None,
     answer_metadata: dict[str, Any] | None = None,
     prompt_pack: PromptPackRecord | None = None,
+    config: RLMConfig | None = None,
 ) -> RLMResult:
-    """The one RLMResult construction site."""
-    return RLMResult(
+    """The one RLMResult and terminal RunRecord construction site."""
+    result = RLMResult(
         answer=answer_text,
         ready=bool(answer.get("ready")),
         iterations=iterations,
@@ -581,3 +598,89 @@ def finalize(
         answer_metadata=answer_metadata if answer.get("ready") and answer_metadata else {},
         prompt_pack=prompt_pack,
     )
+    cfg = config or RLMConfig(
+        max_iterations=context.max_iterations,
+        max_depth=context.max_depth,
+        max_calls=context.max_calls,
+        max_output_chars=context.max_output_chars,
+    )
+    usage = context.stats.resolved_usage(context.trace.elapsed_ms()).as_dict()
+    budget = {
+        "kind": "snapshot",
+        "source": "legacy_execution_stats",
+        "configured": {
+            "iterations": cfg.max_iterations,
+            "subcalls": cfg.max_calls,
+            "depth": cfg.max_depth,
+            "output_chars": cfg.max_output_chars,
+        },
+        "consumed": {
+            "iterations": result.iterations,
+            "subcalls": result.sub_calls_made,
+        },
+        "remaining": {
+            "iterations": max(0, cfg.max_iterations - result.iterations),
+            "subcalls": max(0, cfg.max_calls - result.sub_calls_made),
+        },
+    }
+    observed_errors = (result.error, result.extract_error, result.recovered_error)
+    policy_violation = next(
+        (value for value in observed_errors if value is not None and value.type == "PolicyError"),
+        None,
+    )
+    if not cfg.enforce_contract:
+        policy_outcome = "not_enforced"
+    elif policy_violation is not None:
+        policy_outcome = "violated"
+    elif any(value is not None for value in observed_errors):
+        policy_outcome = "not_evaluated"
+    else:
+        policy_outcome = "passed"
+    policy = {
+        "contract_enforced": bool(cfg.enforce_contract),
+        "outcome": policy_outcome,
+        "violation_type": policy_violation.type if policy_violation is not None else None,
+    }
+    context.emit_event({"type": "usage", **usage})
+    context.emit_event({"type": "budget", **budget})
+    context.emit_event({"type": "policy", **policy})
+    # The live stream always receives one canonical unary-equivalent result.
+    # Retention controls storage only; it must never suppress live delivery.
+    canonical_result = project_result(result, include_trajectory=False)
+    canonical_result.pop("run_record")
+    context.emit_event({"type": "result", "result": canonical_result})
+    # Full replay/trajectory content is retained and delivered only when a host
+    # explicitly selects it.
+    if "replay" in context.trace.retention.retain:
+        replay = project_result(result, include_trajectory=True)
+        replay.pop("run_record")
+        context.emit_event({"type": "replay", "result": replay})
+
+    def terminal_error(value: RLMError | None) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        # RLMError.code is executed source code, not a stable machine code.
+        # Terminal errors therefore carry type only; all content stays in the
+        # configurable replay value.
+        return {"type": value.type}
+
+    terminal = {
+        "status": (
+            "success" if result.error is None and (result.ready or result.extracted) else "error"
+        ),
+        "ready": result.ready,
+        "extracted": result.extracted,
+        "iterations": result.iterations,
+        "usage": usage,
+        "budget": budget,
+        "policy": policy,
+        "retention": {
+            **context.trace.retention.as_dict(),
+            "replay_retained": "replay" in context.trace.retention.retain,
+        },
+        "error": terminal_error(result.error),
+        "extract_error": terminal_error(result.extract_error),
+        "recovered_error": terminal_error(result.recovered_error),
+    }
+    result.run_record = context.finish_trace(terminal)
+    return result

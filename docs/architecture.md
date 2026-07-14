@@ -162,10 +162,15 @@ HTTP clients, remote source transport, envelope helpers, and orchestration in
 second implementation. Both successful and refused envelopes are shaped by
 `protocol.build_response`, so their shared fields cannot drift.
 
+Completed responses also carry the policy-resolved
+[Trace ABI v1](trace-abi.md) `run_record`. Live events and terminal records use
+the same strict envelope and projection. Persistence remains a host I/O
+decision; the engine never opens a trace store.
+
 **Compatibility window**: the request/response schema and the source
 protocol are versioned, each by a single integer:
 
-- `RUNNER_PROTOCOL_VERSION` (currently 1) governs the request/response
+- `RUNNER_PROTOCOL_VERSION` (currently 2) governs the request/response
   envelope. Every request **must** carry `protocol_version` — requests are
   self-describing, the same discipline as JSON-RPC's mandatory `"jsonrpc"`
   field. A missing or mismatched version is answered with a structured

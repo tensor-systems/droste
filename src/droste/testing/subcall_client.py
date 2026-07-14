@@ -26,7 +26,7 @@ class MockSubcallClient(SubcallClient):
                 return
             if context.max_calls >= 0 and context.stats.calls_made + count > context.max_calls:
                 raise SubcallBudgetExceeded("max subcalls exceeded")
-            context.stats.calls_made += count
+            context.record_subcall_attempts(count)
 
     def llm_query(self, prompt: str, context: str = "") -> str:
         self._account_attempts(1)

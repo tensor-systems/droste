@@ -11,10 +11,12 @@ from ..execution.progress import (
     finalization_error_event,
     iteration_start_event,
     llm_response_event,
+    repair_event,
 )
 from ..execution.progress import (
     code_event as build_code_event,
 )
+from ..execution.trace import DataUseAuthorization, TraceRetentionPolicy
 from ..prompts.pack import (
     CODE_OUTPUT_CONTRACT,
     DEFAULT_PROMPT_PROFILE,
@@ -28,7 +30,7 @@ from ..prompts.pack import (
     resolve_prompt_pack,
 )
 from ..protocols.environment import RLMEnvironment
-from ..protocols.llm_client import LLMClient, total_tokens_from_usage
+from ..protocols.llm_client import LLMClient
 from ..protocols.subcall_client import SubcallClient
 from ..protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest
 from ..structured import _StructuredBatchEvidence, aggregate_json_counts, bind_structured_batch
@@ -120,6 +122,36 @@ class _SubcallGate:
     def block(self) -> None:
         """Permanently revoke this run's model-visible subcall bindings."""
         self._blocked = True
+
+
+def _validate_existing_context_trace(cfg: RLMConfig, context: ExecutionContext) -> None:
+    """An injected context owns trace identity/policy; reject explicit conflicts.
+
+    Contexts carry shared accounting and may already contain events, so changing
+    their recorder at run start would splice two identities into one sequence.
+    Default RLMConfig trace values mean "use the context's value".
+    """
+    conflicts: list[str] = []
+    if cfg.run_id is not None and cfg.run_id != context.trace.run_id:
+        conflicts.append("run_id")
+    if cfg.parent_run_id is not None and cfg.parent_run_id != context.trace.parent_run_id:
+        conflicts.append("parent_run_id")
+    if cfg.trace_depth is not None and cfg.trace_depth != context.trace.depth:
+        conflicts.append("trace_depth")
+    if (
+        cfg.trace_retention != TraceRetentionPolicy()
+        and cfg.trace_retention != context.trace.retention
+    ):
+        conflicts.append("trace_retention")
+    if cfg.data_use != DataUseAuthorization() and cfg.data_use != context.trace.data_use:
+        conflicts.append("data_use")
+    if cfg.on_run_record is not None and cfg.on_run_record is not context.config.on_run_record:
+        conflicts.append("on_run_record")
+    if conflicts:
+        raise ValueError(
+            "an injected ExecutionContext owns trace settings; conflicting RLMConfig fields: "
+            + ", ".join(conflicts)
+        )
 
 
 def _accessor_manifest(environment: RLMEnvironment) -> AccessorManifest:
@@ -302,12 +334,13 @@ def _extract_final_answer(
                 "content": render_prompt_template(prompt_pack.templates.extract_user, slots),
             },
         ]
+        context.record_root_attempt()
         response, usage = root_llm.responses_create(
             messages,
             model=cfg.root_model or "",
             return_usage=True,
         )
-        context.stats.total_tokens += total_tokens_from_usage(usage)
+        context.record_root_success(usage)
         text = str(response).strip()
         if not text:
             return "", RLMError(type="EmptyExtraction", message="extract call returned empty text")
@@ -364,7 +397,15 @@ def run_rlm(
             # None -> NO emission (#35). Embedders that want the NDJSON
             # stderr stream attach droste.execution.progress.emit_event.
             on_event=on_event,
+            on_run_record=cfg.on_run_record,
+            run_id=cfg.run_id,
+            parent_run_id=cfg.parent_run_id,
+            trace_depth=cfg.trace_depth if cfg.trace_depth is not None else 0,
+            trace_retention=cfg.trace_retention,
+            data_use=cfg.data_use,
         )
+    else:
+        _validate_existing_context_trace(cfg, context)
     bind_context = getattr(subcalls, "bind_context", None)
     if callable(bind_context):
         bind_context(context)
@@ -480,6 +521,7 @@ def run_rlm(
             error=run_error,
             answer_metadata=answer_metadata,
             prompt_pack=prompt_pack_record,
+            config=cfg,
         )
 
     try:
@@ -532,6 +574,7 @@ def run_rlm(
                     repair_messages = build_missing_code_repair_messages(
                         messages, response, repair_prompt=missing_code_prompt
                     )
+                    context.emit_event(repair_event(iterations, "missing_code"))
                     repair_response, repair_usage, root_error = call_root(
                         root_llm, repair_messages, model=cfg.root_model or "", context=context
                     )
@@ -565,6 +608,7 @@ def run_rlm(
                         error=None,
                         answer_metadata=answer_metadata,
                         prompt_pack=prompt_pack_record,
+                        config=cfg,
                     )
 
             context.emit_progress(f"Iteration {iterations}/{cfg.max_iterations}: Executing...")
@@ -630,6 +674,13 @@ def run_rlm(
                 code,
                 outcome.exception,
                 repair_prompt=error_repair_prompt,
+            )
+            context.emit_event(
+                repair_event(
+                    iterations,
+                    "execution_error",
+                    error_type=outcome.error.type if outcome.error is not None else None,
+                )
             )
             repair_response, repair_usage, root_error = call_root(
                 root_llm, repair_messages, model=cfg.root_model or "", context=context
@@ -832,6 +883,7 @@ def run_rlm(
             recovered_error=recovered_error,
             answer_metadata=answer_metadata,
             prompt_pack=prompt_pack_record,
+            config=cfg,
         )
     finally:
         environment.close()

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .progress import EventCallback, ProgressCallback
+from .trace import RunRecordCallback
 
 DEFAULT_MAX_OUTPUT_CHARS = 25000
 DEFAULT_MAX_DEPTH = 1
@@ -30,3 +31,6 @@ class ExecutionConfig:
     # attach a sink explicitly (droste_runner/relay: the stderr NDJSON sink
     # droste.execution.progress.emit_event). Independent of on_progress.
     on_event: EventCallback | None = None
+    # Optional host I/O shell. Droste supplies the policy-resolved immutable
+    # value; the callback decides whether and where to persist it.
+    on_run_record: RunRecordCallback | None = None

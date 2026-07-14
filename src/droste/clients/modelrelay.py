@@ -468,11 +468,11 @@ class ModelRelaySubcallClient(SubcallClient):
                 raise ValueError("subcall count must be non-negative")
             if self._max_calls >= 0 and self._context.stats.calls_made + count > self._max_calls:
                 raise SubcallBudgetExceeded("max subcalls exceeded")
-            self._context.stats.calls_made += count
+            self._context.record_subcall_attempts(count)
 
     def _account_usage(self, usage: TokenUsage) -> None:
         with self._lock:
-            self._context.stats.total_tokens += usage.total_tokens
+            self._context.record_subcall_usage(usage)
             self._total_usage = TokenUsage(
                 self._total_usage.prompt_tokens + usage.prompt_tokens,
                 self._total_usage.completion_tokens + usage.completion_tokens,
@@ -481,7 +481,7 @@ class ModelRelaySubcallClient(SubcallClient):
 
     def _increment_successful_calls(self, count: int = 1) -> None:
         with self._lock:
-            self._context.stats.successful_calls += count
+            self._context.record_subcall_successes(count)
 
     def llm_query(self, prompt: str, context: str = "") -> str:
         if context:

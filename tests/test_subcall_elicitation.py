@@ -321,7 +321,7 @@ def test_runner_omitted_budgets_use_core_defaults_and_allow_subcalls() -> None:
     try:
         response = run(
             {
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "model": "test-model",
                 "question": "q",
                 # max_iterations and max_subcalls deliberately omitted
@@ -381,7 +381,7 @@ def test_runner_explicit_zero_subcalls_is_honored() -> None:
     try:
         response = run(
             {
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "model": "test-model",
                 "question": "q",
                 "max_iterations": 2,
@@ -881,13 +881,11 @@ answer['ready'] = True
     assert result.error.type == "PolicyError"
     assert result.error.details is not None
     assert result.error.details["reason"] == "semantic_exact_retry_budget_exhausted"
-    assert [event for event in events if event["type"] == "finalization_error"] == [
-        {
-            "type": "finalization_error",
-            "error_type": "RuntimeError",
-            "message": "terminal request failed",
-        }
-    ]
+    finalization_events = [event for event in events if event["type"] == "finalization_error"]
+    assert len(finalization_events) == 1
+    assert finalization_events[0]["error_type"] == "RuntimeError"
+    assert finalization_events[0]["message"] == "terminal request failed"
+    assert finalization_events[0]["depth"] == 0
 
 
 def test_terminal_finalization_blocks_saved_subcall_aliases_without_accounting() -> None:

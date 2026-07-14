@@ -404,15 +404,15 @@ class AnthropicSubcallClient(SubcallClient):
         with self._lock:
             if self._max_calls >= 0 and self._context.stats.calls_made >= self._max_calls:
                 raise SubcallBudgetExceeded("max subcalls exceeded")
-            self._context.stats.calls_made += 1
+            self._context.record_subcall_attempts()
 
     def _account_usage(self, usage: TokenUsage) -> None:
         with self._lock:
-            self._context.stats.total_tokens += usage.total_tokens
+            self._context.record_subcall_usage(usage)
 
     def _increment_successful_calls(self) -> None:
         with self._lock:
-            self._context.stats.successful_calls += 1
+            self._context.record_subcall_successes()
 
     def llm_query(self, prompt: str, context: str = "") -> str:
         if context:
