@@ -138,4 +138,6 @@ partial combinations.
 Every `RLMResult` carries a frozen `PromptPackRecord` with pack ID, revision,
 canonical `content_sha256`, profile, resolution tier, model family, and safe
 benchmark provenance. The built-in runner and CLI JSON expose that record as
-`prompt_pack`. It is an additive result field, not a new trace protocol.
+`prompt_pack`. The same canonical digest participates in the
+[scaffold manifest](scaffold-manifest.md), with the manifest's standard
+`sha256:` prefix; a revision label cannot conceal a content change.

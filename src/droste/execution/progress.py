@@ -83,6 +83,7 @@ def output_event(
     calls_made: int,
     answer_ready: bool,
     answer_content_chars: int,
+    stdout_chars: int | None = None,
 ) -> dict[str, Any]:
     return {
         "type": "output",
@@ -91,6 +92,7 @@ def output_event(
         "calls_made": calls_made,
         "answer_ready": answer_ready,
         "answer_content_chars": answer_content_chars,
+        "stdout_chars": len(stdout) if stdout_chars is None else stdout_chars,
     }
 
 

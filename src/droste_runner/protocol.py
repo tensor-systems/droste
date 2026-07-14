@@ -44,6 +44,8 @@ def build_response(
         "extract_error": None,
         "recovered_error": None,
         "prompt_pack": None,
+        "scaffold_manifest": None,
+        "stdout_chars": 0,
         "run_record": None,
         "run_id": None,
         "status": status or "error",

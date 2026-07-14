@@ -66,6 +66,8 @@ EVENT_BODY_SCHEMAS: Mapping[str, EventBodySchema] = MappingProxyType(
             {
                 "runner_protocol": (int, _NONE_TYPE),
                 "provider_protocol": (int, _NONE_TYPE),
+                "scaffold_manifest_id": str,
+                "scaffold_manifest_version": int,
             },
         ),
         "progress": ({"status": str}, {}),
@@ -80,7 +82,7 @@ EVENT_BODY_SCHEMAS: Mapping[str, EventBodySchema] = MappingProxyType(
                 "answer_ready": bool,
                 "answer_content_chars": int,
             },
-            {},
+            {"stdout_chars": int},
         ),
         "execution_error": (
             {"iteration": int, "error_type": str, "message": str},
@@ -137,7 +139,11 @@ EVENT_BODY_SCHEMAS: Mapping[str, EventBodySchema] = MappingProxyType(
                 "extract_error": (Mapping, _NONE_TYPE),
                 "recovered_error": (Mapping, _NONE_TYPE),
             },
-            {},
+            {
+                "scaffold_manifest_id": (str, _NONE_TYPE),
+                "scaffold_manifest_version": (int, _NONE_TYPE),
+                "stdout_chars": int,
+            },
         ),
     }
 )
@@ -251,8 +257,17 @@ def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
         if not body["source"]:
             raise ValueError("budget source must not be empty")
     elif event_type == "result":
+        raw_result = body["result"]
+        if not isinstance(raw_result, Mapping):
+            raise TypeError("result.result must be an object")
+        scaffold_manifest = raw_result.get("scaffold_manifest")
+        stdout_chars = raw_result.get("stdout_chars", 0)
         result = _require_exact_mapping(
-            body["result"],
+            {
+                key: value
+                for key, value in raw_result.items()
+                if key not in {"scaffold_manifest", "stdout_chars"}
+            },
             name="result.result",
             fields={
                 "answer": str,
@@ -279,6 +294,16 @@ def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
             raise ValueError("result counts must be non-negative")
         if result["successful_subcalls"] > result["subcalls"]:
             raise ValueError("result successful_subcalls cannot exceed subcalls")
+        if isinstance(stdout_chars, bool) or not isinstance(stdout_chars, int) or stdout_chars < 0:
+            raise ValueError("result stdout_chars must be a non-negative integer")
+        if scaffold_manifest is not None:
+            if not isinstance(scaffold_manifest, Mapping):
+                raise TypeError("result.result.scaffold_manifest must be an object or null")
+            # Reuse the manifest's one closed-schema/canonical-ID parser rather
+            # than maintaining a weaker second validator in the trace layer.
+            from .manifest import ScaffoldManifest
+
+            ScaffoldManifest.from_dict(scaffold_manifest)
     elif event_type == "policy":
         if body["outcome"] not in {"passed", "violated", "not_evaluated", "not_enforced"}:
             raise ValueError("policy outcome is not recognized by Trace ABI v1")
@@ -287,6 +312,11 @@ def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
             raise ValueError("done status is not recognized by Trace ABI v1")
         if body["iterations"] < 0:
             raise ValueError("done iterations must be non-negative")
+        stdout_chars = body.get("stdout_chars")
+        if stdout_chars is not None and (
+            isinstance(stdout_chars, bool) or not isinstance(stdout_chars, int) or stdout_chars < 0
+        ):
+            raise ValueError("done stdout_chars must be a non-negative integer")
         validate_event_body("usage", body["usage"])
         validate_event_body("budget", body["budget"])
         validate_event_body("policy", body["policy"])

@@ -91,6 +91,7 @@ def test_run_rlm_event_stream_through_attached_sink() -> None:
     )
     assert result.ready
     assert [e["type"] for e in events] == [
+        "startup",
         "iteration_start",
         "progress",
         "budget",
@@ -113,6 +114,11 @@ def test_run_rlm_event_stream_through_attached_sink() -> None:
     assert all(e["run_id"] == result.run_record.run_id for e in events)
     output = next(e for e in events if e["type"] == "output")
     assert output["calls_made"] == 0
+    assert output["stdout_chars"] == len(output["stdout"])
+    assert "stdout_truncated" not in output
+    startup = events[0]
+    assert startup["scaffold_manifest_id"] == result.scaffold_manifest.manifest_id
+    assert startup["scaffold_manifest_version"] == 1
     assert output["answer_ready"] is True
     assert output["answer_content_chars"] == len("ok")
 

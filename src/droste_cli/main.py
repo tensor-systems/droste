@@ -48,6 +48,7 @@ from droste import (
     OpenAICompatSubcallClient,
     ProviderCatalog,
     RLMConfig,
+    RolloutConfiguration,
     create_environment,
     create_environment_context,
     run_rlm,
@@ -124,6 +125,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--subcall-model", default="", help="model for llm_query subcalls (default: --model)"
+    )
+    parser.add_argument(
+        "--prompt-profile",
+        default="",
+        help="versioned prompt-pack profile (default: full)",
+    )
+    parser.add_argument(
+        "--rollout-config",
+        default="",
+        metavar="JSON",
+        help="resolved rollout identity JSON for reproducible eval/training harnesses",
     )
     parser.add_argument(
         "--subcall-output-tokens",
@@ -355,6 +367,24 @@ def run_ask(args: argparse.Namespace) -> int:
     if args.max_file_bytes < 1:
         raise CLIError("--max-file-bytes must be >= 1")
 
+    if args.rollout_config:
+        try:
+            raw_rollout = json.loads(args.rollout_config)
+            if not isinstance(raw_rollout, dict):
+                raise ValueError("must be an object")
+            rollout = RolloutConfiguration.from_dict(raw_rollout)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise CLIError(
+                f"--rollout-config must be valid RolloutConfiguration JSON: {exc}"
+            ) from exc
+    else:
+        rollout = RolloutConfiguration(
+            subcall_model=args.subcall_model or args.model or None,
+            root_sampling={"reasoning_effort": args.reasoning_effort or None},
+            subcall_sampling={"reasoning_effort": args.reasoning_effort or None},
+            concurrency=5,
+        )
+
     try:
         classified = classify(args.inputs, stdin_is_tty=sys.stdin is None or sys.stdin.isatty())
         # Implicit stdin is consumed only when nothing else provides data —
@@ -526,6 +556,8 @@ def run_ask(args: argparse.Namespace) -> int:
         budget=budget,
         sandbox=environment_config.sandbox,
         root_model=args.model,
+        prompt_profile=args.prompt_profile or None,
+        rollout=rollout,
         # The full loop dump (code, outputs, responses) is --trace, rendered
         # by the _trace_sink above from structured events; the core no longer
         # reads config.verbose (#35).

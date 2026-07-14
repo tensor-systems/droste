@@ -174,3 +174,49 @@ def test_version_gate_runs_before_adapter_dispatch() -> None:
         sys.modules.pop(module_name, None)
     assert result["error"]["type"] == "protocol_version_mismatch"
     assert calls == []
+
+
+def _manifest_request(**overrides: object) -> dict[str, object]:
+    request: dict[str, object] = {
+        "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
+        "model": "root-model",
+        "question": "q",
+        "budget": Budget().as_dict(),
+        "token": "unused",
+        "root_endpoint": "http://127.0.0.1:1/root",
+        "subcall_endpoint": "http://127.0.0.1:1/subcall",
+    }
+    request.update(overrides)
+    return request
+
+
+def test_manifest_objects_refuse_malformed_runner_values() -> None:
+    import pytest
+
+    for name in (
+        "root_sampling",
+        "subcall_sampling",
+        "checkpoint_scaffold_requirements",
+    ):
+        with pytest.raises(ValueError, match=rf"request\.{name} must be an object"):
+            runner.run(_manifest_request(**{name: []}))
+
+
+def test_checkpoint_requirements_refuse_unknown_and_malformed_fields() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown fields: host_metadata"):
+        runner.run(_manifest_request(checkpoint_scaffold_requirements={"host_metadata": {}}))
+    with pytest.raises(ValueError, match="required must be an object"):
+        runner.run(_manifest_request(checkpoint_scaffold_requirements={"required": []}))
+
+
+def test_resolved_rollout_identity_fields_are_not_coerced() -> None:
+    import pytest
+
+    for name in ("root_model_revision", "subcall_model_revision", "source_revision"):
+        with pytest.raises(ValueError, match=rf"request\.{name}"):
+            runner.run(_manifest_request(**{name: 7}))
+    for name, value in (("seed", 1.5), ("subcall_concurrency", True)):
+        with pytest.raises(ValueError, match=rf"request\.{name}"):
+            runner.run(_manifest_request(**{name: value}))

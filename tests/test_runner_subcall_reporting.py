@@ -92,6 +92,14 @@ def test_run_reports_actual_subcall_count() -> None:
                 "training_allowed": True,
                 "data_use_authorization_ref": "consent://trace/1",
                 "data_use_purposes": ["training"],
+                "root_model_revision": "root-rev",
+                "subcall_model": "leaf-model",
+                "subcall_model_revision": "leaf-rev",
+                "root_sampling": {"temperature": 0.25},
+                "subcall_sampling": {"temperature": 0},
+                "subcall_concurrency": 2,
+                "seed": 17,
+                "source_revision": "commit-a",
             }
         )
     finally:
@@ -106,6 +114,20 @@ def test_run_reports_actual_subcall_count() -> None:
     assert response["extracted"] is False
     assert response["recovered_error"] is None
     assert response["answer_metadata"] == {"evidence_ids": ["classification-1"]}
+    assert "stdout_truncations" not in response
+    manifest = response["scaffold_manifest"]
+    assert manifest["inference"] == {
+        "root": {"id": "test-model", "revision": "root-rev"},
+        "subcall": {"id": "leaf-model", "revision": "leaf-rev"},
+        "root_sampling": {"temperature": 0.25},
+        "subcall_sampling": {"temperature": 0},
+        "output_limits": {"root_tokens": 4096, "subcall_tokens": 2048},
+        "concurrency": 2,
+        "seed": 17,
+    }
+    assert manifest["abis"]["runner"] == 3
+    assert manifest["engine"]["source_revision"] == "commit-a"
+    assert manifest["id"].startswith("sha256:")
     assert "trajectory" not in response
     usage = response["run_record"]["terminal"]["usage"]
     assert usage["root"] == {

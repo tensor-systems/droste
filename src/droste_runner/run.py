@@ -11,6 +11,7 @@ from typing import Any
 from droste.environments import EnvironmentConfig, create_environment, create_environment_context
 from droste.execution.budget import Budget
 from droste.execution.config import SandboxLimits
+from droste.execution.manifest import RolloutConfiguration, ScaffoldRequirements
 from droste.loop.rlm import RLMConfig, run_rlm
 from droste.providers import ProviderCatalog
 
@@ -34,6 +35,60 @@ def _build_context(payload: dict[str, Any]) -> Any:
         with open(payload["context_path"], "r", encoding="utf-8") as handle:
             return json.load(handle)
     return payload.get("context")
+
+
+def _optional_object(request: dict[str, Any], name: str) -> dict[str, Any] | None:
+    """Read an optional JSON object without treating malformed input as absent."""
+
+    value = request.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"request.{name} must be an object")
+    return value
+
+
+def _optional_text(request: dict[str, Any], name: str) -> str | None:
+    value = request.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"request.{name} must be a non-empty string or null")
+    return value
+
+
+def _optional_integer(
+    request: dict[str, Any], name: str, *, default: int | None = None, positive: bool = False
+) -> int | None:
+    value = request.get(name)
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"request.{name} must be an integer or null")
+    if positive and value < 1:
+        raise ValueError(f"request.{name} must be positive")
+    return value
+
+
+def _checkpoint_requirements(
+    request: dict[str, Any],
+) -> ScaffoldRequirements | None:
+    value = _optional_object(request, "checkpoint_scaffold_requirements")
+    if value is None:
+        return None
+    unknown = value.keys() - {"manifest_id", "required"}
+    if unknown:
+        raise ValueError(
+            "request.checkpoint_scaffold_requirements has unknown fields: "
+            + ", ".join(sorted(unknown))
+        )
+    required = value.get("required", {})
+    if not isinstance(required, dict):
+        raise ValueError("request.checkpoint_scaffold_requirements.required must be an object")
+    return ScaffoldRequirements(
+        manifest_id=value.get("manifest_id"),
+        required=required,
+    )
 
 
 def _run_adapter(request: dict[str, Any]) -> dict[str, Any]:
@@ -182,6 +237,9 @@ def _run_valid_request(
     # and silently treating it as unset would mask a caller bug.
     subcall_model = str(request.get("subcall_model") or "")
     subcall_reasoning_effort = str(request.get("subcall_reasoning_effort") or "")
+    root_sampling = _optional_object(request, "root_sampling")
+    subcall_sampling = _optional_object(request, "subcall_sampling")
+    checkpoint_requirements = _checkpoint_requirements(request)
 
     subcalls = HTTPSubcallClient(
         endpoint=subcall_endpoint,
@@ -211,6 +269,26 @@ def _run_valid_request(
         root_model=str(request.get("model") or ""),
         prompt_profile=str(request.get("prompt_profile") or "") or None,
         verbose=False,
+        rollout=RolloutConfiguration(
+            root_revision=_optional_text(request, "root_model_revision"),
+            subcall_model=subcall_model or model,
+            subcall_revision=_optional_text(request, "subcall_model_revision"),
+            root_sampling=(
+                root_sampling
+                if root_sampling is not None
+                else {"temperature": temperature, "stop": stop}
+            ),
+            subcall_sampling=(
+                subcall_sampling
+                if subcall_sampling is not None
+                else {"reasoning_effort": subcall_reasoning_effort or None}
+            ),
+            concurrency=_optional_integer(request, "subcall_concurrency", default=1, positive=True),
+            seed=_optional_integer(request, "seed"),
+            runner_protocol=RUNNER_PROTOCOL_VERSION,
+            source_revision=_optional_text(request, "source_revision"),
+        ),
+        checkpoint_requirements=checkpoint_requirements,
     )
 
     system_prompt_raw = request.get("system_prompt")

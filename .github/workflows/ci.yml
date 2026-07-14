@@ -17,8 +17,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Floor (pyproject requires-python >= 3.11) and current.
-        python: ["3.11", "3.13"]
+        # Oldest supported and latest stable. Keep the floor honest without
+        # multiplying jobs for every version in between.
+        python: ["3.11", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -26,7 +27,19 @@ jobs:
           python-version: ${{ matrix.python }}
           enable-cache: true
       - name: Sync (locked)
-        run: uv sync --locked
+        # Verifiers' upstream pins currently exclude 3.14. Its markers make
+        # this a no-op there while 3.11 exercises the real optional harness.
+        run: uv sync --locked --extra verifiers
+      - name: Verify optional Verifiers policy
+        env:
+          PYTHON_VERSION: ${{ matrix.python }}
+        run: |
+          if [ "$PYTHON_VERSION" = "3.11" ]; then
+            uv run python -c 'import verifiers; import droste_verifiers'
+          else
+            uv run python -c \
+              'import importlib.util; assert importlib.util.find_spec("verifiers") is None'
+          fi
       - name: Tests
         run: uv run pytest -q
 

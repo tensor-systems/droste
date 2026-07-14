@@ -73,3 +73,21 @@ def test_oversized_output_raises_the_budget_error_end_to_end() -> None:
     errors = [e for e in events if e["type"] == "execution_error"]
     assert errors and errors[0]["error_type"] == "SandboxError"
     assert "Sandbox output exceeded 50 characters (attempted 201)" in errors[0]["message"]
+
+
+def test_oversized_output_retains_returned_stdout_count_when_attempt_is_retained() -> None:
+    oversized = MockResponse(
+        text="""```python\nprint('x' * 200)\nanswer['ready'] = True\n```""",
+        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+    result = run_rlm(
+        question="q",
+        environment=_RawExecutorEnvironment(),
+        root_llm=MockLLMClient(responses=[oversized]),
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(sandbox=SandboxLimits(output_chars=50)),
+    )
+
+    assert result.error is not None
+    assert [entry.stdout_chars for entry in result.trajectory] == [201]
+    assert result.stdout_chars == 201
