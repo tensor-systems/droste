@@ -2,9 +2,8 @@
 
 Covers the local policy gate (SELECT-only, single statement, aggregate and
 subquery allowances, LIMIT injection, row cap, timeout) and the end-to-end
-path ported from the hosted platform's end-to-end suite: register() ->
-build_data_sources -> DataSourceRegistry -> query()/get_schema() over a real
-SQLite file opened mode=ro.
+path through ProviderCatalog -> ConfiguredSource -> generated query/get_schema
+bindings over a real SQLite file opened mode=ro.
 """
 
 from __future__ import annotations
@@ -14,27 +13,17 @@ import threading
 
 import pytest
 
-from droste.capabilities import CapabilityBroker, CapabilityCallError
-from droste.registry import DataSourceRegistry
+from droste.capabilities import CapabilityBroker, CapabilityCallError, SideEffect
+from droste.providers import ConfiguredSource, ProviderCatalog
 from droste.sources.sql_local import (
     DEFAULT_LOCAL_SQL_POLICY,
-    LocalSqlDataSource,
+    SQLITE_PROVIDER_MANIFEST,
     LocalSqlPolicy,
+    LocalSqlRuntime,
     SqlPolicyError,
-    local_sql_source_factory,
-    register,
+    sqlite_provider,
     validate_local_sql,
 )
-from droste_runner.runner import _reset_source_types, build_data_sources
-
-
-@pytest.fixture(autouse=True)
-def _clean_source_registry():
-    """register_source_type is process-global; isolate it per test."""
-    _reset_source_types()
-    yield
-    _reset_source_types()
-
 
 DEFAULT_POLICY = LocalSqlPolicy.from_spec(None)
 
@@ -277,7 +266,7 @@ def test_writable_ctx_connection_forced_read_only(tmp_path) -> None:
     # PRAGMA query_only=ON on the supplied connection.
     path = _make_db(tmp_path)
     ctx = sqlite3.connect(path, check_same_thread=False)  # read-write handle
-    src = LocalSqlDataSource({"name": "db"}, ctx)
+    src = LocalSqlRuntime({}, ctx)
     with pytest.raises(sqlite3.OperationalError, match="readonly"):
         src._connection().execute("INSERT INTO users VALUES (9,'mallory','free')")
     assert src.query("SELECT count(*) AS n FROM users") == [{"n": 2}]
@@ -286,12 +275,12 @@ def test_writable_ctx_connection_forced_read_only(tmp_path) -> None:
 # --- execution: caps, timeout, read-only ------------------------------------
 
 
-def _source(tmp_path, policy: dict | None = None, script: str | None = None) -> LocalSqlDataSource:
+def _source(tmp_path, policy: dict | None = None, script: str | None = None) -> LocalSqlRuntime:
     path = _make_db(tmp_path, script)
     config: dict = {"type": "sql", "name": "db", "sqlite_path": path}
     if policy is not None:
         config["policy"] = policy
-    return LocalSqlDataSource(config)
+    return LocalSqlRuntime(config)
 
 
 def test_default_limit_caps_unbounded_queries(tmp_path) -> None:
@@ -451,14 +440,14 @@ def test_query_counts_and_returns_dict_rows(tmp_path) -> None:
 def test_ctx_connection_is_used_directly(tmp_path) -> None:
     path = _make_db(tmp_path)
     ctx = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
-    src = LocalSqlDataSource({"name": "db"}, ctx)
+    src = LocalSqlRuntime({}, ctx)
     assert src._connection() is ctx
     assert src.query("SELECT count(*) AS n FROM users") == [{"n": 2}]
 
 
 def test_missing_sqlite_path_and_ctx_rejected() -> None:
     with pytest.raises(ValueError, match="sqlite_path"):
-        LocalSqlDataSource({"name": "db"})
+        LocalSqlRuntime({})
 
 
 # --- schema + capabilities ----------------------------------------------------
@@ -472,24 +461,28 @@ def test_get_schema_lists_tables_and_columns(tmp_path) -> None:
     assert "read-only" in schema
 
 
-def test_capabilities_are_sql_and_schema_only(tmp_path) -> None:
-    caps = _source(tmp_path).capabilities()
-    assert caps["sql"] and caps["schema"]
-    assert not (caps["search"] or caps["get"] or caps["recent"] or caps["stats"])
+def test_manifest_is_query_and_schema_only() -> None:
+    assert [item.operation_id for item in SQLITE_PROVIDER_MANIFEST.operations] == [
+        "query",
+        "schema",
+    ]
+    assert [item.binding_name for item in SQLITE_PROVIDER_MANIFEST.operations] == [
+        "query",
+        "get_schema",
+    ]
 
 
-# --- register() + end-to-end through the runner registry ---------------------
+# --- provider + end-to-end through the generated registry -------------------
 # Ported from ModelRelay's TestSqlDataSource_PythonEndToEnd (local half: the
 # cloud /sql/validate stub is replaced by the in-process policy gate).
 
 
-def test_register_end_to_end(tmp_path) -> None:
-    register()
+def test_provider_end_to_end(tmp_path) -> None:
     path = _make_db(tmp_path)
-    spec = {"type": "sql", "name": "db", "sqlite_path": path}
-    sources, default = build_data_sources({"data_sources": [spec], "default_source": "db"}, None)
-    assert len(sources) == 1 and default == "db"
-    registry = DataSourceRegistry(sources, default_source_name=default)
+    registry = ProviderCatalog((sqlite_provider(),)).bind(
+        (ConfiguredSource("db", "sqlite", {"sqlite_path": path}),),
+        default_source_id="db",
+    )
     broker = CapabilityBroker(registry.capability_registrations())
     env = registry.broker_globals(broker)
 
@@ -505,34 +498,29 @@ def test_register_end_to_end(tmp_path) -> None:
     assert exc_info.value.error.type == "SqlPolicyError"
     assert "only SELECT" in str(exc_info.value)
 
-    # Writes fail at the SQLite layer (mode=ro defense in depth).
-    with pytest.raises(sqlite3.OperationalError, match="readonly"):
-        sources[0]._connection().execute("INSERT INTO users VALUES (9,'mallory','free')")
-
     # default_source flattens the verbs to top level.
     assert env["query"] is env["db"].query
     assert env["get_schema"] is env["db"].get_schema
 
 
-def test_register_twice_fails_loudly() -> None:
-    # register_source_type is fail-fast on duplicates; register() propagates.
-    register()
-    with pytest.raises(ValueError, match="already registered"):
-        register()
+def test_provider_effects_are_host_classified_reads() -> None:
+    assert dict(sqlite_provider().effects) == {
+        "query": SideEffect.READ,
+        "schema": SideEffect.READ,
+    }
 
 
-def test_factory_passes_ctx_connection(tmp_path) -> None:
+def test_provider_passes_ctx_connection(tmp_path) -> None:
     path = _make_db(tmp_path)
-    register()
     ctx = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
-    sources, _ = build_data_sources({"data_sources": [{"type": "sql", "name": "db"}]}, ctx)
-    assert sources[0].query("SELECT count(*) AS n FROM users") == [{"n": 2}]
+    source = sqlite_provider().bind(ConfiguredSource("db", "sqlite"), ctx)
+    assert source.runtime.handlers["query"]("SELECT count(*) AS n FROM users") == [{"n": 2}]
 
 
-def test_factory_direct(tmp_path) -> None:
+def test_provider_binding_direct(tmp_path) -> None:
     path = _make_db(tmp_path)
-    src = local_sql_source_factory({"name": "mydb", "sqlite_path": path}, None)
-    assert src.name() == "mydb"
+    source = sqlite_provider().bind(ConfiguredSource("mydb", "sqlite", {"sqlite_path": path}))
+    assert source.source.source_id == "mydb"
 
 
 def test_default_policy_dict_matches_reference_shape() -> None:

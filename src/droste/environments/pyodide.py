@@ -7,7 +7,7 @@ from typing import Any
 from ..capabilities import CapabilityAnnotator, CapabilityGuard, CapabilityObserver
 from ..protocols.environment import ExecutionResult
 from ..protocols.subcall_client import SubcallClient
-from ..registry import DataSourceRegistry
+from ..providers import ProviderRegistry
 from ..substrates.pyodide import RawExecutor
 from .inprocess import RunnerEnvironment
 
@@ -24,7 +24,7 @@ class PyodideEnvironment(RunnerEnvironment):
         self,
         *,
         context: Any,
-        registry: DataSourceRegistry | None,
+        registry: ProviderRegistry | None,
         subcalls: SubcallClient,
         max_output_chars: int,
         exec_timeout_ms: int = 0,

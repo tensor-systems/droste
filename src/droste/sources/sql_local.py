@@ -56,7 +56,20 @@ import warnings
 from dataclasses import dataclass
 from typing import Any
 
-from .registration import SOURCE_PROTOCOL_VERSION, register_source_type
+from ..capabilities import (
+    JSON_SCHEMA_2020_12,
+    PaginationMode,
+    ProviderOperation,
+    ResultDelivery,
+    SchemaSpec,
+    SideEffect,
+)
+from ..providers import (
+    ConfiguredSource,
+    ProviderManifest,
+    ProviderRegistration,
+    ProviderRuntime,
+)
 
 # Read-only policy used when the spec carries no policy: SELECT-only with sane
 # limits, but otherwise permissive (aggregates, joins, subqueries) — it's the
@@ -280,11 +293,10 @@ def validate_local_sql(sql: str, policy: LocalSqlPolicy) -> str:
     return normalized
 
 
-class LocalSqlDataSource:
+class LocalSqlRuntime:
     """Read-only SQL over a local SQLite file (or a host-supplied connection)."""
 
     def __init__(self, config: dict[str, Any], ctx: Any = None) -> None:
-        self._name = str(config.get("name") or "db")
         raw_policy = config.get("policy")
         if raw_policy is not None and not isinstance(raw_policy, dict):
             raise ValueError("sql policy must be an object")
@@ -311,21 +323,6 @@ class LocalSqlDataSource:
             self._sqlite_path = path
         self._lock = threading.Lock()
         self.queries_made = 0
-
-    # -- DataSource protocol -------------------------------------------------
-
-    def name(self) -> str:
-        return self._name
-
-    def capabilities(self) -> dict[str, bool]:
-        return {
-            "sql": True,
-            "schema": True,
-            "search": False,
-            "get": False,
-            "recent": False,
-            "stats": False,
-        }
 
     def get_schema(self) -> str:
         conn = self._connection()
@@ -431,16 +428,74 @@ class LocalSqlDataSource:
         return '"' + str(name).replace('"', '""') + '"'
 
 
-def local_sql_source_factory(config: dict[str, Any], ctx: Any = None) -> LocalSqlDataSource:
-    """Option C factory: build a LocalSqlDataSource from a declarative spec + host ctx."""
-    return LocalSqlDataSource(config, ctx)
+_PARAMS = SchemaSpec(
+    {
+        "type": "object",
+        "properties": {"sql": {"type": "string"}},
+        "required": ["sql"],
+        "additionalProperties": False,
+    },
+    JSON_SCHEMA_2020_12,
+    "droste:provider/sqlite/query/parameters@1",
+)
+_ROWS = SchemaSpec(
+    {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+    JSON_SCHEMA_2020_12,
+    "droste:provider/sqlite/query/result@1",
+)
+_NO_PARAMS = SchemaSpec(
+    {"type": "object", "properties": {}, "additionalProperties": False},
+    JSON_SCHEMA_2020_12,
+    "droste:provider/sqlite/schema/parameters@1",
+)
+_TEXT = SchemaSpec(
+    {"type": "string"},
+    JSON_SCHEMA_2020_12,
+    "droste:provider/sqlite/schema/result@1",
+)
+SQLITE_PROVIDER_MANIFEST = ProviderManifest(
+    provider_type="sqlite",
+    revision="1",
+    operations=(
+        ProviderOperation(
+            operation_id="query",
+            binding_name="query",
+            description="Run one bounded, read-only SQLite SELECT statement.",
+            parameters=_PARAMS,
+            result=_ROWS,
+            pagination=PaginationMode.NONE,
+            delivery=ResultDelivery.INLINE,
+            budget_class="data.query",
+        ),
+        ProviderOperation(
+            operation_id="schema",
+            binding_name="get_schema",
+            description="Return the SQLite table and column schema.",
+            parameters=_NO_PARAMS,
+            result=_TEXT,
+            pagination=PaginationMode.NONE,
+            delivery=ResultDelivery.INLINE,
+            budget_class="data.metadata",
+        ),
+    ),
+)
 
 
-def register() -> None:
-    """Register the local SQL source as type ``"sql"`` with the runner.
+def _bind_sqlite(source: ConfiguredSource, context: Any = None) -> ProviderRuntime:
+    runtime = LocalSqlRuntime(source.config_dict(), context)
+    return ProviderRuntime(
+        handlers={"query": runtime.query, "schema": runtime.get_schema},
+        source_description=runtime.get_schema(),
+        stats=lambda: {"queries_made": runtime.queries_made},
+    )
 
-    Call this from the runner *entrypoint* at startup (never from a request —
-    requests stay declarative). Spec shape: ``{"type": "sql", "name": ...,
-    "sqlite_path": ..., "policy": {...optional overrides...}}``.
-    """
-    register_source_type("sql", local_sql_source_factory, protocol=SOURCE_PROTOCOL_VERSION)
+
+def sqlite_provider() -> ProviderRegistration:
+    """Return the reusable SQLite provider registration, independent of a source."""
+
+    return ProviderRegistration(
+        manifest=SQLITE_PROVIDER_MANIFEST,
+        effects={"query": SideEffect.READ, "schema": SideEffect.READ},
+        binder=_bind_sqlite,
+        policy_metadata={"query": {"read_only": True}},
+    )

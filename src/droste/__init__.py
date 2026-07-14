@@ -1,6 +1,7 @@
 """Core RLM loop and protocol definitions."""
 
 from .capabilities import (
+    JSON_SCHEMA_2020_12,
     CapabilityAnnotator,
     CapabilityBroker,
     CapabilityCall,
@@ -20,7 +21,12 @@ from .capabilities import (
     CapabilityResult,
     CapabilityResultHandle,
     CapabilityStatus,
-    EvidenceRef,
+    EvidenceLocation,
+    EvidenceRange,
+    PaginationMode,
+    ProviderOperation,
+    ResultDelivery,
+    SchemaSpec,
     SideEffect,
     generate_binding,
     validate_call,
@@ -62,11 +68,19 @@ from .prompts.pack import (
     load_prompt_pack,
     resolve_prompt_pack,
 )
-from .protocols.data_source import DataSource, DataSourceCapabilities, SearchResult
 from .protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
 from .protocols.llm_client import LLMClient, TokenUsage
 from .protocols.subcall_client import SubcallClient, SubcallOutputTokenLimitProvider
-from .registry import DataSourceRegistry
+from .providers import (
+    PROVIDER_PROTOCOL_VERSION,
+    BoundSource,
+    ConfiguredSource,
+    ProviderCatalog,
+    ProviderManifest,
+    ProviderRegistration,
+    ProviderRegistry,
+    ProviderRuntime,
+)
 from .structured import aggregate_json_counts, structured_batch, validate_json
 
 __all__ = [
@@ -94,9 +108,6 @@ __all__ = [
     "RLMEnvironment",
     "EnvCapabilities",
     "ExecutionResult",
-    "DataSource",
-    "SearchResult",
-    "DataSourceCapabilities",
     "LLMClient",
     "TokenUsage",
     "SubcallClient",
@@ -109,7 +120,6 @@ __all__ = [
     "PromptPackRecord",
     "load_prompt_pack",
     "resolve_prompt_pack",
-    "DataSourceRegistry",
     "AnthropicClient",
     "AnthropicSubcallClient",
     "ModelRelayClient",
@@ -138,7 +148,13 @@ __all__ = [
     "CapabilityResultHandle",
     "CapabilityStatus",
     "CapabilityAnnotator",
-    "EvidenceRef",
+    "EvidenceLocation",
+    "EvidenceRange",
+    "JSON_SCHEMA_2020_12",
+    "PaginationMode",
+    "ProviderOperation",
+    "ResultDelivery",
+    "SchemaSpec",
     "SideEffect",
     "generate_binding",
     "validate_call",
@@ -149,4 +165,12 @@ __all__ = [
     "RunRecord",
     "TraceRetentionPolicy",
     "parse_event",
+    "PROVIDER_PROTOCOL_VERSION",
+    "BoundSource",
+    "ConfiguredSource",
+    "ProviderCatalog",
+    "ProviderManifest",
+    "ProviderRegistration",
+    "ProviderRegistry",
+    "ProviderRuntime",
 ]

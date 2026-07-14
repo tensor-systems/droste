@@ -25,7 +25,7 @@ const RELAY_TS =
 // A minimal ModelRelay stand-in: any POST to /responses gets one scripted
 // reply telling the RLM to query the real (bridged) SQL source and finish.
 // Proves the answer actually came from a real query() round-trip through
-// BridgeDataSource -> DataSourceService -> the real SQLite file, not a stub.
+// BridgeProvider -> ProviderService -> the real SQLite file, not a stub.
 function startMockModelRelay(): Promise<
   { port: number; shutdown: () => Promise<void> }
 > {
@@ -234,7 +234,7 @@ Deno.test({
         .find((e) => e.type === "startup");
       assert(startup, `no startup handshake event on stderr:\n${stderrText}`);
       assertEquals(startup.runner_protocol, 2);
-      assertEquals(startup.source_protocol, 2);
+      assertEquals(startup.provider_protocol, 3);
       assert(
         typeof startup.engine_version === "string" &&
           startup.engine_version.length > 0,

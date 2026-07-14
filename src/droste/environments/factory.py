@@ -21,7 +21,7 @@ from ..execution.trace import (
 )
 from ..protocols.environment import RLMEnvironment
 from ..protocols.subcall_client import SubcallClient
-from ..registry import DataSourceRegistry
+from ..providers import ProviderRegistry
 from .inprocess import RunnerEnvironment
 from .pyodide import PyodideEnvironment
 
@@ -129,7 +129,7 @@ def create_environment(
     config: EnvironmentConfig,
     *,
     context: Any,
-    registry: DataSourceRegistry | None,
+    registry: ProviderRegistry | None,
     subcalls: SubcallClient,
     capability_run_id: str | None = None,
     capability_parent_run_id: str | None = None,

@@ -11,11 +11,11 @@ from typing import Any
 from droste.environments import EnvironmentConfig, create_environment, create_environment_context
 from droste.execution.config import DEFAULT_MAX_CALLS, DEFAULT_MAX_ITERATIONS
 from droste.loop.rlm import RLMConfig, run_rlm
-from droste.registry import DataSourceRegistry
+from droste.providers import ProviderCatalog
 
 from .http_clients import HTTPSubcallClient, RootLLMClient
 from .protocol import RUNNER_PROTOCOL_VERSION, _check_protocol_version, build_response
-from .sources import WrapperV1DataSource, build_data_sources
+from .sources import build_provider_registry, default_provider_catalog
 
 
 def _read_request(path: str | None = None) -> dict[str, Any]:
@@ -51,15 +51,29 @@ def _run_adapter(request: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def run(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
+def run(
+    request: dict[str, Any],
+    *,
+    source_ctx: Any = None,
+    provider_catalog: ProviderCatalog | None = None,
+) -> dict[str, Any]:
     refusal = _check_protocol_version(request)
     if refusal is not None:
         return refusal
 
-    return _run_valid_request(request, source_ctx=source_ctx)
+    return _run_valid_request(
+        request,
+        source_ctx=source_ctx,
+        provider_catalog=provider_catalog or default_provider_catalog(),
+    )
 
 
-def _run_valid_request(request: dict[str, Any], *, source_ctx: Any = None) -> dict[str, Any]:
+def _run_valid_request(
+    request: dict[str, Any],
+    *,
+    source_ctx: Any = None,
+    provider_catalog: ProviderCatalog,
+) -> dict[str, Any]:
     """Run an already version-checked request."""
 
     adapter_module = request.get("adapter_module")
@@ -71,11 +85,13 @@ def _run_valid_request(request: dict[str, Any], *, source_ctx: Any = None) -> di
         return response
 
     context = _build_context(request)
-    # source_ctx is the host-supplied edge context for registered source
-    # factories (source unification): in-process hosts pass live
-    # handles; subprocess hosts pass whatever their entrypoint assembled.
-    sources, default_source = build_data_sources(request, source_ctx)
-    registry = DataSourceRegistry(sources, default_source_name=default_source) if sources else None
+    # source_ctx is a host-supplied live edge passed only to explicit provider
+    # binders. The request cannot name Python code or mutate the catalog.
+    registry = build_provider_registry(
+        request,
+        catalog=provider_catalog,
+        context=source_ctx,
+    )
 
     # Omitted budgets fall back to the core loop defaults instead of the old
     # runner-local 1 iteration / 0 subcalls (0 made the FIRST llm_query raise
@@ -233,10 +249,11 @@ def _run_valid_request(request: dict[str, Any], *, source_ctx: Any = None) -> di
         context=exec_context,
     )
 
-    wrapper_sources = [s for s in sources if isinstance(s, WrapperV1DataSource)]
-    data_source_requests = (
-        sum(source.requests_made for source in wrapper_sources) if wrapper_sources else None
-    )
+    provider_stats = registry.stats() if registry is not None else {}
+    request_counts = [
+        int(stats["requests_made"]) for stats in provider_stats.values() if "requests_made" in stats
+    ]
+    data_source_requests = sum(request_counts) if request_counts else None
     return build_response(
         result=result,
         metadata=root_client.response_metadata,
@@ -256,12 +273,15 @@ def main() -> None:
         return
     # The request file is the untrusted boundary (hosted runners are fed one by
     # the parent process). A request must never name code to import: source
-    # types come from register_source_type() in the entrypoint (Option C), and
-    # the in-process adapter seam is reserved for trusted callers of run().
+    # types come only from the host's explicit ProviderCatalog, and the
+    # in-process adapter seam is reserved for trusted callers of run().
     if str(request.get("adapter_module") or "").strip():
         raise RuntimeError(
-            "adapter_module is not accepted from the request file; register "
-            "source types via register_source_type() in the runner entrypoint"
+            "adapter_module is not accepted from the request file; pass an "
+            "explicit ProviderCatalog to run() from a trusted host"
         )
-    response = _run_valid_request(request)
+    response = _run_valid_request(
+        request,
+        provider_catalog=default_provider_catalog(),
+    )
     sys.stdout.write(json.dumps(response, ensure_ascii=True))

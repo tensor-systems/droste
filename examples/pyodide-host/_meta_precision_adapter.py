@@ -15,9 +15,8 @@ from __future__ import annotations
 from typing import Any
 
 import pyodide_host_adapter
-from pyodide_host_adapter import _sql_source
 
-from droste.sources.bridge import DataSourceService
+from droste.sources.bridge import ProviderService
 
 # 2**63 - 1: the largest int64, well beyond Number.MAX_SAFE_INTEGER
 # (2**53 - 1). A JSON.parse/JSON.stringify round trip in Deno would corrupt
@@ -27,9 +26,9 @@ LARGE_INT = 9223372036854775807
 
 def build_db_service(
     db_path: str, contacts_db_path: str | None = None
-) -> tuple[DataSourceService, dict[str, Any]]:
-    source = _sql_source(db_path)
-    service = DataSourceService(source)
+) -> tuple[ProviderService, dict[str, Any]]:
+    source = pyodide_host_adapter._sql_registry(db_path).sources[0]
+    service = ProviderService(source)
     return service, {"large_id": LARGE_INT}
 
 

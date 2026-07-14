@@ -411,9 +411,9 @@ def test_wrapper_call_enforces_allowed_hosts():
     # The wrapper's allowed_hosts is an enforced allowlist, not prompt
     # decoration: a request-supplied base_url outside it must be refused
     # before any connection is attempted (pre-publish read-through).
-    from droste_runner.runner import DataSourceWrapper
+    from droste_runner.runner import WrapperTransport
 
-    wrapper = DataSourceWrapper(
+    wrapper = WrapperTransport(
         {
             "base_url": "http://evil.internal:9",
             "token": "t",
@@ -449,15 +449,15 @@ def test_wrapper_malformed_allowed_hosts_fails_closed():
     # error, not an allow-all — fail closed (codex review).
     import pytest as _pytest
 
-    from droste_runner.runner import DataSourceWrapper
+    from droste_runner.runner import WrapperTransport
 
     for bad in ("partner.example.com", [], ["", "  "]):
-        w = DataSourceWrapper({"base_url": "http://h/x", "token": "t", "allowed_hosts": bad})
+        w = WrapperTransport({"base_url": "http://h/x", "token": "t", "allowed_hosts": bad})
         with _pytest.raises(ValueError, match="allowed_hosts"):
             w._call("/search", {"query": "q"})
 
     # Absent key still means allow-all (no raise for the host check; will fail
     # later at connection instead).
-    w = DataSourceWrapper({"base_url": "http://127.0.0.1:9/x", "token": "t"})
+    w = WrapperTransport({"base_url": "http://127.0.0.1:9/x", "token": "t"})
     with _pytest.raises(ValueError, match="request failed"):
         w._call("/search", {"query": "q"})

@@ -34,13 +34,44 @@ The built-in generic prompt packs are revised to `1.0.2`; they distinguish
 subcall input capacity from output capacity when planning structured and
 map-reduce work.
 
+### Data providers are manifest-driven (breaking)
+
+The fixed `DataSource` protocol, capability booleans, universal verb table,
+`extra_methods`, process-global source factories, and singular `data_source`
+request sugar are removed. There are intentionally no compatibility aliases.
+Hosts must construct an explicit `ProviderCatalog` from
+`ProviderRegistration` values and bind declarative `ConfiguredSource` values
+for each run. The bundled local provider is now `sqlite_provider()` with type
+`sqlite`; its Python bindings remain `query()` and `get_schema()`, while the
+stable raw operation IDs are `query` and `schema`.
+
+Each `ProviderManifest` is source-agnostic, immutable, revisioned, and
+SHA-256-digested. Operations declare separate raw IDs and Python binding names,
+schema dialect/provenance, cursor behavior, inline/handle/untyped delivery,
+budget class, and descriptions. Hosts classify every operation's effect and
+own policy metadata; do not trust effect annotations received over a bridge.
+`ProviderService` and `BridgeProvider` replace `DataSourceService` and
+`BridgeDataSource`.
+
+Remove imports of `DataSource`, `DataSourceCapabilities`, `SearchResult`,
+`DataSourceRegistry`, `register_source_type`, `SOURCE_PROTOCOL_VERSION`, and
+the old SQL factory. Use `ProviderManifest`, `ProviderOperation`,
+`ProviderRegistration`, `ProviderCatalog`, `ProviderRegistry`, and
+`PROVIDER_PROTOCOL_VERSION` instead. `EvidenceRef` is also replaced by
+structured `EvidenceLocation`/`EvidenceRange` values.
+
+`RUNNER_PROTOCOL_VERSION` is now 2 and the provider protocol is 3. Requests
+must use `data_sources` as a list of `{type, name, ...config}` objects. The
+relay startup event now reports `provider_protocol` instead of
+`source_protocol`. Upgrade the runner request, staged relay, and provider
+catalog atomically; mismatches fail before work begins.
+
 ### Built-in sandbox capabilities use one brokered ABI
 
 `RunnerEnvironment` and `PyodideEnvironment` now generate their existing
-`llm_query*` and data-source Python APIs from one immutable capability manifest.
-Names, aliases, arguments, return values, and atomic batch behavior are
-preserved, but built-in environments no longer put raw `SubcallClient` or data
-source bound methods in the sandbox globals mapping. The loop's structured JSON
+`llm_query*` and provider Python APIs from one immutable capability manifest.
+Built-in environments no longer put raw `SubcallClient` or provider bound
+methods in the sandbox globals mapping. The loop's structured JSON
 batch replacement also uses the environment's broker-backed adapter.
 
 Hosts that need correlation may pass additive `capability_run_id` and
@@ -78,6 +109,10 @@ callers that need ordered per-item failures use `llm_batch_json` or the trusted
 construct one run broker from `capability_registrations()` and pass it to
 `broker_globals()`, preventing an accidental second broker without the run's
 identity, guard, accounting annotator, or observer.
+Custom environments must expose the resulting registry's
+`accessor_manifest()` as well. There is no fixed generic-verb fallback: an
+environment that omits this manifest supplies no provider accessors to the
+count-policy check, so its custom bindings are not covered.
 
 Custom `RLMEnvironment` implementations must now implement
 `sandbox_subcalls(subcalls)`. Return a broker-backed `SubcallClient`; the

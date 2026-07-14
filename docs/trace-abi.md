@@ -55,7 +55,7 @@ Objects named below are JSON objects; all other types are primitive.
 
 | Type | Body |
 | --- | --- |
-| `startup` | `engine_version: string`, `runner_protocol?: integer|null`, `source_protocol?: integer|null` |
+| `startup` | `engine_version: string`, `runner_protocol?: integer|null`, `provider_protocol?: integer|null` |
 | `progress` | `status: string` |
 | `iteration_start` | `iteration: integer`, `max_iterations: integer` |
 | `llm_response` | `iteration: integer`, `response: string` |

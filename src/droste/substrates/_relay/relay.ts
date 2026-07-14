@@ -217,7 +217,7 @@ const py = await loadPyodide({
 // droste.sources.bridge, and droste.sources.__init__ eagerly imports
 // sql_local.py, which imports the stdlib sqlite3 module — the REPL
 // interpreter never OPENS a database, but it still needs the package loaded
-// just to import the client-side BridgeDataSource.
+// just to import the client-side BridgeProvider.
 await py.loadPackage("sqlite3", {
   messageCallback: () => {},
   errorCallback: () => {},
@@ -245,14 +245,14 @@ try:
 except Exception:
     _runner_protocol = None
 try:
-    from droste.sources.registration import SOURCE_PROTOCOL_VERSION as _source_protocol
+    from droste.providers import PROVIDER_PROTOCOL_VERSION as _provider_protocol
 except Exception:
-    _source_protocol = None
+    _provider_protocol = None
 json.dumps({
     "type": "startup",
     "engine_version": _engine_version,
     "runner_protocol": _runner_protocol,
-    "source_protocol": _source_protocol,
+    "provider_protocol": _provider_protocol,
 })
 `),
 ));

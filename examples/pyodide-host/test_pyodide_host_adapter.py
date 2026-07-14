@@ -20,6 +20,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from pyodide_host_adapter import build_db_service, run_for_host_pyodide  # noqa: E402
 
+from droste.sources.bridge import ProviderService  # noqa: E402
+
 
 def _fake_host_fetch_answering(content: str, captured_headers: dict | None = None):
     def host_fetch(method: str, url: str, headers_json: str, body: str) -> str:
@@ -64,7 +66,10 @@ class TestPyodideHostAdapter(unittest.TestCase):
         """build_db_service + a real bridge_call round-trip, exactly like the
         A'-2 split: the "untrusted" side here never opens db_path itself."""
         service, meta = build_db_service(self.db_path)
+        self.assertIsInstance(service, ProviderService)
         self.assertEqual(meta, {})
+        self.assertEqual(service.describe()["source_id"], "db")
+        self.assertEqual(service.describe()["manifest"]["provider_type"], "sqlite")
 
         def bridge_call(method: str, params_json: str) -> str:
             return service.handle(method, params_json)

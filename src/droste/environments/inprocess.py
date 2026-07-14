@@ -24,7 +24,7 @@ from ..capabilities import (
 from ..protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
 from ..protocols.subcall_client import SubcallClient
 from ..protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest
-from ..registry import DataSourceRegistry
+from ..providers import ProviderRegistry
 from ..structured import aggregate_json_counts, bind_structured_batch
 
 
@@ -125,7 +125,7 @@ class RunnerEnvironment(RLMEnvironment):
         self,
         *,
         context: Any,
-        registry: DataSourceRegistry | None,
+        registry: ProviderRegistry | None,
         subcalls: SubcallClient,
         max_output_chars: int,
         exec_timeout_ms: int,

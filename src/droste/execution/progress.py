@@ -31,7 +31,7 @@ EventCallback = Callable[[dict[str, Any]], None]
 # sets are asserted equal by tests/test_event_vocabulary.py.
 EVENT_TYPES = frozenset(
     {
-        "startup",  # relay-side contract handshake {engine_version, runner_protocol, source_protocol}
+        "startup",  # relay handshake {engine_version, runner_protocol, provider_protocol}
         "progress",  # coarse human-readable status {status}
         "iteration_start",  # {iteration, max_iterations}
         "llm_response",  # {iteration, response} — the root model's full reply

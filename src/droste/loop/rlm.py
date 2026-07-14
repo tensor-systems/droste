@@ -158,9 +158,9 @@ def _accessor_manifest(environment: RLMEnvironment) -> AccessorManifest:
     """Data-accessor names for the count contract's len() check (#10).
 
     Explicit data, not sniffing: an environment that composes data sources
-    (e.g. one wrapping a DataSourceRegistry) reports them via an optional
+    (e.g. one wrapping a ProviderRegistry) reports them via an optional
     ``accessor_manifest()`` method. Environments without one yield an empty
-    manifest, and the policy layer falls back to its static generic verbs."""
+    manifest, and the policy layer otherwise sees no data accessors."""
     manifest_fn = getattr(environment, "accessor_manifest", None)
     if callable(manifest_fn):
         manifest = manifest_fn()

@@ -76,9 +76,8 @@ without making the broker own ledger policy.
 once. It is not decomposed into nested `llm_query` calls, so ordering,
 reservation, concurrency, and provider-native batch semantics stay intact.
 `llm_batch_json` remains local deterministic composition over the broker-backed
-batch adapter. The existing `DataSourceService` JSON envelope is a transport
-detail behind a data-source handler and is deliberately not a second capability
-ABI.
+batch adapter. `ProviderService` is a fixed bridge transport behind registered
+handlers and is deliberately not a second capability ABI.
 
 The loop ends when the model sets `answer["ready"] = True`, or the iteration
 budget runs out — in which case, when the trajectory contains executed work,
@@ -111,32 +110,29 @@ explicit positive limit because a callback-owned default is not knowable from
 the runner. The base `SubcallClient` protocol is unchanged, and broker-backed
 and semantic-policy wrappers forward the optional metadata.
 
-## Data sources (registry)
+## Providers and configured sources
 
-Hosts register source *types* at startup — never from a request:
+Provider metadata is immutable, source-agnostic data. `ProviderManifest`
+contains a revision, canonical SHA-256 digest, and ordered `ProviderOperation`
+values. Each operation carries a stable raw ID, a separately validated Python
+binding name, documentation, parameter/result `SchemaSpec` values with explicit
+dialect and provenance, cursor semantics, inline/handle/untyped delivery, and
+a budget class. Cursor operations must describe both the input cursor and
+output `next_cursor`.
 
-```python
-from droste.sources.sql_local import register
-register()  # exposes type "sql": {"sqlite_path": ..., "policy": {...}}
-```
+The host owns the imperative edge: a `ProviderRegistration` pairs the manifest
+with an exact side-effect map, optional policy metadata, and a binder returning
+live handlers. Effects are never accepted from a transport. An explicit
+`ProviderCatalog` binds declarative `ConfiguredSource` values into one
+per-run `ProviderRegistry`; there is no process-global registry and requests
+cannot name code to import. The registry snapshots descriptors once for the
+run, then projects broker registrations, prompt text, Python bindings, and the
+policy accessor manifest from those same values.
 
-A source declares capabilities (`{sql, schema}`, `{search}`, ...) and
-becomes a named variable in the REPL (`db.query("SELECT ...")`). Requests
-stay declarative: they can name a registered type and its config, never code
-to import. The registry rejects reserved names and protocol mismatches
-(`SOURCE_PROTOCOL_VERSION`; registrants pass the version they implement).
-
-The protocol is **domain-blind**: core verbs only, plus the generic
-optionals `find`/`content`/`sample`. Domain-specific verbs are declared by
-the source itself via an `extra_methods` attribute (a tuple of method
-names); the registry binds exactly those callables into the sandbox —
-validated against engine verbs, reserved globals, and Python builtins,
-and a flattened default-source verb additionally may not collide with
-another source's namespace. The registry turns this inventory into broker
-registrations and generated bindings; it does not inject raw source methods
-into built-in sandbox environments. The bridge's `DataSourceService` honors
-the same declaration, so a source behaves identically in-process and across
-the Pyodide bridge.
+`ProviderService`/`BridgeProvider` carry a verified manifest plus raw operation
+calls across an interpreter boundary. The receiving host supplies its own
+effects and policy before binding. Unknown operations are rejected against the
+bound handler map, and schema/digest mismatches fail before dispatch.
 
 The bundled SQLite source is local-mode: SELECT-only policy gate (single
 statement, masked-identifier keyword scanning, LIMIT injection, row caps,
@@ -158,8 +154,8 @@ The Python implementation is split by ownership: `droste.environments`
 provides the generic native in-process environment; `droste_runner` keeps
 HTTP clients, remote source transport, envelope helpers, and orchestration in
 `http_clients`, `sources`, `protocol`, and `run` modules respectively.
-`droste_runner.runner` is a compatibility facade for existing embedders, not a
-second implementation. Both successful and refused envelopes are shaped by
+`droste_runner.runner` is a convenience facade, not a second implementation.
+Both successful and refused envelopes are shaped by
 `protocol.build_response`, so their shared fields cannot drift.
 
 Completed responses also carry the policy-resolved
@@ -167,8 +163,8 @@ Completed responses also carry the policy-resolved
 the same strict envelope and projection. Persistence remains a host I/O
 decision; the engine never opens a trace store.
 
-**Compatibility window**: the request/response schema and the source
-protocol are versioned, each by a single integer:
+**Compatibility window**: the request/response schema and provider contract
+are versioned, each by a single integer:
 
 - `RUNNER_PROTOCOL_VERSION` (currently 2) governs the request/response
   envelope. Every request **must** carry `protocol_version` — requests are
@@ -179,10 +175,8 @@ protocol are versioned, each by a single integer:
   failing on a missing field. Responses carry `protocol_version`: the
   engine stamps its own everywhere except an `adapter_module` response
   that already claimed one (adapters own their response shape).
-- `SOURCE_PROTOCOL_VERSION` (currently 2; v2 made the contract
-  domain-blind — domain verbs are source-declared `extra_methods`, no
-  longer auto-bound) governs the data-source registration contract and
-  fails at startup, not per-request.
+- `PROVIDER_PROTOCOL_VERSION` (currently 3) governs manifest parsing and
+  provider binding. A mismatched manifest fails before a source is live.
 
 The rules: **adding an optional field is not a version bump** (the 0.5.x
 subcall cost-control knobs are the worked example — older engines ignore
