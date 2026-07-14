@@ -264,9 +264,14 @@ RLMConfig(
     max_depth=1,            # Max nested subcall depth (default)
     max_calls=50,           # Max total subcalls (default)
     max_output_chars=25000, # Output budget per iteration (default)
+    prompt_profile="full",  # Versioned prompt-pack profile (full/minimal/none)
     policy_hints=PolicyHints(semantic=True), # Optional explicit contract
 )
 ```
+
+Harness prompts resolve once per run from immutable, versioned data. See
+[Prompt packs](docs/prompt-packs.md) for the stable five-slot contract, custom
+pack loading, deterministic fallback order, and provenance records.
 
 Droste does not infer semantic intent from the question. When a caller supplies
 `PolicyHints(semantic=True)`, at least one semantic subcall must succeed and any
@@ -286,6 +291,7 @@ RLMResult(
     trajectory=[...],       # Full execution history
     extracted=False,        # True if the answer came from the post-exhaustion
                             # extract pass (best-effort, not confirmed)
+    prompt_pack=...,        # Frozen resolved pack identity + provenance
 )
 ```
 

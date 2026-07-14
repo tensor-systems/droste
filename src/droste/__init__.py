@@ -18,6 +18,15 @@ from .loop.code_extractor import extract_code_block
 from .loop.rlm import RLMConfig, RLMResult, run_rlm
 from .policy import PolicyHints
 from .prompts.builder import SystemPromptBuilder
+from .prompts.pack import (
+    PromptPack,
+    PromptPackBinding,
+    PromptPackCatalog,
+    PromptPackError,
+    PromptPackRecord,
+    load_prompt_pack,
+    resolve_prompt_pack,
+)
 from .protocols.data_source import DataSource, DataSourceCapabilities, SearchResult
 from .protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
 from .protocols.llm_client import LLMClient, TokenUsage
@@ -54,6 +63,13 @@ __all__ = [
     "TokenUsage",
     "SubcallClient",
     "SystemPromptBuilder",
+    "PromptPack",
+    "PromptPackBinding",
+    "PromptPackCatalog",
+    "PromptPackError",
+    "PromptPackRecord",
+    "load_prompt_pack",
+    "resolve_prompt_pack",
     "DataSourceRegistry",
     "AnthropicClient",
     "AnthropicSubcallClient",

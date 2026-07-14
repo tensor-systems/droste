@@ -24,6 +24,7 @@ from ..execution.config import (
 from ..execution.context import ExecutionContext
 from ..execution.progress import execution_error_event, output_event
 from ..policy import PolicyHints, contract_violations, ready_violations
+from ..prompts.pack import PromptPackRecord
 from ..protocols.environment import ExecutionResult, RLMEnvironment
 from ..protocols.llm_client import LLMClient, total_tokens_from_usage
 from ..structured import _StructuredBatchEvidence
@@ -53,11 +54,15 @@ class RLMConfig:
     max_depth: int = DEFAULT_MAX_DEPTH
     max_calls: int = DEFAULT_MAX_CALLS
     max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS
+    # ``tips_profile`` remains the compatibility spelling; ``prompt_profile``
+    # selects a complete pack when set and otherwise inherits it.
     tips_profile: str = "full"
+    prompt_profile: str | None = None
     verbose: bool = False
     root_model: str | None = None
     on_progress: Any | None = None
-    enforce_contract: bool = True
+    # None delegates to the resolved pack's immutable policy default.
+    enforce_contract: bool | None = None
     policy_hints: PolicyHints | None = None
 
 
@@ -94,6 +99,8 @@ class RLMResult:
     # and extracted answers carry no metadata because the text-only extraction
     # pass cannot verify that a partial metadata draft still supports its output.
     answer_metadata: dict[str, Any] = field(default_factory=dict)
+    # Identity and provenance of the one immutable pack resolved at run start.
+    prompt_pack: PromptPackRecord | None = None
 
 
 @dataclass
@@ -127,15 +134,18 @@ def _feedback_output(output: str) -> str:
     return output if output else EMPTY_OUTPUT_NUDGE
 
 
-def _error_feedback(exec_error: Exception) -> str:
+def error_repair_history(exec_error: Exception) -> str:
+    """Describe a failed step once for legacy and prompt-pack repair paths."""
+    facts = [f"type={exec_error.__class__.__name__}", f"message={exec_error}"]
     if isinstance(exec_error, PolicyError):
-        return (
-            f"{exec_error}\n\n"
+        facts.append(
             "Your accumulated answer['content'] was kept, but answer['ready'] was "
             "reset. Address the policy violation above, then set "
             'answer["ready"] = True again.'
         )
-    return f"That code failed with this error:\n{exec_error}\n\nFix the code and try again."
+    else:
+        facts.append("Fix the code and try again.")
+    return "\n".join(facts)
 
 
 def _resolved_output(answer: dict[str, Any], last_output: str) -> str:
@@ -350,11 +360,14 @@ def build_refinement_messages(
     code: str,
     answer_content: Any,
     last_output: str,
+    rendered_prompt: str | None = None,
 ) -> list[dict[str, str]]:
-    refinement_content = template.format(
-        current_content=answer_content,
-        last_output=_feedback_output(last_output),
-    )
+    refinement_content = rendered_prompt
+    if refinement_content is None:
+        refinement_content = template.format(
+            current_content=answer_content,
+            last_output=_feedback_output(last_output),
+        )
     return messages + [
         {"role": "assistant", "content": f"```python\n{code}\n```"},
         {"role": "user", "content": refinement_content},
@@ -362,23 +375,28 @@ def build_refinement_messages(
 
 
 def build_missing_code_repair_messages(
-    messages: list[dict[str, str]], response: str
+    messages: list[dict[str, str]], response: str, *, repair_prompt: str | None = None
 ) -> list[dict[str, str]]:
     return messages + [
         {"role": "assistant", "content": response},
         {
             "role": "user",
-            "content": "Your response must include a single ```python code block. Return only code.",
+            "content": repair_prompt
+            or "Your response must include a single ```python code block. Return only code.",
         },
     ]
 
 
 def build_error_repair_messages(
-    messages: list[dict[str, str]], code: str, exec_error: Exception
+    messages: list[dict[str, str]],
+    code: str,
+    exec_error: Exception,
+    *,
+    repair_prompt: str | None = None,
 ) -> list[dict[str, str]]:
     return messages + [
         {"role": "assistant", "content": f"```python\n{code}\n```"},
-        {"role": "user", "content": _error_feedback(exec_error)},
+        {"role": "user", "content": repair_prompt or error_repair_history(exec_error)},
     ]
 
 
@@ -418,8 +436,11 @@ def execute_step(
     """Execute one code block: the identical path for a first attempt and for
     repaired code. Policy pre-check, execute, output budget, event emit,
     answer refresh, ready-time policy checks."""
+    # Direct execute_step callers have no resolved pack; None retains the
+    # historical strict default. run_rlm resolves None before reaching here.
+    enforce_contract = cfg.enforce_contract is not False
     try:
-        if cfg.enforce_contract:
+        if enforce_contract:
             violations = contract_violations(
                 code,
                 cfg.policy_hints,
@@ -437,7 +458,7 @@ def execute_step(
         _enforce_output_budget(last_output, cfg.max_output_chars)
         answer = _refresh_answer(env_globals, answer)
 
-        hints = cfg.policy_hints if cfg.enforce_contract else None
+        hints = cfg.policy_hints if enforce_contract else None
         violations = ready_violations(
             hints,
             answer_ready=bool(answer.get("ready")),
@@ -485,7 +506,7 @@ def execute_step(
         # before raising or rebound the answer dict entirely. Keep accumulated
         # content for repair/extraction, but always revoke readiness. Policy
         # errors use the same state rule and receive specialized feedback from
-        # `_error_feedback`.
+        # `error_repair_history`.
         answer = _refresh_answer(env_globals, answer)
         answer["ready"] = False
         context.emit_event(
@@ -546,6 +567,7 @@ def finalize(
     extract_error: RLMError | None = None,
     recovered_error: RLMError | None = None,
     answer_metadata: dict[str, Any] | None = None,
+    prompt_pack: PromptPackRecord | None = None,
 ) -> RLMResult:
     """The one RLMResult construction site."""
     return RLMResult(
@@ -561,4 +583,5 @@ def finalize(
         extract_error=extract_error,
         recovered_error=recovered_error,
         answer_metadata=answer_metadata if answer.get("ready") and answer_metadata else {},
+        prompt_pack=prompt_pack,
     )

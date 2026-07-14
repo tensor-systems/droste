@@ -177,6 +177,7 @@ def _run_valid_request(request: dict[str, Any], *, source_ctx: Any = None) -> di
         max_calls=max_subcalls,
         max_output_chars=max_output_chars,
         root_model=str(request.get("model") or ""),
+        prompt_profile=str(request.get("prompt_profile") or "") or None,
         verbose=False,
     )
 

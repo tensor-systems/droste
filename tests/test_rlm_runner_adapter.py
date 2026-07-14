@@ -61,6 +61,7 @@ def test_missing_protocol_version_refused_with_structured_error() -> None:
     assert '"protocol_version": 1' in result["error"]["message"]
     assert result["ready"] is False
     assert result["protocol_version"] == runner.RUNNER_PROTOCOL_VERSION
+    assert result["prompt_pack"] is None
 
 
 def test_explicit_current_protocol_version_accepted() -> None:
