@@ -8,6 +8,7 @@ future child runs.  It deliberately knows nothing about transports or models.
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import dataclass, field
 from math import isfinite
 from threading import Lock, RLock
@@ -546,7 +547,14 @@ class BudgetLedger:
                     # Mark before calling out. A re-entrant sink may reserve
                     # more work, but cannot emit this fact twice.
                     self._emitted_events += 1
-                self.on_event(event)
+                try:
+                    self.on_event(event)
+                except Exception as exc:
+                    warnings.warn(
+                        f"budget event sink failed: {type(exc).__name__}: {exc}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
 
 
 def _plain_json(value: Any) -> Any:

@@ -1534,6 +1534,12 @@ class CapabilityBroker:
         metadata = provider_metadata or CapabilityMetadata()
         annotation_error: CapabilityError | None = None
         annotation_control: BaseException | None = None
+        if attempt is not None:
+            terminal_error = attempt.begin_finish()
+            if terminal_error is not None:
+                status = CapabilityStatus.CANCELLED
+                error = terminal_error
+                result = None
         if annotate and self._annotator is not None:
             try:
                 finalized = self._annotator(call, result, error)
@@ -1549,11 +1555,6 @@ class CapabilityBroker:
                 if not isinstance(exc, Exception):
                     annotation_control = exc
         if attempt is not None:
-            terminal_error = attempt.begin_finish()
-            if terminal_error is not None:
-                status = CapabilityStatus.CANCELLED
-                error = terminal_error
-                result = None
             try:
                 metadata = metadata.merged_with(attempt.settle(result, error, attempted=attempted))
             except Exception as exc:

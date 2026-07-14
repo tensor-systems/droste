@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Event, Thread
 
 import pytest
 
@@ -150,6 +151,44 @@ def test_concurrent_append_assigns_one_unique_monotonic_sequence() -> None:
 
     assert sorted(event.seq for event in events) == list(range(1, 201))
     assert [event.seq for event in recorder.events] == list(range(1, 201))
+
+
+def test_live_delivery_preserves_recorded_order_across_concurrent_emitters() -> None:
+    first_delivering = Event()
+    second_attempted = Event()
+    second_delivered = Event()
+    delivered: list[int] = []
+    raced: list[bool] = []
+
+    def sink(event: dict[str, object]) -> None:
+        seq = event["seq"]
+        assert isinstance(seq, int)
+        if seq == 1:
+            first_delivering.set()
+            assert second_attempted.wait(timeout=2)
+            raced.append(second_delivered.wait(timeout=0.1))
+        delivered.append(seq)
+        if seq == 2:
+            second_delivered.set()
+
+    context = create_execution_context(run_id="live-order", on_event=sink)
+    first = Thread(target=lambda: context.emit_event({"type": "progress", "status": "one"}))
+    first.start()
+    assert first_delivering.wait(timeout=2)
+
+    def emit_second() -> None:
+        second_attempted.set()
+        context.emit_event({"type": "progress", "status": "two"})
+
+    second = Thread(target=emit_second)
+    second.start()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert raced == [False]
+    assert delivered == [1, 2]
+    assert [event.seq for event in context.trace.events] == [1, 2]
 
 
 def test_run_record_allows_repeated_durable_budget_mutations() -> None:

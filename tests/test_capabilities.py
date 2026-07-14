@@ -301,18 +301,23 @@ def test_cancellation_after_admission_stops_before_handler_dispatch() -> None:
     assert authority.settlements == [(False, CapabilityErrorCode.CANCELLED, CapabilityCheckpoint())]
 
 
-def test_cancellation_wins_the_finalization_race_before_settlement() -> None:
+def test_cancellation_cutoff_precedes_annotation_and_settlement() -> None:
     authority = _AttemptAuthority()
-    annotating = Event()
-    continue_finalization = Event()
+    handler_finished = Event()
+    release_handler = Event()
+    annotated: list[tuple[object, str | None]] = []
 
     def annotator(call, result, error):
-        annotating.set()
-        assert continue_finalization.wait(timeout=2)
+        annotated.append((result, error.code if error else None))
         return CapabilityMetadata()
 
+    def handler(_context):
+        handler_finished.set()
+        assert release_handler.wait(timeout=2)
+        return "finished"
+
     broker = CapabilityBroker(
-        (CapabilityRegistration(QUERY, lambda _context: "finished"),),
+        (CapabilityRegistration(QUERY, handler),),
         run_id="run-1",
         annotator=annotator,
         attempt_authority=authority,
@@ -324,14 +329,46 @@ def test_cancellation_wins_the_finalization_race_before_settlement() -> None:
         )
     )
     worker.start()
-    assert annotating.wait(timeout=2)
+    assert handler_finished.wait(timeout=2)
     assert broker.cancel("call-1") is True
-    continue_finalization.set()
+    release_handler.set()
     worker.join(timeout=2)
 
     assert results[0].status is CapabilityStatus.CANCELLED
     assert results[0].result is None
+    assert annotated == [(None, CapabilityErrorCode.CANCELLED)]
     assert authority.settlements[0][1] == CapabilityErrorCode.CANCELLED
+
+
+def test_cancellation_is_rejected_after_finalization_cutoff() -> None:
+    annotating = Event()
+    continue_annotation = Event()
+
+    def annotator(call, result, error):
+        annotating.set()
+        assert continue_annotation.wait(timeout=2)
+        return CapabilityMetadata()
+
+    broker = CapabilityBroker(
+        (CapabilityRegistration(QUERY, lambda _context: "finished"),),
+        run_id="run-1",
+        annotator=annotator,
+        attempt_authority=_AttemptAuthority(),
+    )
+    results = []
+    worker = Thread(
+        target=lambda: results.append(
+            broker.dispatch(CapabilityCall(QUERY.capability_id, "call-1", "run-1"))
+        )
+    )
+    worker.start()
+    assert annotating.wait(timeout=2)
+    assert broker.cancel("call-1") is False
+    continue_annotation.set()
+    worker.join(timeout=2)
+
+    assert results[0].ok is True
+    assert results[0].result == "finished"
 
 
 def test_process_control_from_guard_and_annotator_settles_before_propagating() -> None:

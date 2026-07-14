@@ -81,6 +81,8 @@ evidence with that status rather than leaving the model to interpret prefixes.
   into its parent and returns unused capacity; it never creates compute.
 - Emit reservation facts through the ledger journal after releasing the state
   lock. Arbitrary event sinks must never run under that lock.
+- Ledger event delivery is observational. A failing sink may warn, but it must
+  never change accounting or strand an admitted reservation.
 - In-flight provider progress is one cumulative `(tokens, subcalls)` checkpoint
   keyed by `call_id`. Equal checkpoints are idempotent; values cannot move
   backward or exceed the reservation. Wall time remains broker-measured.
@@ -112,6 +114,8 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - Capability tracing is observational: wrap only the broker-owned content-free
   accounting/evidence projection; do not duplicate its schema or let tracing
   participate in dispatch or authorization.
+- Serialize trace append and live callback delivery per execution context so
+  concurrent emitters observe the same monotonic order that is recorded.
 
 ## droste_runner Package
 
@@ -189,6 +193,9 @@ evidence with that status rather than leaving the model to interpret prefixes.
   cumulative `checkpoint()`; the broker owns cancellation and the mutable
   attempt lifecycle. Admission starts the exactly-once settlement boundary,
   including policy denial and cancellation before handler dispatch.
+- Establish the broker's finalization cutoff before post-attempt annotation.
+  The annotator and settlement authority must receive the same terminal
+  result/error, and cancellation requested after that cutoff is rejected.
 
 ## Provider Manifests
 
