@@ -35,7 +35,13 @@ from .clients.anthropic import AnthropicClient, AnthropicSubcallClient
 from .clients.modelrelay import ModelRelayClient, ModelRelaySubcallClient
 from .clients.openai_compat import OpenAICompatClient, OpenAICompatSubcallClient
 from .environments import EnvironmentConfig, create_environment, create_environment_context
-from .exceptions import PolicyError, RLMError, SubcallBudgetExceeded
+from .exceptions import (
+    BatchItemError,
+    BatchItemErrorDetails,
+    PolicyError,
+    RLMError,
+    SubcallBudgetExceeded,
+)
 from .execution.config import (
     DEFAULT_MAX_CALLS,
     DEFAULT_MAX_DEPTH,
@@ -102,6 +108,8 @@ __all__ = [
     "ProgressCallback",
     "emit_progress",
     "RLMError",
+    "BatchItemError",
+    "BatchItemErrorDetails",
     "PolicyError",
     "SubcallBudgetExceeded",
     "PolicyHints",

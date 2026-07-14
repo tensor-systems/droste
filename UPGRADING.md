@@ -13,6 +13,24 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.10.6)
 
+### Batch-item errors expose safe structured details
+
+Native response-batch item failures keep the existing human-readable error
+string and now add an optional `details` object to `llm_batch_with_errors` and
+structured JSON batch error entries. The additive fields are `request_id`,
+`batch_id`, `item_id`, `layer`, `cause`, `status_code`, `code`, and
+`retryable`; the frozen `BatchItemErrorDetails` value itself redacts and bounds
+every accepted string, including when hosts construct it directly. Unknown
+fields and payload data are not retained. The same object survives built-in
+broker and environment boundaries.
+
+Direct `llm_batch` calls still raise a `RuntimeError`, now using the compatible
+`BatchItemError` subclass when typed item details are available. Hosts can
+inspect its frozen `BatchItemErrorDetails` value without parsing the unchanged
+message. Custom `SubcallClient` implementations may keep returning only
+`index` and `error`; no new method or required field was added. The runner
+protocol version is unchanged.
+
 ### Subcall output limits are visible to the root model
 
 The built-in subcall clients now expose read-only `output_token_limit` metadata

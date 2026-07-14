@@ -33,7 +33,7 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
-from ..exceptions import SubcallBudgetExceeded
+from ..exceptions import BatchItemError, BatchItemErrorDetails, SubcallBudgetExceeded
 from ..execution.context import ExecutionContext
 from ..protocols.llm_client import TokenUsage
 from ..protocols.subcall_client import SubcallClient
@@ -48,6 +48,54 @@ from .useragent import USER_AGENT
 
 DEFAULT_MODELRELAY_BASE_URL = "https://api.modelrelay.ai/api/v1"
 _STREAM_ACCEPT = 'application/x-ndjson; profile="responses-stream/v2"'
+
+
+def _batch_detail_string(value: Any) -> str | None:
+    """Accept one string field; the public value owns redaction and bounds."""
+
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _first_batch_detail_string(*values: Any) -> str | None:
+    for value in values:
+        if accepted := _batch_detail_string(value):
+            return accepted
+    return None
+
+
+def _batch_item_error_details(
+    batch: dict[str, Any],
+    item: dict[str, Any],
+    error: dict[str, Any],
+) -> BatchItemErrorDetails:
+    """Project a provider error onto the explicit public scalar allowlist."""
+
+    raw_status = error.get("status_code", error.get("status"))
+    status_code = (
+        raw_status
+        if isinstance(raw_status, int)
+        and not isinstance(raw_status, bool)
+        and 100 <= raw_status <= 599
+        else None
+    )
+    retryable = error.get("retryable")
+    if not isinstance(retryable, bool):
+        retryable = None
+    return BatchItemErrorDetails(
+        request_id=_first_batch_detail_string(error.get("request_id"), item.get("request_id")),
+        batch_id=_first_batch_detail_string(
+            error.get("batch_id"), batch.get("batch_id"), batch.get("id")
+        ),
+        item_id=_first_batch_detail_string(error.get("item_id"), item.get("id")),
+        layer=_batch_detail_string(error.get("layer")),
+        cause=_batch_detail_string(error.get("cause")),
+        status_code=status_code,
+        code=_batch_detail_string(error.get("code")),
+        retryable=retryable,
+    )
 
 
 def _input_items(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -524,15 +572,18 @@ class ModelRelaySubcallClient(SubcallClient):
         contexts: list[str] | None = None,
     ) -> tuple[list[str], list[dict[str, object]]]:
         results, errors = self._run_batch(prompts, contexts)
-        structured = [
-            {
-                "index": idx,
-                "error": str(err),
-                **({"type": "budget_exhausted"} if isinstance(err, SubcallBudgetExceeded) else {}),
-            }
-            for idx, err in enumerate(errors)
-            if err is not None
-        ]
+        structured: list[dict[str, object]] = []
+        for idx, err in enumerate(errors):
+            if err is None:
+                continue
+            item: dict[str, object] = {"index": idx, "error": str(err)}
+            if isinstance(err, SubcallBudgetExceeded):
+                item["type"] = "budget_exhausted"
+            if isinstance(err, BatchItemError):
+                details = err.details.to_dict()
+                if details:
+                    item["details"] = details
+            structured.append(item)
         return results, structured
 
     def _run_batch(
@@ -615,7 +666,10 @@ class ModelRelaySubcallClient(SubcallClient):
                     code = str(error.get("code") or "")
                     message = redact_secrets(str(error.get("message") or "batch item failed"))[:500]
                     detail = f" ({code})" if code else ""
-                    errors[idx] = RuntimeError(f"llm_batch item {idx} failed{detail}: {message}")
+                    errors[idx] = BatchItemError(
+                        f"llm_batch item {idx} failed{detail}: {message}",
+                        _batch_item_error_details(data, raw, error),
+                    )
                 else:
                     raise RuntimeError(f"llm_batch item {idx} has invalid status {status!r}")
 
