@@ -85,7 +85,9 @@ from .prompts.pack import (
     PromptPackCatalog,
     PromptPackError,
     PromptPackRecord,
+    canonical_prompt_pack_bytes,
     load_prompt_pack,
+    prompt_pack_content_sha256,
     resolve_prompt_pack,
 )
 from .protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
@@ -149,7 +151,9 @@ __all__ = [
     "PromptPackCatalog",
     "PromptPackError",
     "PromptPackRecord",
+    "canonical_prompt_pack_bytes",
     "load_prompt_pack",
+    "prompt_pack_content_sha256",
     "resolve_prompt_pack",
     "AnthropicClient",
     "AnthropicSubcallClient",

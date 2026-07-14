@@ -6,8 +6,11 @@ selection, and rendering operate only on immutable values.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path
@@ -17,6 +20,7 @@ from typing import Any, Literal, Mapping
 PROMPT_PACK_SCHEMA_VERSION = 1
 PROMPT_SLOT_NAMES = frozenset({"capabilities", "budget", "question", "history", "output_contract"})
 DEFAULT_PROMPT_PROFILE = "full"
+_CONTENT_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 CODE_OUTPUT_CONTRACT = (
     "**TEXT OUTPUT ONLY. No function/tool calling.**\n\n"
@@ -32,6 +36,19 @@ _TEMPLATE_FIELDS = (
     "error_repair",
     "extract_system",
     "extract_user",
+)
+_PROMPT_PACK_FIELDS = frozenset(
+    {
+        "schema_version",
+        "pack_id",
+        "revision",
+        "profile",
+        "templates",
+        "policy_defaults",
+        "provenance",
+        "tips",
+        "unable_sentinel",
+    }
 )
 _REQUIRED_TEMPLATE_SLOTS = {
     "system": frozenset({"capabilities", "budget", "output_contract"}),
@@ -64,6 +81,12 @@ ResolutionTier = Literal[
 
 class PromptPackError(ValueError):
     """A prompt-pack artifact or catalog violates the stable contract."""
+
+
+def _content_sha256(value: Any, *, path: str) -> str:
+    if not isinstance(value, str) or _CONTENT_SHA256_PATTERN.fullmatch(value) is None:
+        raise PromptPackError(f"{path} must be 64 lowercase hex characters")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +179,7 @@ class ResolvedPromptPack:
             provenance_source=self.pack.provenance.source,
             provenance_benchmark=self.pack.provenance.benchmark,
             provenance_score=self.pack.provenance.score,
+            content_sha256=prompt_pack_content_sha256(self.pack),
         )
 
 
@@ -169,6 +193,13 @@ class PromptPackRecord:
     provenance_source: str
     provenance_benchmark: str | None = None
     provenance_score: str | None = None
+    # Optional only for source compatibility with callers that construct
+    # records directly. Records produced by ResolvedPromptPack always carry it.
+    content_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.content_sha256 is not None:
+            _content_sha256(self.content_sha256, path="prompt_pack.content_sha256")
 
     def as_dict(self) -> dict[str, str | None]:
         return {
@@ -180,6 +211,7 @@ class PromptPackRecord:
             "provenance_source": self.provenance_source,
             "provenance_benchmark": self.provenance_benchmark,
             "provenance_score": self.provenance_score,
+            "content_sha256": self.content_sha256,
         }
 
 
@@ -257,6 +289,57 @@ def _validate_template(name: str, template: str) -> None:
         raise PromptPackError(f"templates.{name} is missing required slots: {rendered}")
 
 
+def _canonical_prompt_pack_value(pack: PromptPack) -> dict[str, Any]:
+    """Project one pack into the complete semantic value used for identity."""
+    projected_fields = {
+        PromptPack: _PROMPT_PACK_FIELDS,
+        PromptPackProvenance: frozenset({"source", "notes", "benchmark", "score"}),
+        PromptPolicyDefaults: frozenset({"enforce_contract"}),
+        PromptTemplates: frozenset(_TEMPLATE_FIELDS),
+    }
+    for value_type, projected in projected_fields.items():
+        actual = frozenset(field.name for field in fields(value_type))
+        if actual != projected:
+            raise PromptPackError(
+                f"canonical prompt-pack projection is incomplete for {value_type.__name__}"
+            )
+    return {
+        "schema_version": pack.schema_version,
+        "id": pack.pack_id,
+        "revision": pack.revision,
+        "profile": pack.profile,
+        "unable_sentinel": pack.unable_sentinel,
+        "tips": list(pack.tips),
+        "provenance": {
+            "source": pack.provenance.source,
+            "notes": pack.provenance.notes,
+            "benchmark": pack.provenance.benchmark,
+            "score": pack.provenance.score,
+        },
+        "policy_defaults": {
+            "enforce_contract": pack.policy_defaults.enforce_contract,
+        },
+        "templates": {name: getattr(pack.templates, name) for name in _TEMPLATE_FIELDS},
+    }
+
+
+def canonical_prompt_pack_bytes(pack: PromptPack) -> bytes:
+    """Pure canonical serialization for a complete validated prompt pack."""
+    validate_prompt_pack(pack)
+    return json.dumps(
+        _canonical_prompt_pack_value(pack),
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def prompt_pack_content_sha256(pack: PromptPack) -> str:
+    """Return the lowercase SHA-256 of the canonical prompt-pack bytes."""
+    return hashlib.sha256(canonical_prompt_pack_bytes(pack)).hexdigest()
+
+
 def parse_prompt_pack(data: Mapping[str, Any], *, source: str = "<memory>") -> PromptPack:
     """Purely validate and convert decoded TOML data into an immutable pack."""
     if not isinstance(data, Mapping):
@@ -272,7 +355,7 @@ def parse_prompt_pack(data: Mapping[str, Any], *, source: str = "<memory>") -> P
         "policy_defaults",
         "templates",
     }
-    _strict_keys(data, required=required, allowed=required, path=source)
+    _strict_keys(data, required=required, allowed=required | {"content_sha256"}, path=source)
     schema_version = data["schema_version"]
     if type(schema_version) is not int or schema_version != PROMPT_PACK_SCHEMA_VERSION:
         raise PromptPackError(
@@ -330,7 +413,7 @@ def parse_prompt_pack(data: Mapping[str, Any], *, source: str = "<memory>") -> P
         _validate_template(name, template)
         template_values[name] = template
 
-    return PromptPack(
+    pack = PromptPack(
         schema_version=schema_version,
         pack_id=_text(data["id"], f"{source}.id"),
         revision=_text(data["revision"], f"{source}.revision"),
@@ -341,6 +424,14 @@ def parse_prompt_pack(data: Mapping[str, Any], *, source: str = "<memory>") -> P
         tips=tuple(raw_tips),
         unable_sentinel=_text(data["unable_sentinel"], f"{source}.unable_sentinel"),
     )
+    if "content_sha256" in data:
+        declared_hash = _content_sha256(data["content_sha256"], path=f"{source}.content_sha256")
+        actual_hash = prompt_pack_content_sha256(pack)
+        if declared_hash != actual_hash:
+            raise PromptPackError(
+                f"{source}.content_sha256 does not match validated prompt-pack content"
+            )
+    return pack
 
 
 def validate_prompt_pack(pack: PromptPack) -> None:
