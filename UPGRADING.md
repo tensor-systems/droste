@@ -11,27 +11,9 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.12.1)
+## Unreleased (post-0.13.0)
 
-## 0.12.1 (from 0.12.0)
-
-### Scaffold concurrency now controls built-in subcall execution
-
-`RolloutConfiguration.concurrency` is now the effective maximum number of
-in-flight items in every built-in subcall batch, rather than provenance-only
-metadata. The compatibility default is 5, matching the earlier native and
-runner behavior. In-process callers that choose another value must pass that
-same immutable value to the built-in client's `max_parallel` constructor
-argument; `run_rlm` rejects a mismatch before the first model request. Custom
-third-party clients remain compatible, but are responsible for honoring the
-declared value.
-
-Runner requests may set the positive integer `subcall_concurrency`; omitted
-values resolve once to 5. Native CLI `--rollout-config` values now configure
-the client as well as the scaffold manifest. The Pyodide relay preserves the
-field unchanged. The effective value remains content-free provenance at
-`scaffold_manifest.inference.concurrency`. The request field is additive; this
-release uses runner protocol v4 for the preflight safety boundary below.
+## 0.13.0 (from 0.12.1)
 
 ### Runner protocol v4 adds safe, content-free scaffold preflight
 
@@ -50,6 +32,26 @@ an older v3 runner may ignore an unknown `operation` field and execute a request
 that a newer host intended only to inspect. A v3 runner instead refuses the v4
 envelope before work. In-process hosts may call `preflight_rlm(...)`; it and
 `run_rlm(...)` share one scaffold resolver.
+
+## 0.12.1 (from 0.12.0)
+
+### Scaffold concurrency now controls built-in subcall execution
+
+`RolloutConfiguration.concurrency` is now the effective maximum number of
+in-flight items in every built-in subcall batch, rather than provenance-only
+metadata. The compatibility default is 5, matching the earlier native and
+runner behavior. In-process callers that choose another value must pass that
+same immutable value to the built-in client's `max_parallel` constructor
+argument; `run_rlm` rejects a mismatch before the first model request. Custom
+third-party clients remain compatible, but are responsible for honoring the
+declared value.
+
+Runner requests may set the positive integer `subcall_concurrency`; omitted
+values resolve once to 5. Native CLI `--rollout-config` values now configure
+the client as well as the scaffold manifest. The Pyodide relay preserves the
+field unchanged. The effective value remains content-free provenance at
+`scaffold_manifest.inference.concurrency`. The runner protocol remains v3
+because the request field is optional and additive.
 
 ## 0.12.0 (from 0.11.0)
 
