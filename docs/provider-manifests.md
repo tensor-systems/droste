@@ -65,6 +65,33 @@ snapshot. Every successful transport response includes a cumulative
 `{tokens, subcalls}` checkpoint, including typed provider-error outcomes. The
 receiving broker validates and applies that value before its final settlement.
 
+Unary invocation remains the default provider-protocol-4 transport. A host that
+needs live cancellation or accounting explicitly supplies a bridge-v2 duplex
+session to `BridgeProvider`. Each invocation gets one bounded message pump keyed
+by the existing `call_id`; it carries ordered `check`, cumulative `checkpoint`,
+and exactly one `terminal` frame. The receiver applies checkpoints through the
+same `CapabilityExecutionContext` and acknowledges only after ledger acceptance.
+The remote handler still receives only that context. The reference pump permits
+one queued frame and rejects serialized frames larger than 8 MiB.
+
+The pump is pull-based: the receiving interpreter returns from each transport
+yield to reduce a frame, then sends one acknowledgement. Hosts must not call
+back into a suspended Pyodide interpreter. A trusted host cancellation request
+is sampled immediately before the receiver reduces each frame; providers cannot
+set it. Once sampled, the receiver returns a cancelled acknowledgement and the
+broker records that cancellation before its finalization cutoff. The terminal
+sample is the transport cutoff, so a request arriving after it is late. Exact
+duplicate frames are idempotent, while reordered, conflicting, wrong-call, or
+over-reservation frames fail closed.
+
+If the remote provider interpreter or transport disappears before a valid
+terminal frame, the receiving broker produces `bridge.transport_lost` and runs
+its ordinary exactly-once settlement. Previously acknowledged checkpoints stay
+committed. For inference attempts, the budget authority conservatively charges
+the remaining reservation because unacknowledged remote spend is unknowable.
+Killing the receiving broker itself is outside this in-process contract and
+requires host-level durable run reconciliation.
+
 ## Example
 
 ```python

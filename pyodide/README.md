@@ -129,7 +129,9 @@ alongside this section.
 def build_db_service(db_path, contacts_db_path=None) -> tuple[ProviderService, dict]:
     ...
 
-def run_for_host_pyodide(request, host_fetch, bridge_call=None, meta=None) -> dict:
+def run_for_host_pyodide(
+    request, host_fetch, bridge_call=None, duplex_bridge_call=None, meta=None
+) -> dict:
     ...
 ```
 
@@ -174,16 +176,26 @@ through host code.
   host-specific to carry, so its `meta` is just `{}`; a production adapter
   might carry things like a filesystem-probe result or a default call budget
   computed from a `SELECT COUNT(*)`.
-- **`run_for_host_pyodide(request, host_fetch, bridge_call=None, meta=None)`**
+- **`run_for_host_pyodide(request, host_fetch, bridge_call=None, duplex_bridge_call=None, meta=None)`**
   runs in the *untrusted* REPL interpreter. It wires a `BridgedLLMClient` (over
   the injected `host_fetch`) and an environment into `droste.run_rlm`, and
   returns a response dict. When `bridge_call` is non-`None` (DB-service mode,
-  the default), it reaches the DB only through a `BridgeProvider(bridge_call)`
-  registration with receiving-host effect policy — the DB never opens in this
-  interpreter. When it's `None`
+  the default), it reaches the DB only through a
+  `BridgeProvider(bridge_call, duplex_call=duplex_bridge_call)` registration
+  with receiving-host effect policy — the DB never opens in this interpreter.
+  The relay supplies its bounded bridge-v2 pump as `duplex_bridge_call`;
+  custom hosts may omit it to retain unary provider-protocol-4 invocation.
+  When `bridge_call` is `None`
   (`RLM_DB_SERVICE=0`), the same function opens `request["db_path"]` directly in
   a single interpreter. `meta` is the same opaque blob `build_db_service`
   returned, ferried back verbatim.
+
+In two-interpreter mode, a trusted host may send `SIGUSR1` to request
+cooperative cancellation of the active provider call. The relay keys that
+request to the invocation's `call_id` before the first frame and the receiving broker decides
+the next frame acknowledgement. `SIGTERM` and `SIGKILL` remain hard-stop paths;
+a handler that never reaches `check()`/`checkpoint()` still requires the host's
+ordinary hard timeout.
 
 ### How the adapter module is selected (and why it's safe)
 
@@ -233,6 +245,7 @@ embedded Python template, at both boundary crossings, before your adapter is
 called:
 
 - `bridge_call` → `_bridge_call = bridge_call if callable(bridge_call) else None`
+- `duplex_bridge_call` → `_duplex_bridge_call = duplex_bridge_call if callable(duplex_bridge_call) else None`
 - `contacts_db_path` → `_contacts_db_path = svc_contacts_db_path if isinstance(svc_contacts_db_path, str) else None`
 
 So the contract your adapter sees is a clean "real Python `None`, or a real
@@ -367,16 +380,16 @@ Roughly three tiers of coverage:
 
 ## Known gaps
 
-- **The unary provider bridge cannot deliver a new soft-cancellation request
-  during a synchronous remote call.** Provider protocol 4 carries the
+- **Custom hosts that select only the unary provider bridge cannot deliver a
+  new soft-cancellation request during a synchronous remote call.** Provider protocol 4 carries the
   cancellation snapshot and remaining deadline at dispatch, and returns a
   validated cumulative checkpoint at completion. A remote handler can poll
   `CapabilityExecutionContext.check()` and enforce that dispatched deadline,
   but the current request/response bridge has no reverse channel for a
   cancellation requested afterward and cannot stream mid-call checkpoints.
-  The Deno host's required wall-clock timeout and process termination remain
-  the hard Pyodide boundary. A graceful live-cancellation channel would require
-  a distinct bidirectional bridge transport, not a provider-specific callback.
+  The bundled two-interpreter Deno relay explicitly selects bridge v2 to add
+  that channel. Custom unary-only hosts still require a wall-clock timeout and
+  process termination as their hard Pyodide boundary.
 
 - **`RLM_DB_SERVICE=0` mounts the whole data directory into the untrusted
   interpreter — deliberate, documented, loud (#7, decided 2026-07-10).**

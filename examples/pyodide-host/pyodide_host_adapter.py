@@ -7,7 +7,9 @@ to the `droste` package into the sources directory relay.ts mounts, exposing
 exactly two functions:
 
     build_db_service(db_path, contacts_db_path=None) -> (service, meta)
-    run_for_host_pyodide(request, host_fetch, bridge_call=None, meta=None) -> dict
+    run_for_host_pyodide(
+        request, host_fetch, bridge_call=None, duplex_bridge_call=None, meta=None
+    ) -> dict
 
 `meta` is opaque to relay.ts — whatever `build_db_service` returns crosses the
 process/interpreter boundary as JSON and comes back to `run_for_host_pyodide`
@@ -92,6 +94,7 @@ def run_for_host_pyodide(
     request: dict[str, Any],
     host_fetch: HostFetch,
     bridge_call: Any = None,
+    duplex_bridge_call: Any = None,
     meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The Pyodide equivalent of an in-process `run_rlm` call.
@@ -103,6 +106,8 @@ def run_for_host_pyodide(
     inside this (untrusted) interpreter. `bridge_call` is `None` when the
     host opts out (relay.ts: `RLM_DB_SERVICE=0`) — the single-interpreter,
     `db_path`-in-sandbox behavior below is unchanged in that case.
+    `duplex_bridge_call` is the explicitly selected bridge-v2 message pump;
+    omitting it keeps the same bridge provider on unary protocol 4.
     """
     # customer_token only when auth_type says so — BridgedLLMClient._auth_headers
     # prefers a customer token (bearer) over an api_key (X-ModelRelay-Api-Key)
@@ -119,7 +124,7 @@ def run_for_host_pyodide(
     )
 
     if bridge_call is not None:
-        bridge = BridgeProvider(bridge_call)
+        bridge = BridgeProvider(bridge_call, duplex_call=duplex_bridge_call)
         registration = bridge.registration(
             # Effects are deliberately supplied by this receiving host, not
             # trusted from transport metadata.

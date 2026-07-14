@@ -16,6 +16,10 @@
 // product wiring, only the adapter contract.
 // The Pyodide runtime pin lives in deps.ts — the single bump site (#33).
 import { loadPyodide } from "./deps.ts";
+import {
+  type ProviderDuplexSession,
+  startProviderDuplex,
+} from "./provider_duplex.ts";
 import { basename, dirname } from "node:path";
 import { streamResponses } from "./stream.ts";
 import {
@@ -127,6 +131,20 @@ const realContactsPath = hasContactsField
 let bridgeCall:
   | ((method: string, paramsJson: string) => Promise<string>)
   | null = null;
+let duplexBridgeCall:
+  | ((method: string, paramsJson: string) => ProviderDuplexSession)
+  | null = null;
+const activeDuplexSessions = new Set<ProviderDuplexSession>();
+if (Deno.build.os !== "windows") {
+  // A one-shot relay has at most one active provider interpreter call. SIGUSR1
+  // is the trusted host's cooperative-cancellation ingress; SIGTERM/SIGKILL
+  // retain their normal hard-stop semantics.
+  Deno.addSignalListener("SIGUSR1", () => {
+    for (const session of activeDuplexSessions) {
+      session.requestActiveCancellation();
+    }
+  });
+}
 // Opaque to this relay — whatever the adapter's build_db_service() returns,
 // ferried across to run_for_host_pyodide()'s meta= kwarg unexamined. Only the
 // adapter (on both sides of the bridge) knows or cares what's in it. Kept as
@@ -182,6 +200,67 @@ json.dumps(_meta)
     // bridge_source_integration_test.ts). handle() itself is synchronous.
     bridgeCall = async (method: string, paramsJson: string) =>
       handle(method, paramsJson) as string;
+    // Explicit bridge-v2 selection. The pump carries at most one frame and
+    // never re-enters the suspended REPL interpreter; Python pulls each frame,
+    // applies it through the receiving broker, then acknowledges it.
+    let duplexBusy = false;
+    duplexBridgeCall = (method: string, paramsJson: string) => {
+      const execution = JSON.parse(paramsJson)?.execution;
+      const callId = typeof execution?.call_id === "string"
+        ? execution.call_id
+        : null;
+      if (!callId) {
+        throw new Error("duplex invoke requires execution.call_id");
+      }
+      const session = startProviderDuplex(async (emit) => {
+        if (duplexBusy) {
+          throw new Error(
+            "provider interpreter already has an active duplex call",
+          );
+        }
+        duplexBusy = true;
+        dbsvc.globals.set("_duplex_method", method);
+        dbsvc.globals.set("_duplex_params", paramsJson);
+        dbsvc.globals.set("_duplex_emit", emit);
+        try {
+          // runPythonAsync supplies the JSPI suspender used when the remote
+          // context waits for each host acknowledgement.
+          const raw = await dbsvc.runPythonAsync(
+            `_service.handle_duplex(_duplex_method, _duplex_params, _duplex_emit)`,
+          );
+          const envelope = JSON.parse(raw);
+          if (!envelope?.ok) {
+            throw new Error(
+              `${envelope?.error?.type ?? "BridgeError"}: ${
+                envelope?.error?.message ?? "unknown duplex bridge error"
+              }`,
+            );
+          }
+        } finally {
+          dbsvc.globals.delete("_duplex_method");
+          dbsvc.globals.delete("_duplex_params");
+          dbsvc.globals.delete("_duplex_emit");
+          duplexBusy = false;
+        }
+      }, callId);
+      activeDuplexSessions.add(session);
+      return {
+        receive: () => session.receive(),
+        send: (ackJson: string) => session.send(ackJson),
+        cancellation_requested: (callId: string) =>
+          session.cancellation_requested(callId),
+        requestCancellation: (callId: string) =>
+          session.requestCancellation(callId),
+        requestActiveCancellation: () => session.requestActiveCancellation(),
+        close: async () => {
+          try {
+            await session.close();
+          } finally {
+            activeDuplexSessions.delete(session);
+          }
+        },
+      };
+    };
   } catch (e) {
     await writeHostResponse({
       answer: null,
@@ -399,13 +478,15 @@ py.globals.set(
   JSON.stringify(BRIDGE_LEGACY ? request : sandboxRequest),
 );
 py.globals.set("adapter_module_name", adapterModule);
-// Always set, never conditionally interpolated — bridge_call/bridge_meta_json
+// Always set, never conditionally interpolated — bridge_call,
+// duplex_bridge_call, and bridge_meta_json
 // are None/"null" outside DB-service mode, and the adapter's
 // run_for_host_pyodide(..., bridge_call=None, meta=None) contract handles
 // that uniformly. relay.ts never inspects what's inside meta (see
 // bridgeMetaJson above); it's opaque cargo between the two adapter calls,
 // passed through as the raw JSON string — never parsed into a JS value here.
 py.globals.set("bridge_call", DB_SERVICE ? bridgeCall : null);
+py.globals.set("duplex_bridge_call", DB_SERVICE ? duplexBridgeCall : null);
 py.globals.set("bridge_meta_json", bridgeMetaJson ?? "null");
 // A callable, not a value snapshot: lastHttpErrorStatus is still 0 at this
 // point (host_fetch, which sets it, hasn't run yet — it runs synchronously
@@ -429,12 +510,14 @@ _meta = json.loads(bridge_meta_json)
 # it, and the adapter would try to call it. Normalize explicitly here rather
 # than trust every adapter to know this quirk.
 _bridge_call = bridge_call if callable(bridge_call) else None
+_duplex_bridge_call = duplex_bridge_call if callable(duplex_bridge_call) else None
 # Capture the RLM's progress prints so stdout carries only the response JSON.
 _buf = io.StringIO()
 try:
     with contextlib.redirect_stdout(_buf):
         resp = _adapter.run_for_host_pyodide(
-            json.loads(request_json), host_fetch, bridge_call=_bridge_call, meta=_meta,
+            json.loads(request_json), host_fetch, bridge_call=_bridge_call,
+            duplex_bridge_call=_duplex_bridge_call, meta=_meta,
         )
 except Exception as e:
     resp = {"answer": None, "error": {"type": type(e).__name__, "message": str(e)}}

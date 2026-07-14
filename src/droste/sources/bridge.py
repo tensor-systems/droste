@@ -29,6 +29,14 @@ from ..providers import (
     ProviderRegistration,
     ProviderRuntime,
 )
+from . import bridge_duplex as _duplex
+from .bridge_duplex import (
+    BridgeProtocolError,
+    BridgeTransportLost,
+    DuplexBridgeCall,
+    DuplexBridgeSession,
+    DuplexControl,
+)
 
 BridgeCall = Callable[[str, str], Any]
 
@@ -67,6 +75,37 @@ class ProviderService:
                 }
             )
 
+    def handle_duplex(
+        self,
+        method: str,
+        params_json: str,
+        control: DuplexControl,
+    ) -> str:
+        """Dispatch one explicit bridge-v2 invocation with live control/progress."""
+
+        try:
+            if method != "invoke":
+                raise ValueError(f"unknown duplex bridge method: {method!r}")
+            if not callable(control):
+                raise TypeError("duplex bridge requires a control channel")
+            payload = json.loads(params_json) if params_json else {}
+            if not isinstance(payload, dict):
+                raise ValueError("duplex bridge params must be a JSON object")
+            result = self._dispatch_invoke(payload, control=control)
+            return json.dumps(
+                {
+                    "ok": True,
+                    "result": _duplex.deliver_terminal(result, control),
+                }
+            )
+        except Exception as exc:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": {"type": type(exc).__name__, "message": str(exc)},
+                }
+            )
+
     def _dispatch(self, method: str, params_json: str) -> Any:
         payload = json.loads(params_json) if params_json else {}
         if not isinstance(payload, dict):
@@ -78,8 +117,24 @@ class ProviderService:
         if method != "invoke":
             raise ValueError(f"unknown bridge method: {method!r}")
 
-        if set(payload) != {"operation_id", "args", "kwargs", "execution"}:
+        return self._dispatch_invoke(payload)
+
+    def _dispatch_invoke(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        control: DuplexControl | None = None,
+    ) -> dict[str, Any]:
+        expected = {"operation_id", "args", "kwargs", "execution"}
+        if control is not None:
+            expected.add("bridge_protocol")
+        if set(payload) != expected:
             raise ValueError("bridge invoke requires operation_id, args, kwargs, and execution")
+        if (
+            control is not None
+            and payload.get("bridge_protocol") != _duplex.BRIDGE_PROTOCOL_VERSION
+        ):
+            raise BridgeProtocolError("duplex invoke requires bridge_protocol 2")
         operation_id = payload.get("operation_id")
         args = payload.get("args", [])
         kwargs = payload.get("kwargs", {})
@@ -93,7 +148,16 @@ class ProviderService:
         handler = self._source.runtime.handlers.get(operation_id)
         if handler is None:
             raise PermissionError(f"operation {operation_id!r} is not in the provider manifest")
-        execution, checkpoint = _execution_context(execution_payload)
+        if control is None:
+            execution, checkpoint = _execution_context(execution_payload)
+
+            def last_seq() -> int:
+                return 0
+        else:
+            local, local_checkpoint = _execution_context(execution_payload)
+            execution, checkpoint, last_seq = _duplex.execution_context(
+                local, local_checkpoint, control
+            )
         try:
             execution.check()
             result = handler(execution, *args, **kwargs)
@@ -102,9 +166,13 @@ class ProviderService:
                 code = CapabilityErrorCode.CANCELLED
             elif isinstance(exc, CapabilityDeadlineExceeded):
                 code = CapabilityErrorCode.DEADLINE_EXCEEDED
+            elif isinstance(exc, BridgeTransportLost):
+                code = _duplex.TRANSPORT_LOST
+            elif isinstance(exc, BridgeProtocolError):
+                code = _duplex.PROTOCOL_ERROR
             else:
                 code = CapabilityErrorCode.HANDLER_ERROR
-            return {
+            response = {
                 "kind": "capability_outcome",
                 "value": CapabilityOutcome(
                     error=CapabilityError(
@@ -115,6 +183,11 @@ class ProviderService:
                 ).to_dict(),
                 "checkpoint": checkpoint().to_dict(),
             }
+            return (
+                _duplex.duplex_terminal(response, execution.call_id, last_seq())
+                if control
+                else response
+            )
         if isinstance(result, CapabilityOutcome):
             try:
                 value = result.to_dict()
@@ -127,15 +200,20 @@ class ProviderService:
                     ),
                     metadata=result.metadata,
                 ).to_dict()
-            return {
+            response = {
                 "kind": "capability_outcome",
                 "value": value,
                 "checkpoint": checkpoint().to_dict(),
             }
+            return (
+                _duplex.duplex_terminal(response, execution.call_id, last_seq())
+                if control
+                else response
+            )
         try:
             portable = thaw_value(freeze_value(result))
         except (TypeError, ValueError) as exc:
-            return {
+            response = {
                 "kind": "capability_outcome",
                 "value": CapabilityOutcome(
                     error=CapabilityError(
@@ -146,11 +224,21 @@ class ProviderService:
                 ).to_dict(),
                 "checkpoint": checkpoint().to_dict(),
             }
-        return {
+            return (
+                _duplex.duplex_terminal(response, execution.call_id, last_seq())
+                if control
+                else response
+            )
+        response = {
             "kind": "value",
             "value": portable,
             "checkpoint": checkpoint().to_dict(),
         }
+        return (
+            _duplex.duplex_terminal(response, execution.call_id, last_seq())
+            if control
+            else response
+        )
 
 
 class BridgeProvider:
@@ -161,10 +249,18 @@ class BridgeProvider:
     ``runPythonAsync``/JSPI-capable stack, as the bundled host adapter does.
     """
 
-    def __init__(self, bridge_call: BridgeCall) -> None:
+    def __init__(
+        self,
+        bridge_call: BridgeCall,
+        *,
+        duplex_call: DuplexBridgeCall | None = None,
+    ) -> None:
         if not callable(bridge_call):
             raise TypeError("bridge_call must be callable")
+        if duplex_call is not None and not callable(duplex_call):
+            raise TypeError("duplex_call must be callable or None")
         self._call = bridge_call
+        self._duplex_call = duplex_call
         described = self._request("describe")
         if not isinstance(described, dict):
             raise ValueError("bridge describe response must be an object")
@@ -217,6 +313,8 @@ class BridgeProvider:
     ) -> Any:
         if not isinstance(execution, CapabilityExecutionContext):
             raise TypeError("bridge provider requires a CapabilityExecutionContext")
+        if self._duplex_call is not None:
+            return self._request_operation_duplex(operation_id, execution, args, kwargs)
         result = self._request(
             "invoke",
             operation_id=operation_id,
@@ -239,12 +337,24 @@ class BridgeProvider:
             return CapabilityOutcome.from_dict(value)
         raise RuntimeError("bridge invoke response has an unknown result kind")
 
-    def _request(self, method: str, **payload: Any) -> Any:
-        raw = self._call(method, json.dumps(payload))
-        if hasattr(raw, "__await__"):
-            from pyodide.ffi import run_sync
+    def _request_operation_duplex(
+        self,
+        operation_id: str,
+        execution: CapabilityExecutionContext,
+        args: tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Any:
+        assert self._duplex_call is not None
+        return _duplex.request_operation(
+            self._duplex_call,
+            operation_id,
+            execution,
+            args,
+            kwargs,
+        )
 
-            raw = run_sync(raw)
+    def _request(self, method: str, **payload: Any) -> Any:
+        raw = _duplex.await_value(self._call(method, json.dumps(payload)))
         try:
             envelope = json.loads(raw)
         except (TypeError, ValueError) as exc:
@@ -261,7 +371,16 @@ class BridgeProvider:
         return envelope.get("result")
 
 
-__all__ = ["BridgeCall", "BridgeProvider", "ProviderService"]
+__all__ = [
+    "BridgeCall",
+    "BridgeProtocolError",
+    "BridgeProvider",
+    "BridgeTransportLost",
+    "DuplexBridgeCall",
+    "DuplexBridgeSession",
+    "DuplexControl",
+    "ProviderService",
+]
 
 
 def _exception_type(exc: Exception) -> str:

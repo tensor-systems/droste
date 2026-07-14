@@ -267,6 +267,13 @@ are versioned, each by a single integer:
   context-first provider binding, and bridge invocation facts. A mismatched
   manifest fails before a source is live.
 
+Provider bridge v2 is a separate, explicitly selected transport contract; it
+does not change provider manifest protocol 4. It adds one bounded per-call
+message pump for ordered checkpoints, cancellation acknowledgement, and a
+terminal outcome while preserving the same capability identity, manifest,
+generated binding, and broker finalization path. Unary bridge invocation stays
+the default when a host does not supply the duplex session factory.
+
 The rules: **adding an optional field is not a version bump** (the 0.5.x
 subcall cost-control knobs are the worked example — older engines ignore
 them, newer engines honor them); renaming or removing a field, or changing
