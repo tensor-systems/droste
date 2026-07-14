@@ -85,6 +85,8 @@ def test_run_reports_actual_subcall_count() -> None:
 
 
 def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> None:
+    from importlib import import_module
+
     import droste_runner.runner as runner_module
     from droste.loop.step import RLMResult
     from droste.loop.trajectory import IterationRecord
@@ -111,7 +113,7 @@ def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> 
             ],
         )
 
-    monkeypatch.setattr(runner_module, "run_rlm", fake_run_rlm)
+    monkeypatch.setattr(import_module("droste_runner.run"), "run_rlm", fake_run_rlm)
     response = runner_module.run(
         {
             "protocol_version": 1,

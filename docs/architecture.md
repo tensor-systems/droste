@@ -91,6 +91,14 @@ Each trajectory entry carries `execution_status` (`success` or `error`) beside
 the unchanged `execution_result` text; consumers must not infer status from an
 output prefix.
 
+The Python implementation is split by ownership: `droste.environments`
+provides the generic native in-process environment; `droste_runner` keeps
+HTTP clients, remote source transport, envelope helpers, and orchestration in
+`http_clients`, `sources`, `protocol`, and `run` modules respectively.
+`droste_runner.runner` is a compatibility facade for existing embedders, not a
+second implementation. Both successful and refused envelopes are shaped by
+`protocol.build_response`, so their shared fields cannot drift.
+
 **Compatibility window**: the request/response schema and the source
 protocol are versioned, each by a single integer:
 

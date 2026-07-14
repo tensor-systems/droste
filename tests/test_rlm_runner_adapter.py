@@ -1,6 +1,7 @@
 import os
 import sys
 import types
+from importlib import import_module
 
 from droste_runner import runner
 
@@ -103,7 +104,8 @@ def test_main_version_gate_precedes_adapter_module_rejection(monkeypatch, capsys
     # must get the versioned refusal, not the generic adapter_module error —
     # the version gate is the first check on the untrusted request boundary
     # (codex review).
-    monkeypatch.setattr(runner, "_read_request", lambda: {"adapter_module": "evil.module"})
+    run_module = import_module("droste_runner.run")
+    monkeypatch.setattr(run_module, "_read_request", lambda: {"adapter_module": "evil.module"})
     runner.main()
     out = capsys.readouterr().out
     import json

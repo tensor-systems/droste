@@ -175,6 +175,8 @@ def test_run_threads_source_ctx_to_factories(monkeypatch) -> None:
     # Guard the run() -> build_data_sources(request, source_ctx) passthrough:
     # a regression back to build_data_sources(request) would silently drop the
     # host-supplied edge context.
+    from importlib import import_module
+
     import droste_runner.runner as runner_mod
 
     seen: dict[str, object] = {}
@@ -198,7 +200,7 @@ def test_run_threads_source_ctx_to_factories(monkeypatch) -> None:
             error=None,
         )
 
-    monkeypatch.setattr(runner_mod, "run_rlm", fake_run_rlm)
+    monkeypatch.setattr(import_module("droste_runner.run"), "run_rlm", fake_run_rlm)
 
     ctx = object()
     response = runner_mod.run(

@@ -18,7 +18,7 @@ nothing host-specific to carry (contrast a product host, which might carry a
 Everything here is droste-general: `droste.substrates.pyodide` for the
 Pyodide-safe LLM client, `droste.sources.sql_local` for a read-only SQLite
 data source, `droste.sources.bridge` for the untrusted/trusted interpreter
-split, `droste_runner.runner.RunnerEnvironment` for the same in-process REPL
+split, `droste.environments.RunnerEnvironment` for the same in-process REPL
 environment droste's own CLI (`droste_cli.main.run_ask`) and `droste_runner`
 (ModelRelay's hosted runner) already use. No third-party or product-specific
 imports. A real host's production adapter looks like this file with its own
@@ -35,13 +35,13 @@ from __future__ import annotations
 from typing import Any
 
 from droste import DataSourceRegistry, RLMConfig, run_rlm
+from droste.environments import RunnerEnvironment
 from droste.execution.context import create_execution_context
 from droste.execution.progress import emit_event, emit_progress
 from droste.sources.bridge import BridgeDataSource, DataSourceService
 from droste.sources.sql_local import local_sql_source_factory
 from droste.substrates.pyodide import BridgedLLMClient, HostFetch, serialize_error
 from droste.testing import MockSubcallClient
-from droste_runner.runner import RunnerEnvironment
 
 # Default kept in sync with BridgedLLMClient's own default; overridable per
 # request (request["base_url"]) so tests can point this adapter at a local

@@ -13,6 +13,18 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.10.6)
 
+### Runner implementation modules are focused
+
+The former `droste_runner.runner` monolith is split into `run`, `protocol`,
+`http_clients`, `sources`, and a small `environment` compatibility shim. The
+generic native environment now lives at `droste.environments.RunnerEnvironment`;
+the CLI and in-tree embedders use that canonical import.
+
+Existing imports from `droste_runner.runner` remain valid, including `run`,
+`RunnerEnvironment`, HTTP clients, source helpers, and protocol constants.
+This is a structure-only change: request/response fields, protocol versions,
+adapter dispatch, and process entrypoint behavior are unchanged.
+
 ### Trajectory execution status is explicit
 
 `IterationRecord` and each built-in runner trajectory entry now include the
