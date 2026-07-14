@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
 ExecutionStatus: TypeAlias = Literal["success", "error"]
+AttemptKind: TypeAlias = Literal["initial", "repair", "terminal"]
 EXECUTION_STATUS_SUCCESS: ExecutionStatus = "success"
 EXECUTION_STATUS_ERROR: ExecutionStatus = "error"
 
@@ -26,3 +27,7 @@ class IterationRecord:
     # Keep old positional construction valid, but fail closed when legacy code
     # omits the authoritative status. Production records always pass it.
     execution_status: ExecutionStatus = EXECUTION_STATUS_ERROR
+    # Root-turn order is list order; this tag distinguishes multiple attempts
+    # within one iteration without inferring repair state from text.
+    attempt_kind: AttemptKind = "initial"
+    stdout_chars: int = 0

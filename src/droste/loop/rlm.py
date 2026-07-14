@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
+from ..capabilities import CapabilityManifest
 from ..exceptions import PolicyError, RLMError
 from ..execution.budget import BudgetExhausted
 from ..execution.context import ExecutionContext, create_execution_context
+from ..execution.manifest import (
+    EngineIdentity,
+    ScaffoldManifest,
+    build_scaffold_manifest,
+    require_scaffold_compatibility,
+)
 from ..execution.progress import (
     EventCallback,
     extract_error_event,
@@ -34,6 +42,7 @@ from ..protocols.environment import RLMEnvironment
 from ..protocols.llm_client import LLMClient
 from ..protocols.subcall_client import SubcallClient
 from ..protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest
+from ..providers import PROVIDER_PROTOCOL_VERSION
 from ..structured import _StructuredBatchEvidence, aggregate_json_counts, bind_structured_batch
 from .code_extractor import extract_code_block
 from .step import (
@@ -83,6 +92,16 @@ _UNKNOWN_OUTPUT_TOKEN_LIMIT = object()
 
 
 ProgressCallback = Any
+
+
+def _engine_identity(source_revision: str | None) -> EngineIdentity:
+    """I/O edge for installed-package identity; manifest composition stays pure."""
+
+    try:
+        engine_version = version("droste")
+    except PackageNotFoundError:
+        engine_version = "source"
+    return EngineIdentity(engine_version, source_revision)
 
 
 class _SubcallGate:
@@ -172,6 +191,20 @@ def _accessor_manifest(environment: RLMEnvironment) -> AccessorManifest:
         if isinstance(manifest, AccessorManifest):
             return manifest
     return EMPTY_ACCESSOR_MANIFEST
+
+
+def _capability_manifest(environment: RLMEnvironment) -> CapabilityManifest:
+    """Read the broker's immutable allowlist without making it a protocol requirement."""
+
+    broker_fn = getattr(environment, "capability_broker", None)
+    if not callable(broker_fn):
+        return CapabilityManifest()
+    broker = broker_fn()
+    describe = getattr(broker, "describe", None)
+    manifest = describe() if callable(describe) else None
+    if not isinstance(manifest, CapabilityManifest):
+        raise TypeError("environment capability_broker().describe() must return CapabilityManifest")
+    return manifest
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -381,6 +414,7 @@ def run_rlm(
     consumer_prompt_catalog: PromptPackCatalog | None = None,
 ) -> RLMResult:
     cfg = config or RLMConfig()
+    system_prompt_override = system_prompt
     requested_profile = cfg.prompt_profile or cfg.tips_profile or DEFAULT_PROMPT_PROFILE
     resolved_prompt_pack = resolve_prompt_pack(
         model=cfg.root_model or "",
@@ -498,6 +532,7 @@ def run_rlm(
     last_execution_status: ExecutionStatus | None = None
     error: RLMError | None = None
     answer_metadata: dict[str, Any] = {}
+    scaffold_manifest: ScaffoldManifest | None = None
     terminal_budget_handoff = False
     finalization_base_messages: list[dict[str, str]] = []
     finalization_base_code = ""
@@ -529,9 +564,36 @@ def run_rlm(
             answer_metadata=answer_metadata,
             prompt_pack=prompt_pack_record,
             config=cfg,
+            scaffold_manifest=scaffold_manifest,
         )
 
     try:
+        scaffold_manifest = build_scaffold_manifest(
+            engine=_engine_identity(cfg.rollout.source_revision),
+            prompt_pack=resolved_prompt_pack.pack,
+            capability_manifest=_capability_manifest(environment),
+            provider_protocol=PROVIDER_PROTOCOL_VERSION,
+            model_visible_globals=tuple(env_globals),
+            root_model=cfg.root_model,
+            rollout=cfg.rollout,
+            budget=cfg.budget,
+            sandbox=cfg.sandbox,
+            system_prompt_override=system_prompt_override,
+            system_prompt_additions=system_prompt_additions,
+            user_prompt_override=user_prompt_template,
+            refinement_prompt_override=refinement_prompt_template,
+        )
+        require_scaffold_compatibility(scaffold_manifest, cfg.checkpoint_requirements)
+        context.emit_event(
+            {
+                "type": "startup",
+                "engine_version": scaffold_manifest.body["engine"]["version"],
+                "runner_protocol": cfg.rollout.runner_protocol,
+                "provider_protocol": scaffold_manifest.body["abis"]["provider"],
+                "scaffold_manifest_id": scaffold_manifest.manifest_id,
+                "scaffold_manifest_version": scaffold_manifest.schema_version,
+            }
+        )
         while not answer.get("ready"):
             iterations += 1
             context.emit_event(
@@ -616,6 +678,7 @@ def run_rlm(
                         answer_metadata=answer_metadata,
                         prompt_pack=prompt_pack_record,
                         config=cfg,
+                        scaffold_manifest=scaffold_manifest,
                     )
 
             context.emit_progress(f"Iteration {iterations}: Executing...")
@@ -726,6 +789,7 @@ def run_rlm(
                         code=repaired_code,
                         outcome=outcome,
                         usage=repair_usage,
+                        attempt_kind="repair",
                     )
                 )
             else:
@@ -794,6 +858,7 @@ def run_rlm(
                             code=finalization_code,
                             outcome=finalization_outcome,
                             usage=finalization_usage,
+                            attempt_kind="terminal",
                         )
                     )
             else:
@@ -887,6 +952,7 @@ def run_rlm(
             answer_metadata=answer_metadata,
             prompt_pack=prompt_pack_record,
             config=cfg,
+            scaffold_manifest=scaffold_manifest,
         )
     finally:
         environment.close()

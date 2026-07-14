@@ -17,6 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = []
@@ -34,7 +35,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/droste", "src/droste_runner", "src/droste_cli"]
+packages = ["src/droste", "src/droste_runner", "src/droste_cli", "src/droste_verifiers"]
+
+[project.optional-dependencies]
+verifiers = [
+    "packaging>=24.0; python_version < '3.14'",
+    "renderers>=0.1.8.dev40; python_version < '3.14'",
+    "verifiers==0.2.0; python_version < '3.14'",
+]
 
 [dependency-groups]
 dev = [

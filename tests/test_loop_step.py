@@ -133,7 +133,7 @@ def test_record_iteration_snapshots_messages() -> None:
         messages=messages,
         response="R",
         code="print(1)",
-        outcome=StepOutcome(output="1", answer={}),
+        outcome=StepOutcome(output="1", answer={}, stdout_chars=1),
         usage=None,
     )
     messages.append({"role": "user", "content": "later turn"})
@@ -141,6 +141,7 @@ def test_record_iteration_snapshots_messages() -> None:
     assert record.llm_input == [{"role": "user", "content": "Q"}]
     assert record.execution_result == "1"
     assert record.execution_status == "success"
+    assert record.stdout_chars == 1
 
 
 def test_record_iteration_normalizes_empty_output_to_nudge() -> None:
@@ -170,6 +171,7 @@ def test_record_iteration_keeps_error_text_and_status_separate() -> None:
     )
     assert record.execution_result == "ERROR: boom"
     assert record.execution_status == "error"
+    assert record.stdout_chars == 0
 
 
 def test_iteration_record_positional_construction_remains_compatible() -> None:

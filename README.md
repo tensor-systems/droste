@@ -335,9 +335,9 @@ RLMResult(
 ## Development
 
 ```bash
-uv sync          # Install dependencies
-uv run pytest    # Run tests
-uv build         # Build wheel
+uv sync --extra verifiers  # Install the full test surface when supported
+uv run pytest              # Verifiers tests skip when its extra is unavailable
+uv build                   # Build wheel
 ```
 
 ## The name

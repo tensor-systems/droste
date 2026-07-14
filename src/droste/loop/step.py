@@ -24,6 +24,11 @@ from ..execution.budget import (
 )
 from ..execution.config import SandboxLimits
 from ..execution.context import ExecutionContext
+from ..execution.manifest import (
+    RolloutConfiguration,
+    ScaffoldManifest,
+    ScaffoldRequirements,
+)
 from ..execution.progress import execution_error_event, output_event
 from ..execution.report import project_result
 from ..execution.trace import (
@@ -40,6 +45,7 @@ from ..structured import _StructuredBatchEvidence
 from .trajectory import (
     EXECUTION_STATUS_ERROR,
     EXECUTION_STATUS_SUCCESS,
+    AttemptKind,
     ExecutionStatus,
     IterationRecord,
 )
@@ -77,6 +83,8 @@ class RLMConfig:
     parent_run_id: str | None = None
     trace_depth: int | None = None
     on_run_record: RunRecordCallback | None = None
+    rollout: RolloutConfiguration = field(default_factory=RolloutConfiguration)
+    checkpoint_requirements: ScaffoldRequirements | None = None
 
 
 @dataclass
@@ -116,6 +124,9 @@ class RLMResult:
     prompt_pack: PromptPackRecord | None = None
     # Policy-resolved terminal Trace ABI value.
     run_record: RunRecord | None = None
+    # Content-free, model-facing ABI identity resolved before the first request.
+    scaffold_manifest: ScaffoldManifest | None = None
+    stdout_chars: int = 0
 
 
 @dataclass
@@ -129,6 +140,10 @@ class StepOutcome:
     # its type (PolicyError feedback differs from plain execution errors).
     exception: Exception | None = None
     answer_metadata: dict[str, Any] = field(default_factory=dict)
+    # Exact length of stdout returned by the environment. Error feedback is
+    # deliberately excluded; an executor that raises before returning stdout
+    # contributes zero rather than a guessed partial length.
+    stdout_chars: int = 0
 
     @property
     def execution_status(self) -> ExecutionStatus:
@@ -513,6 +528,7 @@ def execute_step(
     # Direct execute_step callers have no resolved pack; None retains the
     # historical strict default. run_rlm resolves None before reaching here.
     enforce_contract = cfg.enforce_contract is not False
+    stdout_chars = 0
     try:
         if enforce_contract:
             violations = contract_violations(
@@ -526,6 +542,7 @@ def execute_step(
 
         output = environment.execute(code)
         last_output = _execution_output(output)
+        stdout_chars = len(last_output)
         # Enforce the output budget BEFORE emitting: an over-budget print
         # must raise here (error path), never stream its full contents to
         # the event channel — the guard gates the event, not just the loop.
@@ -592,12 +609,14 @@ def execute_step(
                 code=code,
             ),
             exception=exec_error,
+            stdout_chars=stdout_chars,
         )
 
     return StepOutcome(
         output=last_output,
         answer=answer,
         answer_metadata=answer_metadata,
+        stdout_chars=stdout_chars,
     )
 
 
@@ -609,6 +628,7 @@ def record_iteration(
     code: str,
     outcome: StepOutcome,
     usage: Any,
+    attempt_kind: AttemptKind = "initial",
 ) -> IterationRecord:
     """The one place iteration records are built: a structured message-list
     snapshot (deep-copied — the live list keeps growing), nudge-normalized
@@ -622,6 +642,8 @@ def record_iteration(
         execution_result=_feedback_output(outcome.output),
         tokens_used=total_tokens_from_usage(usage),
         execution_status=outcome.execution_status,
+        attempt_kind=attempt_kind,
+        stdout_chars=outcome.stdout_chars,
     )
 
 
@@ -639,6 +661,7 @@ def finalize(
     answer_metadata: dict[str, Any] | None = None,
     prompt_pack: PromptPackRecord | None = None,
     config: RLMConfig | None = None,
+    scaffold_manifest: ScaffoldManifest | None = None,
 ) -> RLMResult:
     """The one RLMResult and terminal RunRecord construction site."""
     result = RLMResult(
@@ -655,6 +678,8 @@ def finalize(
         recovered_error=recovered_error,
         answer_metadata=answer_metadata if answer.get("ready") and answer_metadata else {},
         prompt_pack=prompt_pack,
+        scaffold_manifest=scaffold_manifest,
+        stdout_chars=sum(entry.stdout_chars for entry in trajectory),
     )
     cfg = config or RLMConfig(budget=context.budget, sandbox=context.sandbox)
     usage = context.stats.resolved_usage(context.trace.elapsed_ms()).as_dict()
@@ -724,6 +749,13 @@ def finalize(
         "error": terminal_error(result.error),
         "extract_error": terminal_error(result.extract_error),
         "recovered_error": terminal_error(result.recovered_error),
+        "scaffold_manifest_id": (
+            scaffold_manifest.manifest_id if scaffold_manifest is not None else None
+        ),
+        "scaffold_manifest_version": (
+            scaffold_manifest.schema_version if scaffold_manifest is not None else None
+        ),
+        "stdout_chars": result.stdout_chars,
     }
     result.run_record = context.finish_trace(terminal)
     return result

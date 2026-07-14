@@ -459,6 +459,8 @@ def test_successful_ready_error_prefixed_stdout_is_the_answer() -> None:
     assert len(llm.calls) == 1
     assert result.trajectory[0].execution_result == "ERROR: line from analyzed log"
     assert result.trajectory[0].execution_status == "success"
+    assert result.trajectory[0].stdout_chars == len("ERROR: line from analyzed log")
+    assert result.stdout_chars == len("ERROR: line from analyzed log")
 
 
 def test_failed_attempt_is_retained_when_repair_root_call_fails() -> None:
@@ -478,6 +480,7 @@ def test_failed_attempt_is_retained_when_repair_root_call_fails() -> None:
     assert len(result.trajectory) == 1
     assert "boom" in result.trajectory[0].execution_result
     assert result.trajectory[0].execution_status == "error"
+    assert result.trajectory[0].stdout_chars == 0
 
 
 def test_mid_run_failed_attempts_remain_in_ready_trajectory() -> None:
@@ -667,6 +670,7 @@ answer['ready'] = False
     assert result.recovered_error.details is not None
     assert result.recovered_error.details["reason"] == "semantic_exact_retry_budget_exhausted"
     assert [record.execution_status for record in result.trajectory] == ["error", "success"]
+    assert [record.attempt_kind for record in result.trajectory] == ["initial", "terminal"]
     assert "single terminal finalization attempt" in llm.calls[1][-1]["content"]
     assert "Draft answer so far:\nred,blue" in llm.calls[2][-1]["content"]
 
@@ -887,6 +891,7 @@ answer['ready'] = True
     assert result.recovered_error.details["reason"] == ("semantic_exact_retry_budget_exhausted")
     assert len(result.trajectory) == 2
     assert [record.execution_status for record in result.trajectory] == ["error", "error"]
+    assert [record.attempt_kind for record in result.trajectory] == ["initial", "repair"]
     assert "initial failure before structured work" in result.trajectory[0].execution_result
     assert "incomplete structured semantic batch" in result.trajectory[1].execution_result
 

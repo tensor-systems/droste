@@ -9,6 +9,13 @@ The harness strategy is resolved once at run start as one immutable
 slot validation, `(model, profile)` fallback, and rendering are pure value
 transformations. The engine never merges partial packs or changes strategy
 mid-run.
+
+Optional [RLM skills](rlm-skills.md) are immutable, content-addressed strategy
+data loaded through an explicitly registered read-only provider. They never
+change the prompt-pack or loop contract. The resolved prompt, capability,
+contract, inference, budget, and sandbox facts form one content-addressed
+[scaffold manifest](scaffold-manifest.md), checked before inference when a
+checkpoint declares requirements.
 question ──▶ root LLM ──▶ python code ──▶ sandboxed REPL ──▶ output
                 ▲                             │
                 └── refinement prompt ◀───────┘
@@ -160,8 +167,11 @@ reads a response (answer, `ready`, `extracted`, iterations, attempted and
 successful subcalls,
 trajectory, usage). This is how non-Python hosts embed the engine.
 Each trajectory entry carries `execution_status` (`success` or `error`) beside
-the unchanged `execution_result` text; consumers must not infer status from an
-output prefix.
+the unchanged `execution_result` text, an `attempt_kind` (`initial`, `repair`,
+or `terminal`), and the exact character count of stdout returned by the
+environment. Consumers must not infer any of these from output text. Oversized
+stdout is rejected rather than silently truncated. Result-level `stdout_chars`
+is the sum of these exact counts across the retained trajectory.
 
 The Python implementation is split by ownership: `droste.environments`
 provides the generic native in-process environment; `droste_runner` keeps
@@ -175,6 +185,12 @@ Completed responses also carry the policy-resolved
 [Trace ABI v1](trace-abi.md) `run_record`. Live events and terminal records use
 the same strict envelope and projection. Persistence remains a host I/O
 decision; the engine never opens a trace store.
+
+Completed results also expose the full scaffold manifest and aggregate stdout
+facts. Default durable retention stores only the manifest ID/version; trainer
+outcomes join externally by run ID and manifest ID. The optional
+[Verifiers v1 harness](verifiers-harness.md) sends root and subcall traffic
+through one interception endpoint without moving runtime data into the prompt.
 
 **Versioned boundary**: the request/response schema and provider contract
 are versioned, each by a single integer:

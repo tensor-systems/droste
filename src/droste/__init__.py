@@ -64,6 +64,17 @@ from .execution.budget import (
 )
 from .execution.config import DEFAULT_OUTPUT_CHARS, ExecutionConfig, SandboxLimits
 from .execution.context import ExecutionContext, create_execution_context
+from .execution.manifest import (
+    SCAFFOLD_MANIFEST_VERSION,
+    EngineIdentity,
+    OutcomeJoinKey,
+    RolloutConfiguration,
+    ScaffoldCompatibilityError,
+    ScaffoldManifest,
+    ScaffoldRequirements,
+    require_scaffold_compatibility,
+    scaffold_mismatches,
+)
 from .execution.progress import ProgressCallback, emit_progress
 from .execution.stats import ExecutionStats
 from .execution.trace import (
@@ -103,6 +114,18 @@ from .providers import (
     ProviderRegistry,
     ProviderRuntime,
 )
+from .skills import (
+    RLM_SKILL_SCHEMA_VERSION,
+    RLM_SKILLS_PROVIDER_MANIFEST,
+    RLMSkill,
+    RLMSkillCatalog,
+    RLMSkillError,
+    RLMSkillProvenance,
+    load_builtin_skill_catalog,
+    load_rlm_skill,
+    parse_rlm_skill,
+    rlm_skills_provider,
+)
 from .structured import aggregate_json_counts, structured_batch, validate_json
 
 __all__ = [
@@ -131,6 +154,15 @@ __all__ = [
     "create_environment_context",
     "ExecutionContext",
     "create_execution_context",
+    "SCAFFOLD_MANIFEST_VERSION",
+    "EngineIdentity",
+    "OutcomeJoinKey",
+    "RolloutConfiguration",
+    "ScaffoldCompatibilityError",
+    "ScaffoldManifest",
+    "ScaffoldRequirements",
+    "require_scaffold_compatibility",
+    "scaffold_mismatches",
     "ProgressCallback",
     "emit_progress",
     "RLMError",
@@ -215,4 +247,14 @@ __all__ = [
     "ProviderRegistration",
     "ProviderRegistry",
     "ProviderRuntime",
+    "RLM_SKILL_SCHEMA_VERSION",
+    "RLM_SKILLS_PROVIDER_MANIFEST",
+    "RLMSkill",
+    "RLMSkillCatalog",
+    "RLMSkillError",
+    "RLMSkillProvenance",
+    "load_builtin_skill_catalog",
+    "load_rlm_skill",
+    "parse_rlm_skill",
+    "rlm_skills_provider",
 ]

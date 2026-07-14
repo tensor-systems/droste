@@ -14,6 +14,18 @@ from .budget import (
 )
 from .config import DEFAULT_OUTPUT_CHARS, ExecutionConfig, SandboxLimits
 from .context import ExecutionContext, create_execution_context
+from .manifest import (
+    SCAFFOLD_MANIFEST_VERSION,
+    EngineIdentity,
+    OutcomeJoinKey,
+    RolloutConfiguration,
+    ScaffoldCompatibilityError,
+    ScaffoldManifest,
+    ScaffoldRequirements,
+    build_scaffold_manifest,
+    require_scaffold_compatibility,
+    scaffold_mismatches,
+)
 from .progress import ProgressCallback, emit_progress
 from .stats import ExecutionStats
 from .trace import (
@@ -46,6 +58,16 @@ __all__ = [
     "ExecutionStats",
     "ExecutionContext",
     "create_execution_context",
+    "SCAFFOLD_MANIFEST_VERSION",
+    "EngineIdentity",
+    "OutcomeJoinKey",
+    "RolloutConfiguration",
+    "ScaffoldCompatibilityError",
+    "ScaffoldManifest",
+    "ScaffoldRequirements",
+    "build_scaffold_manifest",
+    "require_scaffold_compatibility",
+    "scaffold_mismatches",
     "ProgressCallback",
     "emit_progress",
     "TRACE_ABI_VERSION",

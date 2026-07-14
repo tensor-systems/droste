@@ -13,7 +13,37 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.11.0)
 
-No embedder-facing changes yet.
+### Python 3.14 is supported by the core package
+
+Droste continues to require Python 3.11 or newer and now tests both the 3.11
+compatibility floor and latest stable Python 3.14 in CI. The optional Verifiers
+v1 harness remains limited to Python 3.11–3.13 by its upstream dependency
+markers; installing the extra on 3.14 leaves it absent and its dedicated tests
+skip cleanly.
+
+### Rollouts expose one content-addressed scaffold identity
+
+`RLMResult`, CLI JSON, and runner responses add `scaffold_manifest` and
+`stdout_chars`, the sum of exact returned stdout lengths on retained trajectory
+entries. The existing prompt-pack
+`content_sha256` participates in the manifest as its prefixed `content_hash`.
+Trajectory entries add `attempt_kind` and `stdout_chars`; consumers should use
+the typed attempt/status fields rather than infer them from text. Droste rejects
+oversized output instead of silently truncating it, so it does not publish a
+truncation flag or count. Default durable terminal records retain only the
+manifest ID and schema version.
+
+Hosts may provide resolved model/source revisions, sampling, concurrency, seed,
+and runner version through `RolloutConfiguration`, plus checkpoint requirements
+through `RLMConfig.checkpoint_requirements`. Incompatible requirements fail
+before inference. The runner accepts the corresponding optional request fields;
+the protocol remains v3 because all envelope additions are optional/additive.
+The CLI adds `--prompt-profile` and `--rollout-config`.
+
+The `verifiers` extra adds the Verifiers v1 `droste_verifiers` harness package.
+RLM skill artifacts and `rlm_skills_provider` are opt-in; no skill provider or
+prompt text is registered automatically. See `docs/scaffold-manifest.md`,
+`docs/verifiers-harness.md`, and `docs/rlm-skills.md`.
 
 ## 0.11.0 (from 0.10.6)
 
