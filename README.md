@@ -264,8 +264,15 @@ RLMConfig(
     max_depth=1,            # Max nested subcall depth (default)
     max_calls=50,           # Max total subcalls (default)
     max_output_chars=25000, # Output budget per iteration (default)
+    policy_hints=PolicyHints(semantic=True), # Optional explicit contract
 )
 ```
+
+Droste does not infer semantic intent from the question. When a caller supplies
+`PolicyHints(semantic=True)`, at least one semantic subcall must succeed and any
+incomplete `llm_batch_json` result blocks confirmation. Only an error-free
+repeat with the exact prompts, contexts, schema, and validator object resolves
+that partial evidence. Omit the hint to retain purely prompt-driven behavior.
 
 #### Result
 

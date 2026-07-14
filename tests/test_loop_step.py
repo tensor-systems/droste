@@ -41,6 +41,23 @@ def test_ready_violations_semantic_requires_a_subcall() -> None:
     )
 
 
+def test_ready_violations_semantic_rejects_incomplete_structured_evidence() -> None:
+    violations = ready_violations(
+        PolicyHints(semantic=True),
+        answer_ready=True,
+        successful_calls=3,
+        resolved_output="partial",
+        unresolved_semantic_batches=2,
+        unresolved_semantic_items=3,
+    )
+
+    assert violations == [
+        "incomplete structured semantic batch evidence remains unresolved "
+        "(3 failed item(s) across 2 batch request(s)); rerun each exact request "
+        "successfully before confirming the answer."
+    ]
+
+
 def test_semantic_contract_allows_inspection_before_ready_gate() -> None:
     hints = PolicyHints(semantic=True)
     assert contract_violations("print(context['files'][0]['text'][:100])", hints) == []

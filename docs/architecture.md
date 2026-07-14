@@ -24,13 +24,21 @@ bridge back to language models:
 - `llm_batch_json(prompts, schema, ...)` — ordered local JSON validation and
   malformed-only bounded repair, with per-item errors (the error indices are
   authoritative because valid JSON `null` and failed slots are both `None`).
-  Alias: `llm_query_batched_json`.
+  Alias: `llm_query_batched_json`. With explicit semantic policy, an incomplete
+  result blocks answer confirmation until the exact prompts, contexts, schema,
+  and validator object later produce an error-free result.
 
 The loop ends when the model sets `answer["ready"] = True`, or the iteration
 budget runs out — in which case, when the trajectory contains executed work,
 a single **extract pass** produces a best-effort answer from it, flagged `extracted=True` and never
 presented as confirmed. Policy violations withhold gated content from the
 final answer rather than silently passing it through.
+
+Policy is caller-supplied rather than inferred from question text. In-process
+callers opt into semantic enforcement with
+`RLMConfig(policy_hints=PolicyHints(semantic=True))`; without that hint,
+structured batch results remain prompt-driven and the loop does not add this
+completeness gate.
 
 ## Budgets and cost
 

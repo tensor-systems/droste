@@ -14,5 +14,6 @@ You are in a Python REPL. Each turn, produce a single ```python code block```. I
   The optional validator is called as validator(value, index), where index is the original
   prompt index; raise ValueError to reject that value and request repair.
   It validates locally and returns {"values": [...], "errors": [...], "attempts": [...],
-  "repairs_made": N}; inspect errors before using values.
+  "repairs_made": N}; inspect errors before using values. Under semantic policy, unresolved
+  errors block answer confirmation; rerun the exact request successfully before setting ready.
 """

@@ -26,6 +26,7 @@ from ..execution.progress import execution_error_event, output_event
 from ..policy import PolicyHints, contract_violations, ready_violations
 from ..protocols.environment import ExecutionResult, RLMEnvironment
 from ..protocols.llm_client import LLMClient, total_tokens_from_usage
+from ..structured import _StructuredBatchEvidence
 from .trajectory import (
     EXECUTION_STATUS_ERROR,
     EXECUTION_STATUS_SUCCESS,
@@ -412,6 +413,7 @@ def execute_step(
     context: ExecutionContext,
     data_accessor_names: set[str],
     namespaced_accessor_pairs: set[tuple[str, str]],
+    semantic_evidence: _StructuredBatchEvidence | None = None,
 ) -> StepOutcome:
     """Execute one code block: the identical path for a first attempt and for
     repaired code. Policy pre-check, execute, output budget, event emit,
@@ -441,6 +443,12 @@ def execute_step(
             answer_ready=bool(answer.get("ready")),
             successful_calls=context.stats.successful_calls,
             resolved_output=_resolved_output(answer, last_output),
+            unresolved_semantic_batches=(
+                semantic_evidence.unresolved_batches if semantic_evidence is not None else 0
+            ),
+            unresolved_semantic_items=(
+                semantic_evidence.unresolved_items if semantic_evidence is not None else 0
+            ),
         )
         answer_metadata: dict[str, Any] = {}
         if answer.get("ready"):
