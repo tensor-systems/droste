@@ -13,6 +13,29 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.10.6)
 
+### Semantic structured batches fail closed when incomplete
+
+`PolicyHints(semantic=True)` now keeps any `llm_batch_json` result with
+unresolved item errors from confirming `answer["ready"]`. The loop returns the
+violation for repair; if the iteration budget ends, the existing bounded
+extraction path either produces an explicitly unconfirmed answer with
+`recovered_error.type == "PolicyError"` or leaves the policy error fatal.
+
+A later error-free call clears an incomplete result only when it repeats the
+exact prompts, contexts, schema, and validator object. A different successful
+batch is not completion evidence for earlier partial work. This is a behavior
+change only for callers that explicitly enable semantic policy; runs without
+that hint are unchanged.
+
+To make this completeness check enforceable, `run_rlm` now replaces any
+`llm_batch_json` and `llm_query_batched_json` entries in the mapping returned by
+`environment.globals()` with Droste's tracked bindings before sandbox execution.
+Embedders must treat those two names as reserved: expose custom structured
+helpers under different names, or customize the `SubcallClient` passed to
+`run_rlm` instead. The replacement happens for every run so both aliases remain
+consistent; completeness evidence is collected only while semantic contract
+enforcement is active.
+
 ### ModelRelay root request accounting
 
 `ModelRelayClient.root_requests_issued` exposes a thread-safe cumulative count

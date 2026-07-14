@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from .exceptions import SubcallBudgetExceeded
@@ -22,6 +23,81 @@ _SCHEMA_KEYWORDS = {
     "maximum",
 }
 _JSON_TYPES = frozenset({"null", "boolean", "integer", "number", "string", "array", "object"})
+
+
+@dataclass(frozen=True)
+class _StructuredBatchRequest:
+    prompts: tuple[str, ...]
+    contexts: tuple[str, ...] | None
+    schema: str
+    validator_token: int
+
+
+@dataclass
+class _StructuredBatchEvidence:
+    """Run-local proof state for validated structured semantic batches.
+
+    An incomplete request remains unresolved until the exact prompts, contexts,
+    schema, and validator object later produce an error-free result. Keeping
+    validator objects alive prevents identity reuse from turning a different
+    validator into false completion evidence.
+    """
+
+    _incomplete: dict[_StructuredBatchRequest, tuple[dict[str, Any], ...]] = field(
+        default_factory=dict
+    )
+    _validators: list[Callable[[Any, int], None] | None] = field(default_factory=list)
+
+    def _validator_token(self, validator: Callable[[Any, int], None] | None) -> int:
+        for index, known in enumerate(self._validators):
+            if known is validator:
+                return index
+        self._validators.append(validator)
+        return len(self._validators) - 1
+
+    def _request(
+        self,
+        prompts: list[str],
+        schema: Mapping[str, Any],
+        contexts: list[str] | None,
+        validator: Callable[[Any, int], None] | None,
+    ) -> _StructuredBatchRequest:
+        canonical_schema = json.dumps(
+            schema,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return _StructuredBatchRequest(
+            tuple(prompts),
+            tuple(contexts) if contexts is not None else None,
+            canonical_schema,
+            self._validator_token(validator),
+        )
+
+    def record(
+        self,
+        *,
+        prompts: list[str],
+        schema: Mapping[str, Any],
+        contexts: list[str] | None,
+        validator: Callable[[Any, int], None] | None,
+        errors: list[dict[str, Any]],
+    ) -> None:
+        request = self._request(prompts, schema, contexts, validator)
+        if errors:
+            self._incomplete[request] = tuple(dict(error) for error in errors)
+        else:
+            self._incomplete.pop(request, None)
+
+    @property
+    def unresolved_batches(self) -> int:
+        return len(self._incomplete)
+
+    @property
+    def unresolved_items(self) -> int:
+        return sum(len(errors) for errors in self._incomplete.values())
 
 
 def _is_number(value: Any) -> bool:
@@ -380,7 +456,10 @@ def structured_batch(
     }
 
 
-def bind_structured_batch(subcalls: SubcallClient) -> Callable[..., dict[str, Any]]:
+def bind_structured_batch(
+    subcalls: SubcallClient,
+    evidence: _StructuredBatchEvidence | None = None,
+) -> Callable[..., dict[str, Any]]:
     def llm_batch_json(
         prompts: list[str],
         schema: Mapping[str, Any],
@@ -388,7 +467,7 @@ def bind_structured_batch(subcalls: SubcallClient) -> Callable[..., dict[str, An
         max_repair_attempts: int = 1,
         validator: Callable[[Any, int], None] | None = None,
     ) -> dict[str, Any]:
-        return structured_batch(
+        result = structured_batch(
             subcalls,
             prompts,
             schema,
@@ -396,6 +475,15 @@ def bind_structured_batch(subcalls: SubcallClient) -> Callable[..., dict[str, An
             max_repair_attempts=max_repair_attempts,
             validator=validator,
         )
+        if evidence is not None:
+            evidence.record(
+                prompts=prompts,
+                schema=schema,
+                contexts=contexts,
+                validator=validator,
+                errors=result["errors"],
+            )
+        return result
 
     return llm_batch_json
 
