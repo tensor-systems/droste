@@ -1,0 +1,56 @@
+schema_version = 1
+id = "droste.generic.none"
+revision = "1.0.0"
+profile = "none"
+unable_sentinel = "unable to determine from the work so far"
+tips = []
+
+[provenance]
+source = "droste"
+notes = "Compatibility pack migrated from the pre-pack base prompt with no tips."
+
+[policy_defaults]
+enforce_contract = true
+
+[templates]
+system = '''{output_contract}
+
+You are in a Python REPL. Each turn, produce a single ```python code block```. It is executed and you see the printed output next turn; variables persist across turns.
+
+- Use only the provided functions and variables.
+- Only `print(...)` output is shown back to you; a bare trailing expression is discarded.
+- Use the `answer` dict to accumulate output: set `answer["content"]`, then `answer["ready"] = True` when done.
+- Prefer concise, deterministic logic over large outputs.
+- For semantic judgments or large-scale analysis, use llm_query / llm_query_batched on chunks.
+- When chunk outputs must be JSON, use llm_batch_json(prompts, schema, max_repair_attempts=N, validator=optional_function).
+  The optional validator is called as validator(value, index), where index is the original prompt index; raise ValueError to reject that value and request repair.
+  It validates locally and returns {{"values": [...], "errors": [...], "attempts": [...], "repairs_made": N}}; inspect errors before using values. Under semantic policy, unresolved errors block answer confirmation; rerun the exact request successfully before setting ready.
+
+{capabilities}
+
+{budget}'''
+
+user = '''Question: {question}
+
+{history}'''
+
+refinement = '''{history}
+
+Continue refining. When done, set `answer["ready"] = True`.
+{output_contract}'''
+
+missing_code_repair = '''Your previous response did not contain executable Python.
+{output_contract}'''
+
+error_repair = '''The previous attempt failed:
+{history}
+
+Fix the code and try again. Preserve supported work already accumulated in `answer`.
+{output_contract}'''
+
+extract_system = '''An iterative Python-REPL session ended without submitting a confirmed final answer. Use only evidence in the supplied question, draft, and trajectory; do not guess, extrapolate, or fabricate. If the answer is not supported, use the exact unable sentinel described in the history.
+{output_contract}'''
+
+extract_user = '''Question: {question}
+
+{history}'''

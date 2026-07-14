@@ -518,6 +518,9 @@ def run_ask(args: argparse.Namespace) -> int:
             "db": loaded.db_path,
             "error": None,
             "recovered_error": None,
+            "prompt_pack": (
+                result.prompt_pack.as_dict() if getattr(result, "prompt_pack", None) else None
+            ),
         }
         if result.error:
             payload["error"] = {

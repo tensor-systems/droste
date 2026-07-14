@@ -8,6 +8,7 @@
   violation that keeps (not wipes) the accumulated answer content.
 """
 
+from dataclasses import replace
 from typing import Any
 
 from droste import (
@@ -21,6 +22,7 @@ from droste import (
 )
 from droste.loop.rlm import EMPTY_OUTPUT_NUDGE
 from droste.prompts import TIPS_PROFILES, SystemPromptBuilder
+from droste.prompts.pack import load_prompt_pack_resource
 from droste.protocols.environment import ExecutionResult
 from droste.protocols.llm_client import TokenUsage
 from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
@@ -309,6 +311,8 @@ def test_runner_omitted_budgets_use_core_defaults_and_allow_subcalls() -> None:
     assert response["ready"] is True
     assert response["answer"] == "got: sub"
     assert response["subcalls"] == 1
+    assert response["prompt_pack"]["id"] == "droste.generic.full"
+    assert response["prompt_pack"]["revision"] == "1.0.0"
 
 
 def test_runner_explicit_zero_subcalls_is_honored() -> None:
@@ -398,9 +402,36 @@ def test_extract_fallback_fires_when_iterations_exhausted() -> None:
     assert "do not guess, extrapolate, or fabricate" in extract_messages[0]["content"]
     assert "unable to determine from the work so far" in extract_messages[0]["content"]
     assert "what is the total?" in extract_messages[1]["content"]
+    assert extract_messages[1]["content"].count("Question: what is the total?") == 1
     assert "notes = 'the total is 42'" in extract_messages[1]["content"]
     assert "<empty stdout>" in extract_messages[1]["content"]
     assert EMPTY_OUTPUT_NUDGE not in extract_messages[1]["content"]
+
+
+def test_extract_fallback_recognizes_punctuated_pack_sentinel() -> None:
+    pack = replace(
+        load_prompt_pack_resource("generic-none-v1.toml"),
+        unable_sentinel="Cannot determine.",
+    )
+    llm = RecordingLLMClient(
+        _responses(
+            "```python\nprint('work')\n```",
+            "Cannot determine.",
+        )
+    )
+
+    result = run_rlm(
+        question="q",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(max_iterations=1),
+        prompt_pack=pack,
+    )
+
+    assert result.answer != "Cannot determine."
+    assert result.extract_error is not None
+    assert result.extract_error.type == "InsufficientEvidence"
 
 
 def test_extract_fallback_skipped_when_answer_ready() -> None:

@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from .base import BASE_SYSTEM_PROMPT
-from .tips import TIPS_PROFILES
+
+def _default_base() -> str:
+    from .base import BASE_SYSTEM_PROMPT
+
+    return BASE_SYSTEM_PROMPT
 
 
 @dataclass
 class SystemPromptBuilder:
     """Build a system prompt from base instructions, schema, and tips."""
 
-    base: str = BASE_SYSTEM_PROMPT
+    base: str = field(default_factory=_default_base)
     schema: str | None = None
     tips_profile: str | None = None
     additions: str | None = None
@@ -36,6 +39,8 @@ class SystemPromptBuilder:
             parts.append("\n## Schema\n" + self.schema)
         tips = ""
         if self.tips_profile:
+            from .tips import TIPS_PROFILES
+
             tips_list = TIPS_PROFILES.get(self.tips_profile, TIPS_PROFILES.get("full", []))
             tips = "\n\n".join(tips_list)
         if tips:

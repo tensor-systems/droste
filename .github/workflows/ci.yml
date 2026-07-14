@@ -78,6 +78,18 @@ jobs:
               echo "wheel is missing droste/substrates/_relay/$f"; exit 1;
             }
           done
+      - name: Wheel bundles and loads prompt packs (#78)
+        run: |
+          for f in generic-full-v1.toml generic-minimal-v1.toml generic-none-v1.toml; do
+            unzip -l dist/*.whl | grep -q "droste/prompts/packs/$f" || {
+              echo "wheel is missing droste/prompts/packs/$f"; exit 1;
+            }
+          done
+          tmp="$(mktemp -d)"
+          uv venv "$tmp/venv"
+          uv pip install --python "$tmp/venv/bin/python" dist/*.whl
+          "$tmp/venv/bin/python" -c \
+            'from droste.prompts.pack import load_builtin_prompt_catalog; assert len(load_builtin_prompt_catalog().bindings) == 3'
 
   deno:
     name: deno (pyodide substrate)

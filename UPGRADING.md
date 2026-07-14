@@ -29,6 +29,25 @@ installed package. Direct execution of an extracted `runner.py` file is not a
 supported entrypoint; the old repository-layout `sys.path` mutation was
 intentionally removed.
 
+### Harness prompts resolve from versioned prompt packs
+
+The built-in system, user, refinement, repair, and extraction prompts now load
+from complete TOML prompt packs and resolve once per run by `(model, profile)`.
+The default generic `full` pack preserves the prior harness behavior;
+`minimal` and `none` preserve the existing tips profiles. Existing complete
+`system_prompt` and user/refinement template overrides remain accepted.
+
+`RLMConfig.prompt_profile` is the new profile spelling; when omitted,
+`tips_profile` remains compatible. `RLMConfig.enforce_contract=None` delegates
+to the resolved pack's policy default, while explicit booleans still win.
+`run_rlm` accepts an immutable caller pack or consumer catalog. Invalid packs
+fail before the first model call.
+
+`RLMResult.prompt_pack`, CLI JSON, and the built-in runner response now expose
+the additive resolved ID, revision, profile, resolution tier, model family, and
+provenance. Runner requests may send additive `prompt_profile`; protocol version
+1 is unchanged. See `docs/prompt-packs.md` for authoring and fallback rules.
+
 ### Trajectory execution status is explicit
 
 `IterationRecord` and each built-in runner trajectory entry now include the

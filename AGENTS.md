@@ -34,6 +34,20 @@ stdout may begin with `ERROR:`. Build loop records from the typed `StepOutcome`
 so output and status cannot drift apart, and label extract-fallback trajectory
 evidence with that status rather than leaving the model to interpret prefixes.
 
+## Prompt Packs
+
+- Harness strategy lives in complete versioned TOML artifacts under
+  `src/droste/prompts/packs/`; do not add prompt prose back to loop constants.
+- The stable slots are `capabilities`, `budget`, `question`, `history`, and
+  `output_contract`. Unknown/missing slots fail during pack validation.
+- Keep packs, catalogs, resolved selections, and provenance frozen values.
+  Parsing, validation, resolution, and rendering stay pure; filesystem and
+  package-resource reads belong only in loader functions.
+- Resolve exactly one pack per run. Never merge partial packs or mutate strategy
+  mid-run. Broker-loaded RLM skills are separate work under #3.
+- New artifacts need a wheel-resource check and must preserve generic fallback
+  compatibility unless an upgrading note explicitly calls out a change.
+
 ## Reproducible Benchmarks
 
 - Repository-local benchmark tooling lives in `benchmarks/` and is deliberately

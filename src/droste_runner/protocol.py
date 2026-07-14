@@ -53,6 +53,11 @@ def build_response(
         "recovered_error": (
             None if result is None else _error_payload(getattr(result, "recovered_error", None))
         ),
+        "prompt_pack": (
+            None
+            if result is None or getattr(result, "prompt_pack", None) is None
+            else result.prompt_pack.as_dict()
+        ),
         "trajectory": (
             []
             if result is None

@@ -3,6 +3,12 @@
 ## The loop
 
 ```
+
+The harness strategy is resolved once at run start as one immutable
+[prompt pack](prompt-packs.md). Package/file I/O ends at the loader boundary;
+slot validation, `(model, profile)` fallback, and rendering are pure value
+transformations. The engine never merges partial packs or changes strategy
+mid-run.
 question ──▶ root LLM ──▶ python code ──▶ sandboxed REPL ──▶ output
                 ▲                             │
                 └── refinement prompt ◀───────┘

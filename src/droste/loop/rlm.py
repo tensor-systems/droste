@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from ..exceptions import BatchLLMError, RLMError
@@ -13,7 +14,18 @@ from ..execution.progress import (
 from ..execution.progress import (
     code_event as build_code_event,
 )
-from ..prompts.builder import SystemPromptBuilder
+from ..prompts.pack import (
+    CODE_OUTPUT_CONTRACT,
+    DEFAULT_PROMPT_PROFILE,
+    EXTRACT_OUTPUT_CONTRACT,
+    PromptPack,
+    PromptPackCatalog,
+    PromptSlots,
+    load_builtin_prompt_catalog,
+    render_prompt_template,
+    render_system_prompt,
+    resolve_prompt_pack,
+)
 from ..protocols.environment import RLMEnvironment
 from ..protocols.llm_client import LLMClient, total_tokens_from_usage
 from ..protocols.subcall_client import SubcallClient
@@ -30,6 +42,7 @@ from .step import (
     build_missing_code_repair_messages,
     build_refinement_messages,
     call_root,
+    error_repair_history,
     execute_step,
     finalize,
     record_iteration,
@@ -63,15 +76,6 @@ _EXTRACT_SUMMARY_CHARS = 60000
 _EXTRACT_EMPTY_OUTPUT = "<empty stdout>"
 _EXTRACT_UNABLE = "unable to determine from the work so far"
 
-EXTRACT_FALLBACK_SYSTEM_PROMPT = (
-    "An iterative Python-REPL session ended without submitting a confirmed final "
-    "answer. Below are the question, the draft answer so far, and a compact "
-    "trajectory of the code executed and its output. Produce the final answer "
-    "using ONLY what the trajectory supports - do not guess, extrapolate, or "
-    "fabricate. Reply with the answer text only - no code, no preamble. If the "
-    "answer cannot be determined from the trajectory, reply exactly: " + _EXTRACT_UNABLE
-)
-
 
 ProgressCallback = Any
 
@@ -97,20 +101,39 @@ def _truncate(text: str, limit: int) -> str:
     return text[:limit] + f"... (truncated, {len(text):,} chars total)"
 
 
-def _is_unable_extraction(text: str) -> bool:
+def _is_unable_extraction(text: str, sentinel: str = _EXTRACT_UNABLE) -> bool:
     """Recognize the model's no-evidence sentinel with harmless decoration."""
     decoration = "\"'`“”‘’*_"
-    normalized = text.casefold().strip().strip(decoration)
-    normalized = normalized.rstrip(".!?…").rstrip().strip(decoration)
-    return normalized == _EXTRACT_UNABLE
+
+    def normalize(value: str) -> str:
+        normalized = value.casefold().strip().strip(decoration)
+        return normalized.rstrip(".!?…").rstrip().strip(decoration)
+
+    return normalize(text) == normalize(sentinel)
+
+
+def _budget_prompt(cfg: "RLMConfig") -> str:
+    return (
+        "## Authorized compute\n"
+        f"iterations={cfg.max_iterations}; subcalls={cfg.max_calls}; "
+        f"depth={cfg.max_depth}; output_chars_per_iteration={cfg.max_output_chars}"
+    )
+
+
+def _refinement_history(answer_content: Any, last_output: str) -> str:
+    return (
+        "Current accumulated answer:\n"
+        f"```\n{answer_content}\n```\n\n"
+        "Last execution output:\n"
+        f"```\n{last_output if last_output else EMPTY_OUTPUT_NUDGE}\n```"
+    )
 
 
 def _trajectory_summary(
-    question: str,
     draft: str,
     trajectory: list[IterationRecord],
 ) -> str:
-    parts = [f"Question: {question}"]
+    parts: list[str] = []
     if draft:
         parts.append(f"Draft answer so far:\n{_truncate(draft, _EXTRACT_OUTPUT_CHARS)}")
     for entry in trajectory:
@@ -152,6 +175,7 @@ def _extract_final_answer(
     root_llm: LLMClient,
     cfg: "RLMConfig",
     context: ExecutionContext,
+    prompt_pack: PromptPack,
 ) -> tuple[str, RLMError | None]:
     """One extract pass:
     when the loop exhausts max_iterations without answer['ready'], make a
@@ -165,9 +189,27 @@ def _extract_final_answer(
     this" apart from "extraction failed, this is raw debug output," instead
     of both cases looking identical."""
     try:
+        history = (
+            _trajectory_summary(draft, trajectory)
+            + f"\n\nUnable sentinel: {prompt_pack.unable_sentinel}"
+        )
+        slots = PromptSlots(
+            question=question,
+            history=history,
+            output_contract=(
+                f"{EXTRACT_OUTPUT_CONTRACT} If the answer is unsupported, reply exactly: "
+                f"{prompt_pack.unable_sentinel}"
+            ),
+        )
         messages = [
-            {"role": "system", "content": EXTRACT_FALLBACK_SYSTEM_PROMPT},
-            {"role": "user", "content": _trajectory_summary(question, draft, trajectory)},
+            {
+                "role": "system",
+                "content": render_prompt_template(prompt_pack.templates.extract_system, slots),
+            },
+            {
+                "role": "user",
+                "content": render_prompt_template(prompt_pack.templates.extract_user, slots),
+            },
         ]
         response, usage = root_llm.responses_create(
             messages,
@@ -178,7 +220,7 @@ def _extract_final_answer(
         text = str(response).strip()
         if not text:
             return "", RLMError(type="EmptyExtraction", message="extract call returned empty text")
-        if _is_unable_extraction(text):
+        if _is_unable_extraction(text, prompt_pack.unable_sentinel):
             return "", RLMError(type="InsufficientEvidence", message=text)
         return text, None
     except Exception as exc:
@@ -219,8 +261,24 @@ def run_rlm(
     # All params after * are keyword-only, so placement is API-neutral;
     # appended last anyway to keep the signature append-only.
     on_event: EventCallback | None = None,
+    prompt_pack: PromptPack | None = None,
+    consumer_prompt_catalog: PromptPackCatalog | None = None,
 ) -> RLMResult:
     cfg = config or RLMConfig()
+    requested_profile = cfg.prompt_profile or cfg.tips_profile or DEFAULT_PROMPT_PROFILE
+    resolved_prompt_pack = resolve_prompt_pack(
+        model=cfg.root_model or "",
+        profile=requested_profile,
+        caller_pack=prompt_pack,
+        consumer_catalog=consumer_prompt_catalog,
+        engine_catalog=load_builtin_prompt_catalog(),
+    )
+    if cfg.enforce_contract is None:
+        cfg = replace(
+            cfg,
+            enforce_contract=resolved_prompt_pack.pack.policy_defaults.enforce_contract,
+        )
+    prompt_pack_record = resolved_prompt_pack.record()
     if context is None:
         context = create_execution_context(
             max_depth=cfg.max_depth,
@@ -275,15 +333,31 @@ def run_rlm(
                 if prompt_additions
                 else system_prompt_additions
             )
-        builder = SystemPromptBuilder().with_tips(cfg.tips_profile).with_additions(prompt_additions)
-        system_prompt = builder.build()
+        system_prompt = render_system_prompt(
+            resolved_prompt_pack.pack,
+            PromptSlots(
+                capabilities=prompt_additions,
+                budget=_budget_prompt(cfg),
+                question=question,
+                output_contract=CODE_OUTPUT_CONTRACT,
+            ),
+        )
 
-    user_prompt_template = user_prompt_template or DEFAULT_USER_PROMPT_TEMPLATE
-    refinement_prompt_template = refinement_prompt_template or DEFAULT_REFINEMENT_PROMPT_TEMPLATE
-
-    user_content = user_prompt_template.format(question=question)
-    if conversation_context:
-        user_content = f"{user_content}\n\nConversation Context:\n{conversation_context}"
+    if user_prompt_template is not None:
+        user_content = user_prompt_template.format(question=question)
+        if conversation_context:
+            user_content = f"{user_content}\n\nConversation Context:\n{conversation_context}"
+    else:
+        user_content = render_prompt_template(
+            resolved_prompt_pack.pack.templates.user,
+            PromptSlots(
+                question=question,
+                history=(
+                    f"Conversation Context:\n{conversation_context}" if conversation_context else ""
+                ),
+                output_contract=CODE_OUTPUT_CONTRACT,
+            ),
+        )
 
     trajectory: list[IterationRecord] = []
     has_successful_step = False
@@ -319,6 +393,7 @@ def run_rlm(
             trajectory=trajectory,
             error=run_error,
             answer_metadata=answer_metadata,
+            prompt_pack=prompt_pack_record,
         )
 
     try:
@@ -329,12 +404,23 @@ def run_rlm(
             if iterations == 1:
                 messages = build_initial_messages(system_prompt, user_content)
             else:
+                rendered_refinement = None
+                if refinement_prompt_template is None:
+                    rendered_refinement = render_prompt_template(
+                        resolved_prompt_pack.pack.templates.refinement,
+                        PromptSlots(
+                            question=question,
+                            history=_refinement_history(answer.get("content", ""), last_output),
+                            output_contract=CODE_OUTPUT_CONTRACT,
+                        ),
+                    )
                 messages = build_refinement_messages(
                     messages,
-                    template=refinement_prompt_template,
+                    template=(refinement_prompt_template or DEFAULT_REFINEMENT_PROMPT_TEMPLATE),
                     code=code,
                     answer_content=answer.get("content", ""),
                     last_output=last_output,
+                    rendered_prompt=rendered_refinement,
                 )
 
             context.emit_progress(
@@ -353,7 +439,13 @@ def run_rlm(
             if not code:
                 if cfg.enforce_contract:
                     context.emit_progress("No code block found, retrying with contract enforcement")
-                    repair_messages = build_missing_code_repair_messages(messages, response)
+                    missing_code_prompt = render_prompt_template(
+                        resolved_prompt_pack.pack.templates.missing_code_repair,
+                        PromptSlots(output_contract=CODE_OUTPUT_CONTRACT),
+                    )
+                    repair_messages = build_missing_code_repair_messages(
+                        messages, response, repair_prompt=missing_code_prompt
+                    )
                     repair_response, repair_usage, root_error = call_root(
                         root_llm, repair_messages, model=cfg.root_model or "", context=context
                     )
@@ -386,6 +478,7 @@ def run_rlm(
                         trajectory=trajectory,
                         error=None,
                         answer_metadata=answer_metadata,
+                        prompt_pack=prompt_pack_record,
                     )
 
             context.emit_progress(f"Iteration {iterations}/{cfg.max_iterations}: Executing...")
@@ -424,7 +517,20 @@ def run_rlm(
                 f"Iteration {iterations}/{cfg.max_iterations}: Retrying with error feedback..."
             )
             assert outcome.exception is not None
-            repair_messages = build_error_repair_messages(messages, code, outcome.exception)
+            error_repair_prompt = render_prompt_template(
+                resolved_prompt_pack.pack.templates.error_repair,
+                PromptSlots(
+                    question=question,
+                    history=error_repair_history(outcome.exception),
+                    output_contract=CODE_OUTPUT_CONTRACT,
+                ),
+            )
+            repair_messages = build_error_repair_messages(
+                messages,
+                code,
+                outcome.exception,
+                repair_prompt=error_repair_prompt,
+            )
             repair_response, repair_usage, root_error = call_root(
                 root_llm, repair_messages, model=cfg.root_model or "", context=context
             )
@@ -499,7 +605,13 @@ def run_rlm(
             context.emit_progress("Loop ended unconfirmed: extracting best final answer...")
             draft = str(answer.get("content") or "")
             extracted, extract_error = _extract_final_answer(
-                question, draft, trajectory, root_llm, cfg, context
+                question,
+                draft,
+                trajectory,
+                root_llm,
+                cfg,
+                context,
+                resolved_prompt_pack.pack,
             )
             if extracted:
                 final_answer = extracted
@@ -542,6 +654,7 @@ def run_rlm(
             extract_error=extract_error,
             recovered_error=recovered_error,
             answer_metadata=answer_metadata,
+            prompt_pack=prompt_pack_record,
         )
     finally:
         environment.close()
