@@ -7,6 +7,7 @@ from typing import Any
 from ..capabilities import (
     CapabilityAnnotator,
     CapabilityAttemptAuthority,
+    CapabilityAttemptObserver,
     CapabilityGuard,
     CapabilityObserver,
 )
@@ -40,6 +41,7 @@ class PyodideEnvironment(RunnerEnvironment):
         capability_guard: CapabilityGuard | None = None,
         capability_annotator: CapabilityAnnotator | None = None,
         capability_observer: CapabilityObserver | None = None,
+        capability_attempt_observer: CapabilityAttemptObserver | None = None,
         capability_attempt_authority: CapabilityAttemptAuthority | None = None,
     ) -> None:
         if exec_timeout_ms != 0:
@@ -56,6 +58,7 @@ class PyodideEnvironment(RunnerEnvironment):
             capability_guard=capability_guard,
             capability_annotator=capability_annotator,
             capability_observer=capability_observer,
+            capability_attempt_observer=capability_attempt_observer,
             capability_attempt_authority=capability_attempt_authority,
         )
         self._executor = RawExecutor(

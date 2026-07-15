@@ -18,6 +18,7 @@ from ..capabilities import (
     BrokeredSubcallClient,
     CapabilityAnnotator,
     CapabilityAttemptAuthority,
+    CapabilityAttemptObserver,
     CapabilityBroker,
     CapabilityGuard,
     CapabilityObserver,
@@ -139,6 +140,7 @@ class RunnerEnvironment(RLMEnvironment):
         capability_guard: CapabilityGuard | None = None,
         capability_annotator: CapabilityAnnotator | None = None,
         capability_observer: CapabilityObserver | None = None,
+        capability_attempt_observer: CapabilityAttemptObserver | None = None,
         capability_attempt_authority: CapabilityAttemptAuthority | None = None,
     ) -> None:
         self._context = context
@@ -158,6 +160,7 @@ class RunnerEnvironment(RLMEnvironment):
             guard=capability_guard,
             annotator=capability_annotator,
             observer=capability_observer,
+            attempt_observer=capability_attempt_observer,
             attempt_authority=capability_attempt_authority,
         )
         self._sandbox_subcalls = BrokeredSubcallClient(

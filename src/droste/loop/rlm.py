@@ -18,8 +18,7 @@ from ..execution.manifest import (
 )
 from ..execution.progress import (
     EventCallback,
-    extract_error_event,
-    finalization_error_event,
+    extract_event,
     iteration_start_event,
     llm_response_event,
     repair_event,
@@ -836,6 +835,7 @@ def run_rlm(
         )
         while not answer.get("ready"):
             iterations += 1
+            context.begin_iteration(iterations)
             context.emit_event(
                 iteration_start_event(iterations, context.ledger.snapshot().remaining.tokens)
             )
@@ -883,23 +883,41 @@ def run_rlm(
                     repair_messages = build_missing_code_repair_messages(
                         messages, response, repair_prompt=missing_code_prompt
                     )
-                    context.emit_event(repair_event(iterations, "missing_code"))
+                    context.emit_event(repair_event(iterations, "missing_code", "start"))
                     repair_response, repair_usage, root_error = call_root(
                         root_llm, repair_messages, model=cfg.root_model or "", context=context
                     )
                     if root_error is not None:
+                        context.emit_event(
+                            repair_event(
+                                iterations,
+                                "missing_code",
+                                "failure",
+                                error_type=root_error.type,
+                                message=root_error.message,
+                            )
+                        )
                         return early_result(root_error)
                     last_response = repair_response
                     context.emit_event(llm_response_event(iterations, repair_response))
 
                     code = extract_code_block(repair_response, "python")
                     if not code:
-                        return early_result(
-                            RLMError(
-                                type="PolicyError",
-                                message="Response missing python code block.",
+                        missing_code_error = RLMError(
+                            type="PolicyError",
+                            message="Response missing python code block.",
+                        )
+                        context.emit_event(
+                            repair_event(
+                                iterations,
+                                "missing_code",
+                                "failure",
+                                error_type=missing_code_error.type,
+                                message=missing_code_error.message,
                             )
                         )
+                        return early_result(missing_code_error)
+                    context.emit_event(repair_event(iterations, "missing_code", "completion"))
                     response = repair_response
                     messages = repair_messages
                     usage = repair_usage
@@ -987,13 +1005,22 @@ def run_rlm(
                 repair_event(
                     iterations,
                     "execution_error",
-                    error_type=outcome.error.type if outcome.error is not None else None,
+                    "start",
                 )
             )
             repair_response, repair_usage, root_error = call_root(
                 root_llm, repair_messages, model=cfg.root_model or "", context=context
             )
             if root_error is not None:
+                context.emit_event(
+                    repair_event(
+                        iterations,
+                        "execution_error",
+                        "failure",
+                        error_type=root_error.type,
+                        message=root_error.message,
+                    )
+                )
                 trajectory.append(failed_record)
                 return early_result(root_error)
             last_response = repair_response
@@ -1017,7 +1044,17 @@ def run_rlm(
                 if outcome.error is None:
                     code = repaired_code
                     has_successful_step = True
+                    context.emit_event(repair_event(iterations, "execution_error", "completion"))
                 else:
+                    context.emit_event(
+                        repair_event(
+                            iterations,
+                            "execution_error",
+                            "failure",
+                            error_type=outcome.error.type,
+                            message=outcome.error.message,
+                        )
+                    )
                     # Keep the attempt that produced the retained draft as
                     # well as the failed repair that ended the iteration.
                     trajectory.append(failed_record)
@@ -1033,6 +1070,15 @@ def run_rlm(
                     )
                 )
             else:
+                context.emit_event(
+                    repair_event(
+                        iterations,
+                        "execution_error",
+                        "failure",
+                        error_type="PolicyError",
+                        message="Repair response missing python code block.",
+                    )
+                )
                 trajectory.append(failed_record)
 
             terminal_error = _terminal_semantic_budget_error(semantic_evidence, context)
@@ -1073,6 +1119,7 @@ def run_rlm(
                 PolicyError(error.message),
                 repair_prompt=finalization_prompt,
             )
+            context.emit_event(repair_event(iterations, "terminal", "start"))
             finalization_response, finalization_usage, finalization_root_error = call_root(
                 root_llm,
                 finalization_messages,
@@ -1101,11 +1148,36 @@ def run_rlm(
                             attempt_kind="terminal",
                         )
                     )
+                    if finalization_outcome.error is None:
+                        context.emit_event(repair_event(iterations, "terminal", "completion"))
+                    else:
+                        context.emit_event(
+                            repair_event(
+                                iterations,
+                                "terminal",
+                                "failure",
+                                error_type=finalization_outcome.error.type,
+                                message=finalization_outcome.error.message,
+                            )
+                        )
+                else:
+                    context.emit_event(
+                        repair_event(
+                            iterations,
+                            "terminal",
+                            "failure",
+                            error_type="PolicyError",
+                            message="Terminal repair response missing python code block.",
+                        )
+                    )
             else:
                 context.emit_event(
-                    finalization_error_event(
-                        finalization_root_error.type,
-                        finalization_root_error.message,
+                    repair_event(
+                        iterations,
+                        "terminal",
+                        "failure",
+                        error_type=finalization_root_error.type,
+                        message=finalization_root_error.message,
                     )
                 )
 
@@ -1139,6 +1211,7 @@ def run_rlm(
             and _has_extractable_work(answer, has_successful_step)
         ):
             context.emit_progress("Loop ended unconfirmed: extracting best final answer...")
+            context.emit_event(extract_event(iterations, "start"))
             draft = str(answer.get("content") or "")
             extracted, extract_error = _extract_final_answer(
                 question,
@@ -1150,6 +1223,7 @@ def run_rlm(
                 resolved_prompt_pack.pack,
             )
             if extracted:
+                context.emit_event(extract_event(iterations, "completion"))
                 final_answer = extracted
                 was_extracted = True
                 # The extract pass is the bounded terminal recovery for the
@@ -1166,7 +1240,14 @@ def run_rlm(
                 # _best_answer above, but the failure is now visible to hosts
                 # via RLMResult.extract_error, not indistinguishable from a
                 # clean extraction.
-                context.emit_event(extract_error_event(extract_error.type, extract_error.message))
+                context.emit_event(
+                    extract_event(
+                        iterations,
+                        "failure",
+                        error_type=extract_error.type,
+                        message=extract_error.message,
+                    )
+                )
 
         if policy_outstanding and not was_extracted and error is not None and withheld_content:
             details = dict(error.details or {})

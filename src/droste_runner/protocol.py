@@ -10,7 +10,7 @@ from droste.execution.manifest import ScaffoldCompatibilityError
 from droste.execution.report import project_result
 from droste.loop.rlm import RLMPreflight
 
-RUNNER_PROTOCOL_VERSION = 5
+RUNNER_PROTOCOL_VERSION = 6
 
 
 class RunnerOperation(str, Enum):

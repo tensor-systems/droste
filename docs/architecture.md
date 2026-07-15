@@ -253,7 +253,7 @@ is intentionally a separate, content-free envelope:
 
 ```json
 {
-  "protocol_version": 5,
+  "protocol_version": 6,
   "operation": "preflight",
   "status": "success",
   "preflight": {
@@ -293,7 +293,7 @@ exceptions use the same closed five-field shape as other preflight responses;
 run exceptions use the ordinary run response shape.
 
 Completed responses also carry the policy-resolved
-[Trace ABI v1](trace-abi.md) `run_record`. Live events and terminal records use
+[Trace ABI v2](trace-abi.md) `run_record`. Live events and terminal records use
 the same strict envelope and projection. Persistence remains a host I/O
 decision; the engine never opens a trace store.
 
@@ -322,7 +322,7 @@ inference rather than publishing evidence that differs from execution.
 **Versioned boundary**: the request/response schema and provider contract
 are versioned, each by a single integer:
 
-- `RUNNER_PROTOCOL_VERSION` (currently 5) governs the request/response
+- `RUNNER_PROTOCOL_VERSION` (currently 6) governs the request/response
   envelope. Every request **must** carry `protocol_version` — requests are
   self-describing, the same discipline as JSON-RPC's mandatory `"jsonrpc"`
   field. A missing or mismatched version is answered with a structured
@@ -341,6 +341,9 @@ are versioned, each by a single integer:
   Protocol v5 adds the strategy-relevant `subcall_input_capacity` value. The
   bump prevents a v4 runner from silently ignoring capacity that a host used
   to plan chunks or select a checkpoint.
+  Protocol v6 embeds Trace ABI v2 and emits its same live vocabulary. The bump
+  prevents a v5 runner or consumer from silently treating new discriminated
+  subcall/repair/extract lifecycle values as the former strict v1 contract.
 - `PROVIDER_PROTOCOL_VERSION` (currently 4) governs manifest parsing,
   context-first provider binding, and bridge invocation facts. A mismatched
   manifest fails before a source is live.

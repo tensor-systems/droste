@@ -1,4 +1,4 @@
-# Trace ABI v1
+# Trace ABI v2
 
 Droste exposes one append-only event stream and one policy-resolved terminal
 `RunRecord`. The engine creates values; it does not choose a database or write
@@ -7,7 +7,7 @@ files. Hosts attach `on_event` for live delivery and optionally
 
 ## Event envelope
 
-Every event is a strict v1 value with these fields:
+Every event is a strict v2 value with these fields:
 
 ```json
 {
@@ -15,7 +15,7 @@ Every event is a strict v1 value with these fields:
   "seq": 1,
   "timestamp": "2026-07-14T05:00:00Z",
   "type": "progress",
-  "version": 1,
+  "version": 2,
   "persistence_class": "transient",
   "parent_run_id": "optional-parent",
   "depth": 0,
@@ -40,7 +40,7 @@ The persistence class is exhaustive and fixed by event type:
 | Class | Event types | Rule |
 | --- | --- | --- |
 | `durable` | `usage`, `budget`, `policy`, `capability`, `done` | Always in the terminal record |
-| `configurable` | `iteration_start`, `llm_response`, `code`, `output`, `execution_error`, `finalization_error`, `extract_error`, `repair`, `result`, `replay` | Included only when named by `TraceRetentionPolicy.retain` |
+| `configurable` | `iteration_start`, `llm_response`, `code`, `output`, `execution_error`, `subcall`, `repair`, `extract`, `result`, `replay` | Included only when named by `TraceRetentionPolicy.retain` |
 | `transient` | `startup`, `progress`, `reasoning_delta` | Live delivery only; never in the terminal record |
 
 Retention governs the terminal record, not the live channel. `result` is
@@ -48,7 +48,7 @@ always delivered once before `done`, even when it is not retained. `replay` is
 different: it is emitted only when the host explicitly selects replay
 retention.
 
-## Exhaustive v1 bodies
+## Exhaustive v2 bodies
 
 Every event body has a fixed top-level schema. Optional fields are marked `?`.
 Objects named below are JSON objects; all other types are primitive.
@@ -63,8 +63,9 @@ Objects named below are JSON objects; all other types are primitive.
 | `output` | `iteration: integer`, `stdout: string`, `calls_made: integer`, `answer_ready: boolean`, `answer_content_chars: integer` |
 | `execution_error` | `iteration: integer`, `error_type: string`, `message: string` |
 | `reasoning_delta` | `text: string` |
-| `finalization_error`, `extract_error` | `error_type: string`, `message: string` |
-| `repair` | `iteration: integer`, `reason: string`, `error_type?: string` |
+| `subcall` | `phase`, `call_id`, `operation`, `iteration`, plus phase-specific reservation/checkpoint/error and optional batch metadata |
+| `repair` | `phase: "start"|"completion"|"failure"`, `kind: "missing_code"|"execution_error"|"terminal"`, `iteration`, `error?` only on failure |
+| `extract` | `phase: "start"|"completion"|"failure"`, `iteration`, `extract_error?` only on failure |
 | `result`, `replay` | `result: object` |
 | `usage` | `kind: "resolved"`, `root: object`, `subcall: object`, `unattributed: object`, `total_tokens: integer`, `wall_time_ms: integer` |
 | `budget` | `kind: "snapshot"|"mutation"`, `source: string`, plus the kind-specific fields below |
@@ -90,7 +91,7 @@ Legacy/custom-client tokens that cannot be assigned safely appear under
 `unattributed.total_tokens`; the three token scopes must sum to
 `total_tokens`. None of these facts is inferred by counting stream events.
 
-Budget v1 is a discriminated event. The terminal snapshot uses
+The budget body remains a discriminated event in Trace ABI v2. The terminal snapshot uses
 `kind="snapshot"`, `source="budget_ledger"`, and `configured`, `consumed`,
 and `remaining` objects. The ledger may emit any number of
 `kind="mutation"` values with `action` (`reserve`, `commit`, `refund`, or
@@ -140,6 +141,28 @@ results, messages, and free-form evidence never enter the durable value. Trace
 code does not copy the capability schema, dispatch calls, or participate in
 authorization. This keeps tracing observational and gives native and Pyodide
 paths the same identity and evidence facts.
+
+## Subcall, repair, and extract lifecycles
+
+`subcall` is the live and retainable projection of the broker-owned attempt;
+it is not another dispatch or accounting protocol. `start` carries the exact
+broker reservation. `progress` carries a trusted cumulative checkpoint.
+`completion` and `failure` carry the last accepted checkpoint; failure adds
+only the stable provider error code and type. Prompts, contexts, results, and
+provider error messages never enter this event.
+
+Every subcall body carries the loop `iteration`; run nesting remains the
+envelope's `depth`/`parent_run_id`. The broker `call_id` is the attempt identity,
+while envelope `seq` is the only event order. An atomic `llm_batch` or
+`llm_batch_with_errors` reports `batch_count`; its `call_id` is already the
+batch identity. Droste does not synthesize item completion or IDs when the
+atomic transport cannot observe them.
+
+`repair` and `extract` use closed phase discriminators instead of progress
+strings. Missing-code, execution-error, and terminal repair paths each emit a
+start and exactly one completion or failure once entered. Extract fallback does
+the same; a failure carries the typed `extract_error`. The canonical `result`
+still carries the unary-equivalent answer and `done` remains content-free.
 
 ## Terminal reconciliation
 

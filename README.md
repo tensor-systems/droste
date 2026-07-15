@@ -133,7 +133,7 @@ output with per-iteration sub-call counts and answer state, LLM responses,
 execution errors. Exit code 0 means a confirmed (or extracted-with-note)
 answer.
 
-The strict [Trace ABI v1](docs/trace-abi.md) gives every event one run identity,
+The strict [Trace ABI v2](docs/trace-abi.md) gives every event one run identity,
 sequence, timestamp, and retention class, then returns a policy-resolved
 terminal record for host-owned local persistence. A trajectory-free canonical
 result is always delivered live before the content-free terminal event; full

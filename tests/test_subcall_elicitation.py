@@ -324,7 +324,7 @@ def test_runner_complete_default_budget_allows_subcalls() -> None:
     try:
         response = run(
             {
-                "protocol_version": 5,
+                "protocol_version": 6,
                 "model": "test-model",
                 "question": "q",
                 "budget": Budget().as_dict(),
@@ -392,7 +392,7 @@ def test_runner_zero_subcall_budget_is_honored() -> None:
     try:
         response = run(
             {
-                "protocol_version": 5,
+                "protocol_version": 6,
                 "model": "test-model",
                 "question": "q",
                 "budget": Budget(subcalls=0).as_dict(),
@@ -603,6 +603,7 @@ answer['ready'] = True
         _responses(incomplete, "Best-effort classification from retained evidence.")
     )
     subcalls = SyntheticClassificationSubcalls([['{"label":"red,blue"}', "not json"]])
+    events: list[dict[str, Any]] = []
 
     result = run_rlm(
         question="Assign labels to four synthetic records.",
@@ -613,6 +614,7 @@ answer['ready'] = True
             budget=Budget(subcalls=3),
             policy_hints=PolicyHints(semantic=True),
         ),
+        on_event=events.append,
     )
 
     assert result.iterations == 1
@@ -633,6 +635,8 @@ answer['ready'] = True
     }
     assert len(result.trajectory) == 1
     assert result.trajectory[0].execution_status == "error"
+    extract_events = [event for event in events if event["type"] == "extract"]
+    assert [event["phase"] for event in extract_events] == ["start", "completion"]
     assert "incomplete structured semantic batch" in result.trajectory[0].execution_result
 
 
@@ -717,11 +721,15 @@ answer['ready'] = True
     assert result.error.type == "PolicyError"
     assert result.error.details is not None
     assert result.error.details["reason"] == "semantic_exact_retry_budget_exhausted"
-    finalization_events = [event for event in events if event["type"] == "finalization_error"]
-    assert len(finalization_events) == 1
-    assert finalization_events[0]["error_type"] == "RuntimeError"
-    assert finalization_events[0]["message"] == "terminal request failed"
-    assert finalization_events[0]["depth"] == 0
+    terminal_repair = [
+        event for event in events if event["type"] == "repair" and event["kind"] == "terminal"
+    ]
+    assert [event["phase"] for event in terminal_repair] == ["start", "failure"]
+    assert terminal_repair[-1]["error"] == {
+        "type": "RuntimeError",
+        "message": "terminal request failed",
+    }
+    assert terminal_repair[-1]["depth"] == 0
 
 
 def test_terminal_finalization_blocks_saved_subcall_aliases_without_accounting() -> None:
@@ -827,6 +835,7 @@ answer['content'] = 'retained successful-step draft'
         _responses(incomplete_without_ready, "Unable to determine from the work so far.")
     )
     subcalls = SyntheticClassificationSubcalls([['{"label":"red,blue"}', "not json"]])
+    events: list[dict[str, Any]] = []
 
     result = run_rlm(
         question="Assign labels to four synthetic records.",
@@ -837,6 +846,7 @@ answer['content'] = 'retained successful-step draft'
             budget=Budget(subcalls=3),
             policy_hints=PolicyHints(semantic=True),
         ),
+        on_event=events.append,
     )
 
     assert result.iterations == 1
@@ -854,6 +864,9 @@ answer['content'] = 'retained successful-step draft'
     assert result.error.details["withheld_content"] == "retained successful-step draft"
     assert len(result.trajectory) == 1
     assert result.trajectory[0].execution_status == "success"
+    extract_events = [event for event in events if event["type"] == "extract"]
+    assert [event["phase"] for event in extract_events] == ["start", "failure"]
+    assert extract_events[-1]["extract_error"]["type"] == "InsufficientEvidence"
 
 
 def test_post_repair_terminal_handoff_preserves_recovered_failure_provenance() -> None:

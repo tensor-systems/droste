@@ -100,7 +100,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
 
 ## Trace ABI
 
-- Every structured event is a strict Trace ABI v1 value. Stamp it exactly once
+- Every structured event is a strict Trace ABI v2 value. Stamp it exactly once
   through `ExecutionContext`; do not emit raw or partially enveloped event
   dictionaries at host boundaries.
 - `execution.trace` owns immutable values, parsing, classification, retention
@@ -125,6 +125,20 @@ evidence with that status rather than leaving the model to interpret prefixes.
   participate in dispatch or authorization.
 - Serialize trace append and live callback delivery per execution context so
   concurrent emitters observe the same monotonic order that is recorded.
+- `subcall` is one configurable phase-discriminated view of the broker attempt,
+  never a second dispatch/accounting schema. Reuse its `call_id`, reservation,
+  and cumulative checkpoint; envelope `seq` is the sole event order. Atomic
+  batches report one batch ID/count and must not invent item completion.
+- Repair and extract paths emit typed start plus exactly one completion/failure
+  once entered. Keep their messages configurable; durable `done` and
+  `capability` projections remain content-free. Never infer failure from stdout
+  text, including successful output beginning with `ERROR:`.
+- Process-runner NDJSON sinks write to the original host stderr. Model code may
+  execute under stdout/stderr capture, and events emitted inside a brokered
+  subcall must not become sandbox output or disappear from the live lane.
+- A strict published event vocabulary/body change requires a Trace ABI bump and,
+  when embedded in runner output, an atomic runner-protocol bump. Do not expand
+  an old strict version in place or add a compatibility decoder in the engine.
 
 ## droste_runner Package
 
@@ -150,7 +164,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
   They are assertions that the Deno/WASM host supplies those boundaries, not
   Python-side enforcement. Never weaken them or silently accept a native
   signal timeout for Pyodide.
-- Every request MUST carry `"protocol_version": 5` and one complete `budget`
+- Every request MUST carry `"protocol_version": 6` and one complete `budget`
   object. Missing/mismatched versions or incomplete budgets fail before work.
   See docs/architecture.md, "The runner protocol".
 - Version refusal precedes operation resolution and carries `operation: null`.
