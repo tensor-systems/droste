@@ -200,6 +200,11 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - Establish the broker's finalization cutoff before post-attempt annotation.
   The annotator and settlement authority must receive the same terminal
   result/error, and cancellation requested after that cutoff is rejected.
+- Treat `call_id` as broker-local in-flight identity, not durable idempotency.
+  Atomically claim it after validation and before admission, retain the claim
+  through result delivery, and release it on every return or raised exception.
+  Concurrent duplicates must never reach the attempt authority; deliberate
+  reuse is valid only after the earlier `dispatch` has finished.
 - Never call an attempt authority or its observational event sinks while
   holding the attempt state lock. Serialize checkpoint/final transitions with
   a separate gate so a checkpoint event may reentrantly request cancellation
