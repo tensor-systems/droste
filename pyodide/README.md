@@ -64,9 +64,9 @@ Deno-side modules, all ModelRelay-aware but host-data-layer-agnostic:
 - `relay.ts` — the Deno process a host spawns. Reads a request JSON on stdin,
   runs the RLM in Pyodide via a **host-supplied adapter module** (named on the
   command line), writes a response JSON on stdout. Deno holds the only ambient
-  capabilities (narrow net to ModelRelay + read of the DB dir); the Pyodide
-  sandbox has none. Knows nothing about any host's data layer — see "Writing a
-  host adapter".
+  capabilities (narrow net to ModelRelay plus trusted provider files); the
+  Pyodide sandbox has none. Knows nothing about any host's data layer — see
+  "Writing a host adapter".
 - `broker.ts` — the A′-1 credential broker (see Security model).
 - `events.ts` — the structured NDJSON event vocabulary + stderr forwarding filter.
 - `stream.ts` — reconstructs a complete `/responses` reply from a ModelRelay SSE stream.
@@ -130,7 +130,7 @@ def build_db_service(db_path, contacts_db_path=None) -> tuple[ProviderService, d
     ...
 
 def run_for_host_pyodide(
-    request, host_fetch, bridge_call=None, duplex_bridge_call=None, meta=None
+    request, host_fetch, bridge_call, duplex_bridge_call=None, meta=None
 ) -> dict:
     ...
 ```
@@ -176,19 +176,18 @@ through host code.
   host-specific to carry, so its `meta` is just `{}`; a production adapter
   might carry things like a filesystem-probe result or a default call budget
   computed from a `SELECT COUNT(*)`.
-- **`run_for_host_pyodide(request, host_fetch, bridge_call=None, duplex_bridge_call=None, meta=None)`**
+- **`run_for_host_pyodide(request, host_fetch, bridge_call, duplex_bridge_call=None, meta=None)`**
   runs in the *untrusted* REPL interpreter. It wires a `BridgedLLMClient` (over
   the injected `host_fetch`) and an environment into `droste.run_rlm`, and
-  returns a response dict. When `bridge_call` is non-`None` (DB-service mode,
-  the default), it reaches the DB only through a
+  returns a response dict. A database-backed adapter requires a callable
+  `bridge_call` and reaches the DB only through a
   `BridgeProvider(bridge_call, duplex_call=duplex_bridge_call)` registration
   with receiving-host effect policy — the DB never opens in this interpreter.
   The relay supplies its bounded bridge-v2 pump as `duplex_bridge_call`;
   custom hosts may omit it to retain unary provider-protocol-4 invocation.
-  When `bridge_call` is `None`
-  (`RLM_DB_SERVICE=0`), the same function opens `request["db_path"]` directly in
-  a single interpreter. `meta` is the same opaque blob `build_db_service`
-  returned, ferried back verbatim.
+  A context-only adapter may accept `bridge_call=None`, but it must not use a
+  request path to open a provider inside the untrusted interpreter. `meta` is
+  the same opaque blob `build_db_service` returned, ferried back verbatim.
 
 In two-interpreter mode, a trusted host may send `SIGUSR1` to request
 cooperative cancellation of the active provider call. The relay keys that
@@ -266,15 +265,12 @@ sure your host actually has one.
 
 ## Configuration flags
 
-`relay.ts` reads three Deno environment variables once at process start, each
-an independent kill switch / bisect — the four combinations of `RLM_BRIDGE` ×
-`RLM_DB_SERVICE` are all coherent, and `RLM_STREAM` is orthogonal to both.
+`relay.ts` reads two independent Deno environment variables at process start.
 (These are `relay.ts`'s flags; a different host would define its own.)
 
 | Flag | Default | Set it to... | ...to get |
 |------|---------|---------------|-----------|
 | `RLM_BRIDGE` | (unset) | `legacy` | Pre-A′-1 behavior: the ModelRelay credential is a visible global inside the untrusted REPL interpreter, which assembles its own auth header. Kill switch only — the split is one `host_fetch` call site catching a real design mistake, not a feature. |
-| `RLM_DB_SERVICE` | on | `0` | Single-interpreter mode: the untrusted REPL interpreter mounts the DB directly (`db_path` in the sandbox request), instead of routing through the trusted DB-service interpreter over a bridge call. Debugging kill switch only — it mounts the whole DB directory read-write into the untrusted interpreter (see Known gaps, #7) and emits a WARNING event on every activation. |
 | `RLM_STREAM` | on | `0` | Legacy unary ModelRelay call (no SSE), for when NDJSON streaming from `/responses` is suspected of causing an issue. |
 
 ## Security model
@@ -312,14 +308,12 @@ step that puts a real data source behind the service.
 `examples/pyodide-host/e2e_test.ts` proves the full path end to end against a
 real SQLite file (see Testing).
 
-With `RLM_DB_SERVICE` at its default (on), the sandbox that runs LLM-generated
-code has no filesystem access to the corpus at all, no network of its own
-(Pyodide has no sockets), and no live credential — its only channels to the
-outside world are the bridged data-source RPC and the brokered ModelRelay
-call, both host-mediated and host-scoped.
-
-**`RLM_DB_SERVICE=0` (legacy single-interpreter mode) does not have this
-property** — see Known gaps.
+The sandbox that runs LLM-generated code has no filesystem access to the
+corpus, no network of its own (Pyodide has no sockets), and no live credential.
+Its only channels to the outside world are the brokered provider call and the
+brokered ModelRelay call, both host-mediated and host-scoped. Database paths
+are consumed by the trusted interpreter and removed before the sandbox request
+is constructed.
 
 ## Testing
 
@@ -359,8 +353,8 @@ Roughly three tiers of coverage:
   regressions proving an explicit `timeout_ms: 0` survives (isn't defaulted back
   to 5000) and that a query then runs under it. `examples/pyodide-host/`
   `test_pyodide_host_adapter.py` is a fast *native* (no-Pyodide) sanity check of
-  the reference adapter's three code paths: single-interpreter mode, DB-service
-  bridge mode, and error serialization on a root LLM failure.
+  the reference adapter's brokered provider path, rejection of direct database
+  access, and error serialization on a root LLM failure.
 - **Real-Pyodide, substrate-only** (no host adapter, no host data layer):
   `broker_integration_test.ts` and `bridge_source_integration_test.ts` load a
   real Pyodide interpreter with a scripted `host_fetch` and prove the broker /
@@ -370,10 +364,11 @@ Roughly three tiers of coverage:
   subprocess — real process boundary, real Pyodide interpreter, real dynamic
   `importlib.import_module` of `pyodide_host_adapter`, real stdin/stdout
   request/response contract — against a local mock HTTP server standing in for
-  ModelRelay. It builds a real temp SQLite fixture and asserts a real `query()`
-  round-trip (`SELECT COUNT(*)` → answer `"3"`), in both DB-service (default)
-  and `RLM_DB_SERVICE=0` single-interpreter modes. **Zero real network and zero
-  sibling checkout**, so it runs unconditionally in CI — no skip. This replaces
+  ModelRelay. It builds a real temp SQLite fixture, asserts a real brokered
+  `query()` round-trip (`SELECT COUNT(*)` → answer `"3"`), and proves a sibling
+  file in the database directory is not visible to generated code. **Zero real
+  network and zero sibling checkout**, so it runs unconditionally in CI — no
+  skip. This replaces
   two former host-coupled tests (`db_service_integration_test.ts`,
   `broker_batch_integration_test.ts`), which required a sibling host-repo
   checkout and moved to that host's repo alongside its own adapter.
@@ -391,20 +386,6 @@ Roughly three tiers of coverage:
   that channel. Custom unary-only hosts still require a wall-clock timeout and
   process termination as their hard Pyodide boundary.
 
-- **`RLM_DB_SERVICE=0` mounts the whole data directory into the untrusted
-  interpreter — deliberate, documented, loud (#7, decided 2026-07-10).**
-  `relay.ts`'s legacy-mode branch (`py.mountNodeFS("/data", dbDir)`) mounts
-  the corpus DB's *parent directory* wholesale; `mountNodeFS` has no
-  read-only or per-file option, so sibling files (app config, session state)
-  are readable and writable by LLM-generated code in this mode. The decision:
-  this stays unhardened. The default (`RLM_DB_SERVICE` on) removes the mount
-  from the untrusted interpreter entirely — a strictly stronger fix — and the
-  rejected mitigations cost more than the kill switch is worth (a scratch-dir
-  copy means copying a multi-GB corpus per run; hardlinks add a new
-  `--allow-write` requirement to every host's spawn contract). Legacy mode is
-  a debugging bisect for bridge/DB-service regressions only, never a shipping
-  configuration, and every activation now emits a WARNING progress event so
-  it cannot be enabled silently.
 - **`sql_local.py`'s per-query `timeout_ms` is unenforced under Pyodide (#8,
   fixed to degrade).** The timeout is a `threading.Timer`; where thread
   creation is unavailable the source now skips the timer with a
@@ -437,8 +418,9 @@ engines (native 3.53.1 vs Pyodide's bundled 3.39.0) against a large real-world
 benchmark corpus, and that packaging a Deno binary + an offline
 `--cached-only` `DENO_DIR` (~14MB) beats shipping a signed `Python.framework` +
 wheelhouse per architecture. That work — plus the two security hardening passes
-(A′-1 and A′-2, the latter now on by default) and the adapter-agnostic split that made
-`relay.ts` fully adapter-agnostic and gave droste its own example host — is in
+(A′-1 and A′-2, with A′-2 now the sole database-backed path) and the
+adapter-agnostic split that made `relay.ts` fully adapter-agnostic and gave
+droste its own example host — is in
 this repo's git/PR history, not duplicated here. A few standalone investigation
 scripts from that era (`spike_topology.ts`, `probe_dual_sqlite.ts`,
 `verify_16_threading.ts`) still live in this directory as reference, outside

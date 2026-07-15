@@ -35,7 +35,7 @@ def build_db_service(
 def run_for_host_pyodide(
     request: dict[str, Any],
     host_fetch: Any,
-    bridge_call: Any = None,
+    bridge_call: Any,
     duplex_bridge_call: Any = None,
     meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:

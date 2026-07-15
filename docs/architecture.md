@@ -54,6 +54,12 @@ configured source ID, and operation. The broker resolves the complete descriptor
 from the manifest, keeping stable dispatch identity separate from documentation,
 schema, pagination, budget, and policy metadata that descriptors may gain.
 
+The bundled Pyodide relay applies the same rule to local databases: a trusted
+provider interpreter consumes host paths and serves the broker bridge, while
+the untrusted REPL receives neither a database mount nor a path. There is no
+direct-access topology or configuration fallback. Context-only requests may
+have no provider, but generated code never gains ambient I/O as a substitute.
+
 Each result envelope carries the capability kind, configured source or provider
 identifier, operation, call and run IDs, typed status/error, value or bounded
 handle, usage and budget deltas, evidence references, and optional parent/child

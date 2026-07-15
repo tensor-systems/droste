@@ -313,6 +313,12 @@ uv pip install --no-index --find-links wheelhouse droste
   sandbox request and injects it only for exact root/subcall callback URLs from
   the trusted envelope. Requests without `db_path` skip the DB-service setup
   entirely, allowing context-only hosted adapters.
+- Database-backed Pyodide requests have exactly one data path: the trusted
+  provider interpreter and broker bridge. Never restore `RLM_DB_SERVICE`, mount
+  a database directory into the untrusted interpreter, pass `db_path` through
+  the sandbox request, or let an adapter open it when `bridge_call` is absent.
+  Context-only requests may omit a provider; absence is not direct-I/O
+  authority.
 - `data_source_endpoint` is part of that same exact-match runner callback set;
   it lets a host proxy source calls without putting the source credential in
   the sandbox request.

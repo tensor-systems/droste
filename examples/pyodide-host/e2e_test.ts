@@ -15,6 +15,7 @@
 // Run: deno test --allow-run --allow-read --allow-write --allow-net=127.0.0.1 --allow-env examples/pyodide-host/e2e_test.ts
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { copy } from "jsr:@std/fs@1/copy";
+import { dirname } from "node:path";
 
 const HERE = new URL(".", import.meta.url).pathname;
 const DROSTE_SRC = new URL("../../src", import.meta.url).pathname;
@@ -30,11 +31,18 @@ const TEST_BUDGET = {
   subcall_output_tokens: 2_048,
 };
 
+const QUERY_CODE = [
+  "```python",
+  'rows = query("SELECT COUNT(*) AS n FROM widgets")',
+  'answer["content"] = str(rows[0]["n"])',
+  'answer["ready"] = True',
+  "```",
+].join("\n");
+
 // A minimal ModelRelay stand-in: any POST to /responses gets one scripted
-// reply telling the RLM to query the real (bridged) SQL source and finish.
-// Proves the answer actually came from a real query() round-trip through
-// BridgeProvider -> ProviderService -> the real SQLite file, not a stub.
-function startMockModelRelay(): Promise<
+// reply. The default proves the answer came from a real query() round-trip
+// through BridgeProvider -> ProviderService -> the real SQLite file.
+function startMockModelRelay(code = QUERY_CODE): Promise<
   {
     port: number;
     rootPayloads: Record<string, unknown>[];
@@ -42,13 +50,6 @@ function startMockModelRelay(): Promise<
   }
 > {
   const rootPayloads: Record<string, unknown>[] = [];
-  const code = [
-    "```python",
-    'rows = query("SELECT COUNT(*) AS n FROM widgets")',
-    'answer["content"] = str(rows[0]["n"])',
-    'answer["ready"] = True',
-    "```",
-  ].join("\n");
   const server = Deno.serve(
     // hostname must be explicit: Deno.serve defaults to 0.0.0.0, which the
     // documented least-privilege `--allow-net=127.0.0.1` permission rejects.
@@ -215,7 +216,7 @@ async function runRelay(
 
 Deno.test({
   name:
-    "relay.ts + pyodide_host_adapter.py: DB-service (bridge) mode, real subprocess + Pyodide + mocked ModelRelay",
+    "relay.ts + pyodide_host_adapter.py: brokered provider, real subprocess + Pyodide + mocked ModelRelay",
   fn: async () => {
     const { port, rootPayloads, shutdown } = await startMockModelRelay();
     try {
@@ -230,25 +231,18 @@ Deno.test({
         api_key: "test-key",
         budget: TEST_BUDGET,
       };
-      // Pinned "on", not inherited: an ambient RLM_DB_SERVICE=0 in the
-      // developer's or CI's environment would otherwise silently downgrade
-      // this to the single-interpreter path (runRelay merges over
-      // Deno.env.toObject()) — both modes return the same answer here, so
-      // the test would keep passing while testing the wrong code path.
       // Exercises build_db_service + the opaque meta blob + bridge_call, the
       // parts the adapter-agnostic split changed.
-      const { resp, stderrText } = await runRelay(sourcesDir, request, port, {
-        RLM_DB_SERVICE: "1",
-      });
+      const { resp, stderrText } = await runRelay(
+        sourcesDir,
+        request,
+        port,
+        {},
+      );
       assertEquals(resp.error, null);
       assertEquals(resp.answer, "3"); // real COUNT(*) via the real bridged query()
       assertEquals(rootPayloads.length, 1);
       assertEquals(rootPayloads[0].reasoning_effort, "none");
-      // The legacy-mode WARNING must NOT fire on the default path.
-      assert(
-        !stderrText.includes("RLM_DB_SERVICE=0"),
-        `unexpected legacy-mode warning in DB-service mode:\n${stderrText}`,
-      );
       // Contract handshake (#33): the relay announces engine + protocol
       // versions as a structured stderr event before doing any work.
       const startup = stderrText.split("\n")
@@ -269,13 +263,29 @@ Deno.test({
 });
 
 Deno.test({
-  name:
-    "relay.ts + pyodide_host_adapter.py: single-interpreter (RLM_DB_SERVICE=0) mode, meta stays null",
+  name: "relay.ts exposes no ambient database directory to generated code",
   fn: async () => {
-    const { port, rootPayloads, shutdown } = await startMockModelRelay();
+    const code = [
+      "```python",
+      "import os",
+      'ambient = "blocked"',
+      'for root, _, files in os.walk("/"):',
+      '    if "host-secret-45.txt" in files:',
+      '        with open(os.path.join(root, "host-secret-45.txt")) as f:',
+      "            ambient = f.read()",
+      "        break",
+      'rows = query("SELECT COUNT(*) AS n FROM widgets")',
+      'answer["content"] = ambient + ":" + str(rows[0]["n"])',
+      'answer["ready"] = True',
+      "```",
+    ].join("\n");
+    const { port, rootPayloads, shutdown } = await startMockModelRelay(code);
     try {
       const sourcesDir = await buildTempSources();
       const dbPath = await buildTempDb();
+      const secretPath = `${dirname(dbPath)}/host-secret-45.txt`;
+      await Deno.writeTextFile(secretPath, "exposed");
+      assertEquals(await Deno.readTextFile(secretPath), "exposed");
       const request = {
         question: "how many widgets are there",
         db_path: dbPath,
@@ -284,22 +294,14 @@ Deno.test({
         api_key: "test-key",
         budget: TEST_BUDGET,
       };
-      // build_db_service/bridge_call are never invoked on this path; the
-      // adapter's run_for_host_pyodide must handle bridge_call=None,
-      // meta=None cleanly (opens db_path directly, single interpreter).
-      const { resp, stderrText } = await runRelay(sourcesDir, request, port, {
-        RLM_DB_SERVICE: "0",
-      });
+      const { resp } = await runRelay(sourcesDir, request, port, {});
       assertEquals(resp.error, null);
-      assertEquals(resp.answer, "3");
+      // The VFS-wide search would find "exposed" under any mount point if the
+      // database's parent reached the untrusted interpreter. The SQL result
+      // still proves brokered provider access works in the same run.
+      assertEquals(resp.answer, "blocked:3");
       assertEquals(rootPayloads.length, 1);
       assert(!("reasoning_effort" in rootPayloads[0]));
-      // Legacy mode must announce itself (#7): a WARNING progress event on
-      // stderr, so this mode can never be enabled silently.
-      assert(
-        stderrText.includes("RLM_DB_SERVICE=0 (legacy mode)"),
-        `expected the legacy-mode warning on stderr, got:\n${stderrText}`,
-      );
     } finally {
       await shutdown();
     }
@@ -326,7 +328,7 @@ Deno.test({
         sourcesDir,
         request,
         port,
-        { RLM_DB_SERVICE: "1" },
+        {},
         "_meta_precision_adapter",
       );
       // Deliberately NOT JSON.parse()'d: parsing in this test would itself
