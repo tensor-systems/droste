@@ -32,6 +32,10 @@ const RUNNER_REFUSAL_FIXTURE = new URL(
   "../../src/droste/testing/fixtures/runner-v6-refusal.ndjson",
   import.meta.url,
 );
+const TRACE_LIFECYCLE_FIXTURE = new URL(
+  "../../src/droste/testing/fixtures/trace-v2-lifecycle.ndjson",
+  import.meta.url,
+);
 const TEST_BUDGET = {
   tokens: 500_000,
   subcalls: 50,
@@ -397,7 +401,7 @@ type ProbeResult = {
 function spawnEventChannelProbe(mode: "large" | "fail" | "cancel") {
   return spawn(
     Deno.execPath(),
-    ["run", "--allow-env", EVENT_CHANNEL_PROBE, mode],
+    ["run", "--allow-env", "--allow-read", EVENT_CHANNEL_PROBE, mode],
     {
       env: { ...Deno.env.toObject(), DROSTE_RELAY_EVENT_FD: "3" },
       stdio: ["ignore", "pipe", "pipe", "pipe"],
@@ -435,15 +439,11 @@ Deno.test("large response, diagnostic, and event lanes drain independently", asy
   assertEquals(result.stdout, '{"answer":"ok","error":null}\n');
   assert(!result.stderr.includes('"type":'));
   assert(!result.events.includes("diagnostic-"));
+  const fixture = await Deno.readTextFile(TRACE_LIFECYCLE_FIXTURE);
+  assertEquals(result.events, fixture.repeat(128));
   const frames = result.events.trimEnd().split("\n");
-  assertEquals(frames.length, 65);
   assert(frames.every(isRlmEvent));
-  const events = frames.map((frame) => JSON.parse(frame));
-  assertEquals(events[0].type, "startup");
-  assert(events.every((event) => event.type !== "done"));
-  assertEquals(events.map((event) => event.seq), [
-    ...Array.from({ length: 65 }, (_, index) => index + 1),
-  ]);
+  assertEquals(JSON.parse(frames[0]).type, "startup");
   assert(result.stderr.length > 4_000_000);
   assert(result.events.length > 4_000_000);
 });

@@ -2,39 +2,29 @@ import { eventChannelFromEnvironment } from "../src/droste/substrates/_relay/eve
 
 const mode = Deno.args[0];
 const channel = eventChannelFromEnvironment();
-
-function frame(type: "startup" | "code", seq: number, body: object): string {
-  return JSON.stringify({
-    run_id: "event-channel-probe",
-    seq,
-    timestamp: "2026-07-15T00:00:00Z",
-    type,
-    version: 2,
-    persistence_class: type === "startup" ? "transient" : "configurable",
-    depth: 0,
-    ...body,
-  });
-}
-
-channel.writeFrame(frame("startup", 1, { engine_version: "test" }));
+const fixture = await Deno.readTextFile(
+  new URL(
+    "../src/droste/testing/fixtures/trace-v2-lifecycle.ndjson",
+    import.meta.url,
+  ),
+);
+if (!fixture.endsWith("\n")) throw new Error("invalid Trace fixture");
+const frames = fixture.slice(0, -1).split("\n");
 
 if (mode === "large") {
-  for (let index = 0; index < 64; index += 1) {
-    channel.writeFrame(
-      frame("code", index + 2, {
-        iteration: index + 1,
-        code: `event-${index}:` + "e".repeat(65_536),
-      }),
-    );
-    console.error(`diagnostic-${index}:` + "d".repeat(65_536));
+  for (let repetition = 0; repetition < 128; repetition += 1) {
+    for (const frame of frames) channel.writeFrame(frame);
+    console.error(`diagnostic-${repetition}:` + "d".repeat(32_768));
   }
   await Deno.stdout.write(
     new TextEncoder().encode('{"answer":"ok","error":null}\n'),
   );
 } else if (mode === "cancel") {
+  channel.writeFrame(frames[0]);
   console.error("event-channel-probe-ready");
   await new Promise(() => {});
 } else if (mode === "fail") {
+  channel.writeFrame(frames[0]);
   console.error("event-channel-probe-process-failure");
   Deno.exit(17);
 } else {
