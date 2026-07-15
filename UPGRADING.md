@@ -11,7 +11,35 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.13.0)
+## Unreleased (post-0.13.1)
+
+### Optional provider bridge v2 duplex sessions
+
+`BridgeProvider` keeps its unary provider-protocol-4 behavior unless a host
+explicitly passes `duplex_call`. The callable must return one per-invocation
+session with `receive`, `send`, `cancellation_requested(call_id)`, and `close`
+methods. Bridge v2 streams cumulative checkpoints and cooperative cancellation
+through a bounded pull-based pump; do not implement it by calling back into a
+suspended Pyodide interpreter.
+
+The bundled Deno relay now selects this duplex path for its two-interpreter
+provider mode. Host adapters invoked by that relay must accept the new
+`duplex_bridge_call` keyword and pass it to
+`BridgeProvider(bridge_call, duplex_call=duplex_bridge_call)`. Upgrade the staged
+relay, adapter, and Python package atomically. Single-interpreter mode and hosts
+that construct `BridgeProvider(bridge_call)` directly remain unary.
+
+For the bundled relay, `SIGUSR1` requests cooperative cancellation of its one
+active duplex provider call. Existing `SIGTERM`/`SIGKILL` process-control
+semantics are unchanged and remain the fallback for non-cooperative handlers.
+
+Remote provider loss before terminal delivery now yields the stable
+`bridge.transport_lost` capability error and settles once in the receiving
+broker. Acknowledged checkpoints remain committed; unacknowledged remote facts
+are not trusted. This post-0.13.1 work is not part of the v0.13.1 maintenance
+tag.
+
+## 0.13.1 (from 0.13.0)
 
 ### Runner exceptions retain their selected operation
 
@@ -91,31 +119,6 @@ field unchanged. The effective value remains content-free provenance at
 because the request field is optional and additive.
 
 ## 0.12.0 (from 0.11.0)
-
-### Optional provider bridge v2 duplex sessions
-
-`BridgeProvider` keeps its unary provider-protocol-4 behavior unless a host
-explicitly passes `duplex_call`. The callable must return one per-invocation
-session with `receive`, `send`, `cancellation_requested(call_id)`, and `close`
-methods. Bridge v2 streams cumulative checkpoints and cooperative cancellation
-through a bounded pull-based pump; do not implement it by calling back into a
-suspended Pyodide interpreter.
-
-The bundled Deno relay now selects this duplex path for its two-interpreter
-provider mode. Host adapters invoked by that relay must accept the new
-`duplex_bridge_call` keyword and pass it to
-`BridgeProvider(bridge_call, duplex_call=duplex_bridge_call)`. Upgrade the staged
-relay, adapter, and Python package atomically. Single-interpreter mode and hosts
-that construct `BridgeProvider(bridge_call)` directly remain unary.
-
-For the bundled relay, `SIGUSR1` requests cooperative cancellation of its one
-active duplex provider call. Existing `SIGTERM`/`SIGKILL` process-control
-semantics are unchanged and remain the fallback for non-cooperative handlers.
-
-Remote provider loss before terminal delivery now yields the stable
-`bridge.transport_lost` capability error and settles once in the receiving
-broker. Acknowledged checkpoints remain committed; unacknowledged remote facts
-are not trusted.
 
 ### Python 3.14 is supported by the core package
 
