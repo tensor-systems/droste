@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import shutil
 import sqlite3
 import sys
@@ -35,6 +36,7 @@ from droste import (
     run_rlm,
 )
 from droste.protocols.llm_client import TokenUsage
+from droste.sources._mcp_stdio_transport import McpStdioSession
 from droste.sources.mcp_stdio import (
     MCP_PROTOCOL_VERSION,
     McpConfigurationError,
@@ -45,7 +47,15 @@ from droste.sources.mcp_stdio import (
     open_mcp_stdio_source,
 )
 from droste.sources.sql_local import sqlite_provider
-from droste.testing import MockLLMClient, MockResponse, MockSubcallClient
+from droste.testing import (
+    LifecycleGate,
+    MockLLMClient,
+    MockResponse,
+    MockSubcallClient,
+    RecordingAttemptAuthority,
+    require_unknown_completion,
+    run_while_blocked,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mcp_stdio_fixture.py"
 REFERENCE_SERVER = (
@@ -503,11 +513,29 @@ def test_result_bounds_and_durable_trace_exclude_protocol_content(tmp_path: Path
         registry.close()
 
 
-def test_mid_call_cancellation_terminates_session_and_settles_once(tmp_path: Path) -> None:
+def test_mid_call_cancellation_terminates_session_and_settles_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gate = LifecycleGate()
+    real_read = os.read
+    marker = b"slow call started"
+    observed_stderr = bytearray()
+
+    def observed_read(descriptor: int, size: int) -> bytes:
+        chunk = real_read(descriptor, size)
+        if threading.current_thread().name == "droste-mcp-stderr":
+            observed_stderr.extend(chunk)
+            if marker in observed_stderr:
+                gate.arrive()
+            elif len(observed_stderr) > len(marker):
+                del observed_stderr[: -len(marker)]
+        return chunk
+
+    monkeypatch.setattr("droste.sources._mcp_stdio_transport.os.read", observed_read)
     source = _source(tmp_path, tools=("slow-read",))
     bound = open_mcp_stdio_source(source)
     registry = ProviderRegistry((bound,))
-    authority = _CountingAttemptAuthority()
+    authority = RecordingAttemptAuthority(reservation=CapabilityReservation(wall_ms=1_000))
     broker = CapabilityBroker(
         registry.capability_registrations(), run_id="run", attempt_authority=authority
     )
@@ -518,23 +546,23 @@ def test_mid_call_cancellation_terminates_session_and_settles_once(tmp_path: Pat
         provider_type="reference_filesystem",
     )
     call = CapabilityCall(capability_id, "slow-call", "run")
-    outcomes: list[object] = []
-    worker = threading.Thread(target=lambda: outcomes.append(broker.dispatch(call)))
-    worker.start()
-    deadline = time.monotonic() + 3
-    while bound.runtime.stats()["stderr_bytes"] < 20 and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert broker.cancel("slow-call") is True
-    worker.join(timeout=5)
-    assert not worker.is_alive()
-    assert len(outcomes) == 1
-    outcome = outcomes[0]
-    assert outcome.status.value == "cancelled"
-    assert outcome.error.code == "cancelled"
-    assert broker.cancel("slow-call") is False
-    assert authority.settlements == [("slow-call", "cancelled", True)]
-    assert authority.active == set()
-    registry.close()
+
+    def cancel() -> None:
+        assert broker.cancel("slow-call") is True
+
+    try:
+        outcome = run_while_blocked(
+            lambda: broker.dispatch(call), gate=gate, while_blocked=cancel
+        ).require_value()
+        assert outcome.status.value == "cancelled"
+        assert outcome.error.code == "cancelled"
+        assert broker.cancel("slow-call") is False
+        settlement = authority.require_single_settlement("slow-call")
+        assert settlement.error_code == "cancelled"
+        assert settlement.attempted is True
+        assert authority.active_calls == frozenset()
+    finally:
+        registry.close()
 
 
 def test_max_in_flight_bound_rejects_excess_call_without_replay_hint(tmp_path: Path) -> None:
@@ -604,11 +632,50 @@ def test_mid_call_deadline_terminates_session_and_settles_once(tmp_path: Path) -
 
 
 def test_cancellation_interrupts_pipe_filling_write_and_unblocks_sibling(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    gate = LifecycleGate()
+    first_dispatching = threading.Event()
+    request_write_started = threading.Event()
+    sibling_waiting = threading.Event()
+    real_select = select.select
+    real_write = os.write
+    real_acquire_write_lock = McpStdioSession._acquire_write_lock
+
+    def observed_write(descriptor, data) -> int:
+        written = real_write(descriptor, data)
+        if first_dispatching.is_set() and not sibling_waiting.is_set() and written:
+            request_write_started.set()
+        return written
+
+    def observed_select(readable, writable, exceptional, timeout=None):
+        result = real_select(readable, writable, exceptional, timeout)
+        if (
+            writable
+            and not result[1]
+            and first_dispatching.is_set()
+            and request_write_started.is_set()
+            and not sibling_waiting.is_set()
+        ):
+            gate.arrive()
+        return result
+
+    def observed_acquire_write_lock(
+        session: McpStdioSession, execution, expires: float | None
+    ) -> None:
+        if execution is not None and execution.call_id == "blocked-sibling":
+            if session._write_lock.acquire(blocking=False):
+                session._write_lock.release()
+                raise AssertionError("MCP sibling reached an unlocked writer")
+            sibling_waiting.set()
+        real_acquire_write_lock(session, execution, expires)
+
     source = _source(tmp_path, mode="stop-reading", close_timeout_ms=50)
     bound = open_mcp_stdio_source(source)
     registry = ProviderRegistry((bound,))
+    monkeypatch.setattr("droste.sources._mcp_stdio_transport.os.write", observed_write)
+    monkeypatch.setattr("droste.sources._mcp_stdio_transport.select.select", observed_select)
+    monkeypatch.setattr(McpStdioSession, "_acquire_write_lock", observed_acquire_write_lock)
     authority = _CountingAttemptAuthority()
     broker = CapabilityBroker(
         registry.capability_registrations(), run_id="run", attempt_authority=authority
@@ -629,32 +696,50 @@ def test_cancellation_interrupts_pipe_filling_write_and_unblocks_sibling(
         CapabilityCall(capability_id, "blocked-sibling", "run", kwargs={"path": "small"}),
     )
     outcomes: dict[str, object] = {}
-    first = threading.Thread(target=lambda: outcomes.setdefault("first", broker.dispatch(calls[0])))
     second = threading.Thread(
-        target=lambda: outcomes.setdefault("second", broker.dispatch(calls[1]))
+        target=lambda: outcomes.setdefault("second", broker.dispatch(calls[1])),
+        daemon=True,
     )
     started = time.monotonic()
-    first.start()
-    time.sleep(0.05)
-    second.start()
-    time.sleep(0.05)
-    assert broker.cancel("blocked-write") is True
-    first.join(timeout=2)
-    second.join(timeout=2)
-    assert not first.is_alive()
+
+    def cancel_after_sibling_waits() -> None:
+        reached_sibling = False
+        try:
+            second.start()
+            reached_sibling = sibling_waiting.wait(timeout=2)
+        finally:
+            cancelled = broker.cancel("blocked-write")
+        assert reached_sibling
+        assert cancelled is True
+
+    def dispatch_first():
+        first_dispatching.set()
+        return broker.dispatch(calls[0])
+
+    try:
+        first_outcome = run_while_blocked(
+            dispatch_first,
+            gate=gate,
+            while_blocked=cancel_after_sibling_waits,
+        ).require_value()
+    finally:
+        if second.ident is not None:
+            second.join(timeout=2)
+        registry.close()
+        if second.is_alive():
+            second.join(timeout=2)
+        assert not second.is_alive(), "blocked MCP sibling survived runtime close"
     assert not second.is_alive()
     assert time.monotonic() - started < 2
-    first_outcome = outcomes["first"]
     second_outcome = outcomes["second"]
     assert first_outcome.status.value == "cancelled"
     assert second_outcome.error.code == "mcp.transport_error"
-    assert second_outcome.error.retryable is False
+    require_unknown_completion(second_outcome.error, attempts=1)
     assert sorted(call_id for call_id, _, _ in authority.settlements) == [
         "blocked-sibling",
         "blocked-write",
     ]
     assert authority.active == set()
-    registry.close()
 
 
 def test_close_escalates_to_process_group_kill_and_remains_idempotent(tmp_path: Path) -> None:

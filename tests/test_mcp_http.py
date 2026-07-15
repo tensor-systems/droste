@@ -29,6 +29,12 @@ from droste.sources._mcp_http_transport import (
     _SseDisconnected,
 )
 from droste.sources._mcp_stdio_transport import McpTransportError
+from droste.testing import (
+    LifecycleGate,
+    RecordingAttemptAuthority,
+    require_unknown_completion,
+    run_while_blocked,
+)
 
 TOOLS = [
     {
@@ -285,7 +291,7 @@ def test_sse_resume_session_expiry_never_replays_accepted_tool(
             registry.broker_globals(broker)["remote_docs"].read_file(path="effectful-risk")
         assert captured.value.error.code == "mcp.transport_error"
         assert "accepted request" in captured.value.error.message
-        assert tool_posts == 1
+        require_unknown_completion(captured.value.error, attempts=tool_posts)
         assert server.initializations == 1
     finally:
         registry.close()
@@ -733,7 +739,7 @@ def test_safe_retries_share_one_total_request_deadline(
 def test_cancellation_and_attempt_finalization_happen_once(
     server: _Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    started = threading.Event()
+    gate = LifecycleGate()
 
     def slow_exchange(
         session: McpHttpSession,
@@ -746,39 +752,19 @@ def test_cancellation_and_attempt_finalization_happen_once(
         **kwargs: Any,
     ) -> _HttpResponse:
         if body and json.loads(body).get("method") == "tools/call":
-            started.set()
-            while True:
-                assert execution is not None
-                execution.check()
-                time.sleep(0.005)
+            gate.pause()
+            assert execution is not None
+            execution.check()
+            raise AssertionError("cancelled execution unexpectedly continued")
         return server.exchange(session, method, endpoint, headers, body, **kwargs)
 
     monkeypatch.setattr(McpHttpSession, "_exchange", slow_exchange)
     bound = open_mcp_http_source(_source(), McpHttpHost())
     registry = ProviderRegistry((bound,))
-    settlements: list[str] = []
-
-    class Authority:
-        def admit(self, admitted_call):
-            del admitted_call
-            from droste import CapabilityAdmission, CapabilityReservation
-
-            return CapabilityAdmission(CapabilityReservation(wall_ms=1_000))
-
-        def checkpoint(self, checkpoint_call, cumulative):
-            del checkpoint_call
-            return cumulative
-
-        def settle(self, settled_call, result, error, checkpoint, *, attempted):
-            del result, error, checkpoint
-            assert attempted is True
-            settlements.append(settled_call.call_id)
-            from droste import CapabilityMetadata
-
-            return CapabilityMetadata()
+    authority = RecordingAttemptAuthority()
 
     broker = CapabilityBroker(
-        registry.capability_registrations(), run_id="run", attempt_authority=Authority()
+        registry.capability_registrations(), run_id="run", attempt_authority=authority
     )
     call = CapabilityCall(
         CapabilityId(
@@ -791,16 +777,21 @@ def test_cancellation_and_attempt_finalization_happen_once(
         "run",
         kwargs={"path": "slow"},
     )
-    outcomes: list[Any] = []
-    worker = threading.Thread(target=lambda: outcomes.append(broker.dispatch(call)))
-    worker.start()
-    assert started.wait(1)
-    assert broker.cancel("call-1") is True
-    worker.join(2)
-    assert not worker.is_alive()
-    assert outcomes[0].error.code == "cancelled"
-    assert settlements == ["call-1"]
-    assert bound.runtime.stats()["calls"] == 0
-    assert bound.runtime.stats()["failures"] == 1
-    assert bound.runtime.stats()["requests_made"] == 1
-    registry.close()
+
+    def cancel() -> None:
+        assert broker.cancel("call-1") is True
+
+    try:
+        outcome = run_while_blocked(
+            lambda: broker.dispatch(call), gate=gate, while_blocked=cancel
+        ).require_value()
+        assert outcome.error.code == "cancelled"
+        settlement = authority.require_single_settlement("call-1")
+        assert settlement.attempted is True
+        assert settlement.error_code == "cancelled"
+        assert authority.active_calls == frozenset()
+        assert bound.runtime.stats()["calls"] == 0
+        assert bound.runtime.stats()["failures"] == 1
+        assert bound.runtime.stats()["requests_made"] == 1
+    finally:
+        registry.close()

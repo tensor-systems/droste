@@ -433,6 +433,17 @@ uv pip install --no-index --find-links wheelhouse droste
   it lets a host proxy source calls without putting the source credential in
   the sandbox request.
 
+## Lifecycle Conformance Testing
+
+Lifecycle regressions belong in the published `droste.testing` support surface as
+small test facts and scenario functions, not in a production transport base class.
+Use explicit `LifecycleGate` rendezvous points and bounded joins for cancellation,
+reentry, and shutdown tests; scheduler sleeps are not evidence that a lifecycle
+state was reached. Compare native and Pyodide traces by their ordered event types
+and contiguous sequence numbers, since run identity and timestamps intentionally
+differ. Ambiguous remote completion is a single-attempt terminal fact and must
+never be advertised as retryable.
+
 ## Repo Hygiene (manual, before pushing docs/comments)
 
 This repo is public-facing: no references to internal strategy, private

@@ -53,10 +53,12 @@ from droste.environments import (
 from droste.protocols.llm_client import TokenUsage
 from droste.providers import ConfiguredSource, ProviderCatalog
 from droste.testing import (
+    LifecycleGate,
     MockEnvironment,
     MockLLMClient,
     MockResponse,
     fake_records_provider,
+    run_while_blocked,
 )
 
 
@@ -131,16 +133,14 @@ class _AttemptAuthority:
 class _PermissiveAttemptAuthority(_AttemptAuthority):
     """Records calls without enforcing call-id uniqueness itself."""
 
-    def __init__(self) -> None:
+    def __init__(self, gate: LifecycleGate) -> None:
         super().__init__()
+        self._gate = gate
         self.admissions: list[str] = []
-        self.admission_entered = Event()
-        self.continue_admission = Event()
 
     def admit(self, call):
         self.admissions.append(call.call_id)
-        self.admission_entered.set()
-        assert self.continue_admission.wait(timeout=2)
+        self._gate.pause()
         return super().admit(call)
 
 
@@ -364,7 +364,8 @@ def test_deadline_before_handler_is_typed_and_releases_at_admission_boundary() -
 
 
 def test_call_identity_is_claimed_before_admission() -> None:
-    authority = _PermissiveAttemptAuthority()
+    gate = LifecycleGate()
+    authority = _PermissiveAttemptAuthority(gate)
     call = CapabilityCall(QUERY.capability_id, "shared-call", "run-1")
 
     def handler(context):
@@ -376,26 +377,33 @@ def test_call_identity_is_claimed_before_admission() -> None:
         run_id="run-1",
         attempt_authority=authority,
     )
-    winner: list[CapabilityResult] = []
-    winner_thread = Thread(target=lambda: winner.append(broker.dispatch(call)))
-    winner_thread.start()
-    assert authority.admission_entered.wait(timeout=2)
-    assert broker.cancel("shared-call") is False
+    duplicates: list[CapabilityResult] = []
+    during_admission: list[tuple[list[str], list[CapabilityCheckpoint], list[object]]] = []
 
-    duplicate = broker.dispatch(call)
+    def dispatch_duplicate() -> None:
+        assert broker.cancel("shared-call") is False
+        duplicates.append(broker.dispatch(call))
+        during_admission.append(
+            (
+                list(authority.admissions),
+                list(authority.checkpoints),
+                list(authority.settlements),
+            )
+        )
+
+    winner = run_while_blocked(
+        lambda: broker.dispatch(call),
+        gate=gate,
+        while_blocked=dispatch_duplicate,
+    ).require_value()
+    duplicate = duplicates[0]
 
     assert duplicate.status is CapabilityStatus.INVALID
     assert duplicate.error is not None
     assert duplicate.error.type == "DuplicateCapabilityCall"
-    assert authority.admissions == ["shared-call"]
-    assert authority.checkpoints == []
-    assert authority.settlements == []
+    assert during_admission == [(["shared-call"], [], [])]
 
-    authority.continue_admission.set()
-    winner_thread.join(timeout=2)
-    assert not winner_thread.is_alive()
-    assert len(winner) == 1
-    assert winner[0].ok is True
+    assert winner.ok is True
     assert authority.checkpoints == [CapabilityCheckpoint(tokens=1)]
     assert authority.settlements == [(True, None, CapabilityCheckpoint(tokens=1))]
 
@@ -558,13 +566,11 @@ def test_typed_provider_deadline_uses_cancelled_status() -> None:
 
 def test_cancellation_during_handler_is_observed_cooperatively() -> None:
     authority = _AttemptAuthority()
-    entered = Event()
-    continue_handler = Event()
+    gate = LifecycleGate()
 
     def handler(context: CapabilityExecutionContext) -> str:
         context.checkpoint(tokens=20, subcalls=1)
-        entered.set()
-        assert continue_handler.wait(timeout=2)
+        gate.pause()
         context.check()
         return "unreachable"
 
@@ -574,18 +580,20 @@ def test_cancellation_during_handler_is_observed_cooperatively() -> None:
         attempt_authority=authority,
     )
     call = CapabilityCall(QUERY.capability_id, "call-1", "run-1")
-    results = []
-    worker = Thread(target=lambda: results.append(broker.dispatch(call)))
-    worker.start()
-    assert entered.wait(timeout=2)
-    assert broker.cancel("call-1") is True
-    continue_handler.set()
-    worker.join(timeout=2)
 
-    assert len(results) == 1
-    assert results[0].status is CapabilityStatus.CANCELLED
-    assert results[0].error is not None
-    assert results[0].error.code == CapabilityErrorCode.CANCELLED
+    def cancel() -> None:
+        assert broker.cancel("call-1") is True
+
+    outcome = run_while_blocked(
+        lambda: broker.dispatch(call),
+        gate=gate,
+        while_blocked=cancel,
+    )
+    result = outcome.require_value()
+
+    assert result.status is CapabilityStatus.CANCELLED
+    assert result.error is not None
+    assert result.error.code == CapabilityErrorCode.CANCELLED
     assert authority.settlements == [
         (True, CapabilityErrorCode.CANCELLED, CapabilityCheckpoint(20, 1))
     ]

@@ -1,6 +1,16 @@
 from importlib.resources import files
 
 from .environment import MockEnvironment
+from .lifecycle import (
+    DEFAULT_LIFECYCLE_TIMEOUT,
+    LifecycleGate,
+    RecordingAttemptAuthority,
+    Settlement,
+    ThreadOutcome,
+    require_ordered_terminal_events,
+    require_unknown_completion,
+    run_while_blocked,
+)
 from .llm_client import MockLLMClient, MockResponse
 from .provider import FAKE_RECORDS_MANIFEST, fake_records_provider
 from .subcall_client import MockSubcallClient
@@ -24,7 +34,15 @@ __all__ = [
     "MockLLMClient",
     "MockResponse",
     "MockSubcallClient",
+    "DEFAULT_LIFECYCLE_TIMEOUT",
+    "LifecycleGate",
+    "RecordingAttemptAuthority",
+    "Settlement",
+    "ThreadOutcome",
     "fake_records_provider",
     "runner_v6_refusal_ndjson",
+    "require_ordered_terminal_events",
+    "require_unknown_completion",
+    "run_while_blocked",
     "trace_v2_lifecycle_ndjson",
 ]
