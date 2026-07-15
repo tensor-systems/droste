@@ -13,6 +13,26 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.13.1)
 
+### First-party local filesystem/text provider
+
+Hosts may explicitly add `filesystem_text_provider()` to their
+`ProviderCatalog`, then bind a named `ConfiguredSource` with an absolute `root`
+and optional `include`, `exclude`, `enrichers`, and bound settings. The provider
+is not added implicitly to `droste_runner`'s remote-wrapper catalog: local path
+authority must remain an explicit host decision.
+
+The source exposes descriptor-generated `list_files`, `read`, `grep`, `search`,
+and `stat` bindings. The raw manifest operation remains `list`; its Python name
+is `list_files` because public bindings cannot shadow builtins. There is no
+provider or runner protocol bump: existing manifests and requests are unchanged.
+Bridged hosts may use the same generic unary or duplex provider transport.
+
+The local runtime requires an absolute non-symlink directory and secure POSIX
+descriptor-relative primitives. Unsupported platforms fail at bind rather than
+falling back to path resolution. Keep the provider in a trusted interpreter or
+process when the configured root must be unavailable to generated code; native
+in-process execution does not remove Python's ambient filesystem authority.
+
 ### Optional provider bridge v2 duplex sessions
 
 `BridgeProvider` keeps its unary provider-protocol-4 behavior unless a host

@@ -174,6 +174,24 @@ statement, masked-identifier keyword scanning, LIMIT injection, row caps,
 statement timeout), database opened `mode=ro`, and `PRAGMA query_only=ON`
 enforced on host-supplied connections.
 
+The bundled `filesystem_text` provider is also local-mode and read-only. One
+pinned root directory descriptor and componentwise `openat`-style resolution
+own all five operations (`list`, `read`, `grep`, `search`, and `stat`). Symlinks
+are never followed, include/exclude policy is reapplied to explicit paths and
+cursor continuations, and every scan/read/result page is bounded. Its Markdown
+section support is optional enrichment over the same text contract, not another
+provider or index. Cursor payloads are self-contained but authenticated to the
+bound runtime, preventing callers from forging offsets or evidence coordinates.
+Required POSIX security primitives are a bind-time
+precondition; there is no weaker path fallback.
+
+In native mode, generated bindings grant no filesystem path or handle, but the
+in-process REPL remains arbitrary Python and therefore may have whatever
+ambient authority its host process already has. A host that needs the configured
+root to be non-ambient must isolate the REPL and keep `filesystem_text` behind
+the generic provider bridge. The reference two-Pyodide topology does exactly
+that: only the trusted provider interpreter mounts the root.
+
 ## The runner protocol (embedding)
 
 `python -m droste_runner` is a one-shot JSON worker: a host writes a request

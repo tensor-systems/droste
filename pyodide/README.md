@@ -295,7 +295,7 @@ host repo it depended on);
 it's still covered for real by `examples/pyodide-host/e2e_test.ts`, which
 spawns the actual `relay.ts` subprocess with its actual async `host_fetch`.
 
-**A′-2 — DB-service split (`droste.sources.bridge`, wired by `relay.ts` + the
+**A′-2 — provider-service split (`droste.sources.bridge`, wired by `relay.ts` + the
 host adapter's `build_db_service`).** The untrusted REPL interpreter never holds
 the corpus DB either. A second, trusted Pyodide interpreter boots first, holds
 a bound provider behind a `ProviderService` (a fixed operation allowlist from
@@ -304,7 +304,11 @@ and the REPL interpreter reaches it only through a `BridgeProvider` registration
 `ProviderService` and `BridgeProvider` are droste-general
 (`droste.sources.bridge`); the adapter's `build_db_service` is the host-specific
 step that puts a real data source behind the service.
-`bridge_source_integration_test.ts` proves the generic wire contract, and
+`bridge_source_integration_test.ts` proves the generic wire contract.
+`filesystem_provider_integration_test.ts` mounts real SQLite and
+`filesystem_text` sources in the trusted interpreter and proves the separate
+REPL interpreter can read the configured text root only through generated
+broker bindings; the root path and provider runtime are non-ambient there. And
 `examples/pyodide-host/e2e_test.ts` proves the full path end to end against a
 real SQLite file (see Testing).
 
@@ -356,9 +360,12 @@ Roughly three tiers of coverage:
   the reference adapter's brokered provider path, rejection of direct database
   access, and error serialization on a root LLM failure.
 - **Real-Pyodide, substrate-only** (no host adapter, no host data layer):
-  `broker_integration_test.ts` and `bridge_source_integration_test.ts` load a
-  real Pyodide interpreter with a scripted `host_fetch` and prove the broker /
-  bridge wire contracts directly. A few seconds each.
+  `broker_integration_test.ts`, `bridge_source_integration_test.ts`, and
+  `filesystem_provider_integration_test.ts` load one or two
+  real Pyodide interpreters with a scripted `host_fetch` and prove the broker /
+  bridge wire contracts directly. The filesystem test uses the real first-party
+  provider and proves its configured root is absent from the generated-code
+  interpreter. A few seconds each.
 - **Real-Pyodide against the real `relay.ts`** (droste's own E2E):
   `examples/pyodide-host/e2e_test.ts` spawns the actual `relay.ts` as a Deno
   subprocess — real process boundary, real Pyodide interpreter, real dynamic

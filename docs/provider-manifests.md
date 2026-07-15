@@ -115,6 +115,75 @@ SQLite's raw operations are `query` and `schema`; their Python bindings are
 `query` and `get_schema`. That distinction lets transports keep stable operation
 identity without making Python naming the provider protocol.
 
+## Local filesystem/text provider
+
+`filesystem_text_provider()` is the dependency-free, read-only provider for a
+host-selected local directory. `filesystem_text` is the reusable provider type;
+each `ConfiguredSource` supplies a source name and an absolute trusted `root`:
+
+```python
+from droste import ConfiguredSource, ProviderCatalog
+from droste.sources import filesystem_text_provider
+
+registry = ProviderCatalog((filesystem_text_provider(),)).bind(
+    (
+        ConfiguredSource(
+            source_id="docs",
+            provider_type="filesystem_text",
+            config={
+                "root": "/data/docs",
+                "include": ["**/*.md", "**/*.txt", "**/*.log"],
+                "exclude": [".git/**"],
+                "enrichers": ["markdown"],
+            },
+        ),
+    )
+)
+```
+
+Its raw operations are `list`, `read`, `grep`, `search`, and `stat`; the Python
+binding for `list` is `list_files` because provider bindings may not shadow a
+Python builtin. `grep` is case-sensitive literal matching, while `search` is an
+index-free case-insensitive all-terms scan. Markdown section reads are an
+optional removable enrichment. The five base operations work without an index
+or non-stdlib dependency.
+
+Paths are source-relative POSIX values. Include and exclude globs are
+case-sensitive; `*`, `?`, and character classes stay within one segment, while
+`**` must occupy a complete segment and spans zero or more segments. Exclusion
+always wins, including for an explicit `read`, `stat`, or scan path. Directory
+walks, file reads, lines, result pages, depth, and entry counts all have
+configuration bounds. `max_result_bytes` limits the serialized inline result,
+including JSON escaping rather than only the raw file bytes. Text is strict UTF-8 with no NUL bytes; binary files and
+special files return typed unsupported outcomes rather than content.
+The optional positive bounds are `max_read_bytes`, `max_scan_bytes`,
+`max_result_bytes`, `max_scan_entries`, `max_results`, `max_line_bytes`, and
+`max_depth`; invalid or internally inconsistent values fail at bind.
+
+`list_files`, `grep`, and `search` return versioned, self-contained cursors, so
+the provider keeps no cursor registry. Each cursor is authenticated by and
+valid only for the bound runtime that issued it. A cursor contains no path
+authority: on every use the provider re-applies path policy and revalidates the
+immutable file inventory. Addition, removal, replacement, or revision drift
+returns retryable `filesystem.changed` instead of silently duplicating or
+skipping results. `read` may also receive the opaque revision returned by
+`stat`.
+
+The trusted runtime pins the configured root as a directory descriptor and
+opens every path component relative to an already-open directory with
+`O_NOFOLLOW`. It never uses string-prefix checks, `resolve()`, `os.walk`, or a
+symlink-following fallback. Platforms missing the required POSIX `dir_fd`,
+descriptor-listing, `O_DIRECTORY`, `O_NOFOLLOW`, `O_NONBLOCK`, or `pread`
+primitives fail while binding the source. The configured absolute root is
+never placed in descriptors, prompt text, results, evidence, or errors.
+
+Native in-process execution still runs arbitrary Python and is not an OS
+security boundary. Root non-ambient access requires the host to place the
+provider on the trusted side of a process or Pyodide/WASM boundary. The generic
+`ProviderService`/`BridgeProvider` transport preserves the same typed result,
+error, usage, cursor, and evidence values; the filesystem provider adds no
+transport-specific path.
+
 ## Evidence
 
 Capability metadata uses `EvidenceLocation(source_id, path, revision, ranges)`.
@@ -122,3 +191,8 @@ Each `EvidenceRange` may carry ordered byte coordinates, line coordinates, a
 section identifier, or a combination. Durable trace projections retain only
 the evidence count; full locations are replay content governed by the host's
 retention policy.
+
+Filesystem byte ranges are zero-based and half-open. Line coordinates are
+one-based and inclusive. Evidence paths are source-relative POSIX paths and
+revisions are opaque stat-derived digests; neither exposes the configured host
+root.
