@@ -283,6 +283,41 @@ def _source(tmp_path, policy: dict | None = None, script: str | None = None) -> 
     return LocalSqlRuntime(config)
 
 
+def test_lazy_connection_cannot_be_installed_after_close(monkeypatch) -> None:
+    connect_started = threading.Event()
+    release_connect = threading.Event()
+    connection_closed = threading.Event()
+
+    class FakeConnection:
+        def close(self) -> None:
+            connection_closed.set()
+
+    connection = FakeConnection()
+
+    def blocking_connect(*_args, **_kwargs):
+        connect_started.set()
+        assert release_connect.wait(timeout=2)
+        return connection
+
+    monkeypatch.setattr("droste.sources.sql_local.sqlite3.connect", blocking_connect)
+    runtime = LocalSqlRuntime({"sqlite_path": "unused.db"})
+    acquire = threading.Thread(target=runtime._connection)
+    acquire.start()
+    assert connect_started.wait(timeout=2)
+
+    close = threading.Thread(target=runtime.close)
+    close.start()
+    assert not connection_closed.wait(timeout=0.05)
+
+    release_connect.set()
+    acquire.join(timeout=2)
+    close.join(timeout=2)
+
+    assert not acquire.is_alive()
+    assert not close.is_alive()
+    assert connection_closed.is_set()
+
+
 def test_default_limit_caps_unbounded_queries(tmp_path) -> None:
     script = "CREATE TABLE t (x INTEGER);" + "".join(
         f"INSERT INTO t VALUES ({i});" for i in range(20)

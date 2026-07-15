@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType, SimpleNamespace
 from typing import Any
 
+from ._lifecycle import CloseOnce
 from .capabilities import (
     CapabilityBroker,
     CapabilityDescriptor,
@@ -30,6 +31,31 @@ from .protocols.verbs import RESERVED_NAMES, AccessorManifest, validate_binding_
 
 PROVIDER_PROTOCOL_VERSION = 4
 _PROVIDER_TYPE_PATTERN = re.compile(r"[a-z][a-z0-9_.-]*\Z", re.ASCII)
+
+
+def _close_sources(sources: tuple[BoundSource, ...]) -> None:
+    """Close every acquired source in reverse order and report every failure."""
+
+    failures: list[BaseException] = []
+    for source in reversed(sources):
+        try:
+            source.close()
+        except BaseException as exc:
+            failures.append(exc)
+    if failures:
+        raise BaseExceptionGroup("provider runtime cleanup failed", failures)
+
+
+def _raise_with_cleanup(
+    message: str,
+    primary: BaseException,
+    cleanup: Callable[[], None],
+) -> None:
+    try:
+        cleanup()
+    except BaseException as cleanup_error:
+        raise BaseExceptionGroup(message, [primary, cleanup_error]) from None
+    raise primary
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +201,8 @@ class ProviderRuntime:
     handlers: Mapping[str, Callable[..., Any]]
     source_description: str = ""
     stats: Callable[[], Mapping[str, Any]] | None = field(default=None, repr=False, compare=False)
+    close_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+    _lifecycle: CloseOnce = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         copied = dict(self.handlers)
@@ -185,6 +213,14 @@ class ProviderRuntime:
             raise TypeError("provider source_description must be a string")
         if self.stats is not None and not callable(self.stats):
             raise TypeError("provider runtime stats must be callable")
+        if self.close_callback is not None and not callable(self.close_callback):
+            raise TypeError("provider runtime close_callback must be callable")
+        object.__setattr__(self, "_lifecycle", CloseOnce(self.close_callback))
+
+    def close(self) -> None:
+        """Release this runtime once; concurrent and repeated calls are safe."""
+
+        self._lifecycle.close()
 
 
 ProviderBinder = Callable[[ConfiguredSource, Any], ProviderRuntime]
@@ -227,9 +263,16 @@ class ProviderRegistration:
         runtime = self.binder(source, context)
         if not isinstance(runtime, ProviderRuntime):
             raise TypeError("provider binder must return ProviderRuntime")
-        expected = {item.operation_id for item in self.manifest.operations}
-        if set(runtime.handlers) != expected:
-            raise ValueError("provider runtime handlers must exactly match its manifest")
+        try:
+            expected = {item.operation_id for item in self.manifest.operations}
+            if set(runtime.handlers) != expected:
+                raise ValueError("provider runtime handlers must exactly match its manifest")
+        except BaseException as exc:
+            _raise_with_cleanup(
+                "provider binding validation and cleanup failed",
+                exc,
+                runtime.close,
+            )
         return BoundSource(source, self, runtime)
 
 
@@ -238,6 +281,11 @@ class BoundSource:
     source: ConfiguredSource
     registration: ProviderRegistration
     runtime: ProviderRuntime = field(repr=False, compare=False)
+
+    def close(self) -> None:
+        """Release the live runtime owned by this binding exactly once."""
+
+        self.runtime.close()
 
     def capability_registrations(self) -> tuple[CapabilityRegistration, ...]:
         manifest = self.registration.manifest
@@ -291,10 +339,17 @@ class ProviderCatalog:
         context: Any = None,
         default_source_id: str | None = None,
     ) -> ProviderRegistry:
-        return ProviderRegistry(
-            tuple(self.registration(item.provider_type).bind(item, context) for item in sources),
-            default_source_id=default_source_id,
-        )
+        bound: list[BoundSource] = []
+        try:
+            for item in sources:
+                bound.append(self.registration(item.provider_type).bind(item, context))
+        except BaseException as exc:
+            _raise_with_cleanup(
+                "provider binding and partial cleanup failed",
+                exc,
+                lambda: _close_sources(tuple(bound)),
+            )
+        return ProviderRegistry(tuple(bound), default_source_id=default_source_id)
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -304,6 +359,7 @@ class ProviderRegistry:
     _sources: tuple[BoundSource, ...]
     _default_source_id: str | None
     _registrations: tuple[CapabilityRegistration, ...]
+    _lifecycle: CloseOnce
 
     def __init__(
         self,
@@ -312,21 +368,38 @@ class ProviderRegistry:
         default_source_id: str | None = None,
     ) -> None:
         frozen_sources = tuple(sources)
-        source_ids = [item.source.source_id for item in frozen_sources]
-        if len(source_ids) != len(set(source_ids)):
-            raise ValueError("duplicate configured source name")
-        if any(source_id in RESERVED_NAMES for source_id in source_ids):
-            raise ValueError("configured source name collides with a reserved global")
-        if default_source_id is not None and default_source_id not in source_ids:
-            raise ValueError("default source is not configured")
-        registrations = tuple(
-            registration
-            for source in frozen_sources
-            for registration in source.capability_registrations()
-        )
+        acquired_sources = tuple(item for item in frozen_sources if isinstance(item, BoundSource))
+        try:
+            if not all(isinstance(item, BoundSource) for item in frozen_sources):
+                raise TypeError("provider registry requires BoundSource values")
+            source_ids = [item.source.source_id for item in frozen_sources]
+            if len(source_ids) != len(set(source_ids)):
+                raise ValueError("duplicate configured source name")
+            runtime_ids = [id(item.runtime) for item in frozen_sources]
+            if len(runtime_ids) != len(set(runtime_ids)):
+                raise ValueError(
+                    "configured sources must not share one ProviderRuntime; "
+                    "bind a separate runtime lease for each source"
+                )
+            if any(source_id in RESERVED_NAMES for source_id in source_ids):
+                raise ValueError("configured source name collides with a reserved global")
+            if default_source_id is not None and default_source_id not in source_ids:
+                raise ValueError("default source is not configured")
+            registrations = tuple(
+                registration
+                for source in frozen_sources
+                for registration in source.capability_registrations()
+            )
+        except BaseException as exc:
+            _raise_with_cleanup(
+                "provider registry validation and cleanup failed",
+                exc,
+                lambda: _close_sources(acquired_sources),
+            )
         object.__setattr__(self, "_sources", frozen_sources)
         object.__setattr__(self, "_default_source_id", default_source_id)
         object.__setattr__(self, "_registrations", registrations)
+        object.__setattr__(self, "_lifecycle", CloseOnce(lambda: _close_sources(frozen_sources)))
 
     @property
     def sources(self) -> tuple[BoundSource, ...]:
@@ -424,6 +497,11 @@ class ProviderRegistry:
             for source in self._sources
             if source.runtime.stats is not None
         }
+
+    def close(self) -> None:
+        """Close every bound runtime once in reverse bind order."""
+
+        self._lifecycle.close()
 
 
 __all__ = [

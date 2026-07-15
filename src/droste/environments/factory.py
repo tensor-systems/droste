@@ -112,22 +112,40 @@ def create_environment(
     capability_annotator: CapabilityAnnotator | None = None,
     capability_observer: CapabilityObserver | None = None,
 ) -> RLMEnvironment:
-    """Construct the selected environment around host-supplied live dependencies."""
-    environment_type = select_environment(config.kind)
-    if execution_context.budget != config.budget or execution_context.sandbox != config.sandbox:
-        raise ValueError("environment config must match its execution context")
-    accounting = BrokerBudget(execution_context.ledger)
-    return environment_type(
-        context=context,
-        registry=registry,
-        subcalls=subcalls,
-        max_output_chars=config.sandbox.resolved_capture_output_chars,
-        exec_timeout_ms=config.sandbox.execution_timeout_ms,
-        budget_ledger=execution_context.ledger,
-        capability_run_id=capability_run_id,
-        capability_parent_run_id=capability_parent_run_id,
-        capability_guard=capability_guard,
-        capability_annotator=capability_annotator,
-        capability_observer=capability_observer,
-        capability_attempt_authority=accounting,
-    )
+    """Construct an environment and take ownership of ``registry`` immediately.
+
+    A successful environment closes the registry with the run. Construction
+    failures close it before propagating, so callers must not retain a second
+    owner after passing it here.
+    """
+
+    try:
+        environment_type = select_environment(config.kind)
+        if execution_context.budget != config.budget or execution_context.sandbox != config.sandbox:
+            raise ValueError("environment config must match its execution context")
+        accounting = BrokerBudget(execution_context.ledger)
+        return environment_type(
+            context=context,
+            registry=registry,
+            subcalls=subcalls,
+            max_output_chars=config.sandbox.resolved_capture_output_chars,
+            exec_timeout_ms=config.sandbox.execution_timeout_ms,
+            budget_ledger=execution_context.ledger,
+            capability_run_id=capability_run_id,
+            capability_parent_run_id=capability_parent_run_id,
+            capability_guard=capability_guard,
+            capability_annotator=capability_annotator,
+            capability_observer=capability_observer,
+            capability_attempt_authority=accounting,
+        )
+    except BaseException as exc:
+        if registry is None:
+            raise
+        try:
+            registry.close()
+        except BaseException as cleanup_error:
+            raise BaseExceptionGroup(
+                "environment construction and provider cleanup failed",
+                [exc, cleanup_error],
+            ) from None
+        raise

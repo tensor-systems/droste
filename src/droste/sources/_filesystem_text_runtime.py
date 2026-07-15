@@ -476,21 +476,24 @@ class _SecureRoot:
         if os.stat not in os.supports_follow_symlinks:
             raise RuntimeError("filesystem_text requires lstat-style stat support")
 
-    def __del__(self) -> None:
-        root_fd = getattr(self, "_root_fd", None)
+    def close(self) -> None:
+        root_fd = self._root_fd
         if root_fd is not None:
-            try:
-                os.close(root_fd)
-            except OSError:
-                pass
             self._root_fd = None
+            os.close(root_fd)
+
+    def _open_root_fd(self) -> int:
+        root_fd = self._root_fd
+        if root_fd is None:
+            raise RuntimeError("filesystem_text runtime is closed")
+        return root_fd
 
     @contextmanager
     def directory(self, path: str) -> Iterator[int]:
         fd = os.open(
             ".",
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-            dir_fd=self._root_fd,
+            dir_fd=self._open_root_fd(),
         )
         try:
             for part in path.split("/") if path else ():
@@ -550,7 +553,7 @@ class _SecureRoot:
     def lstat(self, path: str, *, allow_root: bool = False) -> os.stat_result:
         normalized = _validate_relative_path(path, allow_root=allow_root)
         if not normalized:
-            return os.fstat(self._root_fd)
+            return os.fstat(self._open_root_fd())
         parent, leaf = normalized.rsplit("/", 1) if "/" in normalized else ("", normalized)
         try:
             with self.directory(parent) as parent_fd:
@@ -596,6 +599,9 @@ class _RootedTextRuntime:
         self._exclude = tuple(_compile_glob(item) for item in config.exclude)
         self._root = _SecureRoot(config)
         self._cursor_key = secrets.token_bytes(32)
+
+    def close(self) -> None:
+        self._root.close()
 
     def _is_excluded(self, path: str) -> bool:
         if _matches(path, self._exclude):

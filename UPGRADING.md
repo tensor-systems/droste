@@ -13,6 +13,32 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.13.1)
 
+### Bound provider runtimes have explicit ownership
+
+`ProviderRuntime` accepts an optional `close_callback`, and
+`ProviderRegistry.close()` releases every bound runtime exactly once in reverse
+bind order. Partial catalog binds are cleaned up before the binding error is
+propagated. Resource-free providers need no callback.
+
+Passing a registry to `create_environment()` now transfers ownership
+immediately. Construction failures close it, and successful native and Pyodide
+environments close it when the run or preflight exits, including exception and
+Python process-control paths. Hosts that bind a registry without transferring
+it to an environment must call `registry.close()` themselves. Trusted bridge
+hosts may call `ProviderService.close()`; it is safe if the source's registry is
+also closed.
+
+Do not return the same `ProviderRuntime` object from binds for multiple live
+sources. A provider that shares an underlying pool must return a separate
+runtime lease per source and coordinate the pool inside its close callbacks.
+There is no provider or runner protocol bump because manifests and wire
+envelopes are unchanged.
+
+The first-party filesystem provider now closes its pinned root descriptor
+explicitly, and SQLite closes connections it opens from `sqlite_path`. A live
+SQLite connection supplied as binder context remains host-owned and is not
+closed by the provider.
+
 ### First-party local filesystem/text provider
 
 Hosts may explicitly add `filesystem_text_provider()` to their

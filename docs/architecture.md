@@ -161,6 +161,18 @@ cannot name code to import. The registry snapshots descriptors once for the
 run, then projects broker registrations, prompt text, Python bindings, and the
 policy accessor manifest from those same values.
 
+Each successful bind also produces one explicit runtime ownership token. A
+runtime may omit cleanup when it owns no resource; otherwise it supplies one
+close callback. Registries close their runtimes once in reverse acquisition
+order and clean up partial binds deterministically. Two sources cannot share a
+runtime token; shared pools require separate provider-owned leases. No
+finalizer, garbage collector, or process-global registry participates in this
+lifecycle.
+
+Runtime closure starts after dispatch has quiesced; cancellation remains the
+broker execution context's job. Content-free runtime counters remain readable
+after close so response projection does not prolong resource lifetime.
+
 `ProviderService`/`BridgeProvider` carry a verified manifest plus raw operation
 calls across an interpreter boundary. Invoke requests also carry exact portable
 execution facts; responses carry a separately validated cumulative checkpoint
@@ -377,3 +389,11 @@ rejects a nonzero `exec_timeout_ms`. These booleans are assertions by the host,
 not security mechanisms. The host still has to provide the Deno/WASM jail and
 kill deadline. This keeps substrate selection pure while the constructor is a
 thin shell around live data, registry, and subcall dependencies.
+
+Passing `registry` to `create_environment` transfers ownership at the call
+boundary. The factory closes it if validation or construction fails; otherwise
+the environment closes it after success, ordinary error, or Python
+process-control unwinding. Callers close registries that they bind but do not
+transfer. Constructing a trusted bridge service transfers its bound source to
+that service until `ProviderService.close()`. The OS remains the final
+authority only when a host hard-kills the process.

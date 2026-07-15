@@ -17,7 +17,43 @@ There is no engine-wide data verb table and no process-global registry.
   read/effectful classification, optional policy metadata, and a binder that
   creates a `ProviderRuntime` at the edge.
 - `ProviderCatalog` is an explicit set of registrations. Binding configured
-  sources creates one immutable `ProviderRegistry` for a run.
+  sources creates one live `ProviderRegistry` whose descriptor snapshot is
+  immutable for the run.
+
+Binding is also the resource-acquisition boundary. A binder may attach an
+optional `ProviderRuntime.close_callback`; resource-free providers omit it.
+`ProviderRuntime.close()`, `BoundSource.close()`, and `ProviderRegistry.close()`
+are idempotent and concurrency-safe. A registry closes every acquired runtime
+once in reverse bind order, continues after individual close failures, and
+cleans up earlier bindings if a later bind or registry validation fails. Live
+resources are never assigned to a finalizer or process-global registry.
+
+One `ProviderRuntime` object is one ownership token and cannot be installed for
+two configured sources. Providers that share an underlying pool must return a
+separate runtime lease for each bind and reconcile the shared pool inside those
+lease callbacks. The registry does not guess sharing from handler or callback
+identity.
+
+The host owns a registry returned by `ProviderCatalog.bind()`. Passing it to
+`create_environment()` transfers ownership immediately: construction failure
+closes it, and a successful native or Pyodide environment closes it on every
+run exit. A host that keeps a registry outside an environment must call
+`registry.close()` explicitly. Closure begins only after broker dispatch is
+quiescent; it is not a provider-cancellation mechanism. Runtime `stats`
+callbacks must remain content-free and callable after close so hosts can report
+final counters without reopening a resource.
+
+If cleanup fails after `run_rlm()` has already computed a result, the result is
+preserved and Python emits a bounded `RuntimeWarning`; the relay likewise emits
+a bounded stderr diagnostic without replacing its response. If execution and
+cleanup fail together, Python raises a `BaseExceptionGroup` containing both
+causes. Direct `close()` calls still raise their cached cleanup failure.
+
+Constructing `ProviderService` transfers one bound source to the trusted bridge
+service for that service's lifetime. That host closes the service after the
+last invocation and does not also transfer the supplying registry to an
+environment. The runtime's once-only gate still makes outer failure cleanup of
+the registry safe.
 
 The registry derives broker registrations, Python bindings, prompt text, and
 the policy accessor manifest from the same operation descriptors. It snapshots
@@ -64,6 +100,10 @@ call/run identity, remaining deadline, reservation facts, and the cancellation
 snapshot. Every successful transport response includes a cumulative
 `{tokens, subcalls}` checkpoint, including typed provider-error outcomes. The
 receiving broker validates and applies that value before its final settlement.
+The trusted bridge host must close the service after the last invocation.
+Transport shutdown and runtime
+resource ownership are separate: a duplex session closes per call, while the
+provider runtime closes once for the bound source lifetime.
 
 Unary invocation remains the default provider-protocol-4 transport. A host that
 needs live cancellation or accounting explicitly supplies a bridge-v2 duplex
@@ -109,6 +149,7 @@ registry = catalog.bind(
     ),
     default_source_id="db",
 )
+# Pass registry to create_environment(), or close it explicitly in a finally block.
 ```
 
 SQLite's raw operations are `query` and `schema`; their Python bindings are
@@ -139,6 +180,7 @@ registry = ProviderCatalog((filesystem_text_provider(),)).bind(
         ),
     )
 )
+# Pass registry to create_environment(), or close it explicitly in a finally block.
 ```
 
 Its raw operations are `list`, `read`, `grep`, `search`, and `stat`; the Python

@@ -174,6 +174,54 @@ def test_db_non_sqlite_file_is_usage_error(tmp_path, capsys):
     assert "SQLite database" in capsys.readouterr().err
 
 
+def test_db_runtime_is_not_bound_before_config_construction(monkeypatch, tmp_path):
+    """A configuration failure must not strand a live database runtime."""
+    import sys
+
+    db = tmp_path / "app.db"
+    make_sqlite(db)
+    registries = []
+
+    class RecordingRegistry:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    def load_registry(_path):
+        registry = RecordingRegistry()
+        registries.append(registry)
+        return registry
+
+    def fail_config(**_kwargs):
+        raise RuntimeError("config construction failed")
+
+    main_module = sys.modules["droste_cli.main"]
+    monkeypatch.setattr(main_module, "_load_sql_registry", load_registry)
+    monkeypatch.setattr(main_module, "RLMConfig", fail_config)
+
+    with pytest.raises(RuntimeError, match="config construction failed"):
+        main(
+            [
+                "--db",
+                str(db),
+                "q",
+                "--model",
+                "m",
+                "--base-url",
+                "http://127.0.0.1:1/v1",
+                "--api-key",
+                "k",
+            ]
+        )
+
+    # The first bind is the short-lived validation lease. The live runtime is
+    # not acquired until configuration construction has succeeded.
+    assert len(registries) == 1
+    assert registries[0].closed is True
+
+
 # --- end-to-end over the stub OpenAI-compatible server ---
 
 

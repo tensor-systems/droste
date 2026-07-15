@@ -233,17 +233,6 @@ def _run_selected_request(
         return response
 
     context = _build_context(request)
-    # source_ctx is a host-supplied live edge passed only to explicit provider
-    # binders. The request cannot name Python code or mutate the catalog.
-    registry = (
-        build_preflight_provider_registry(request, catalog=provider_catalog)
-        if operation is RunnerOperation.PREFLIGHT
-        else build_provider_registry(
-            request,
-            catalog=provider_catalog,
-            context=source_ctx,
-        )
-    )
 
     raw_budget = request.get("budget")
     if not isinstance(raw_budget, dict):
@@ -367,6 +356,7 @@ def _run_selected_request(
     system_prompt_additions = str(request.get("system_prompt_additions") or "")
 
     if operation is RunnerOperation.PREFLIGHT:
+        registry = build_preflight_provider_registry(request, catalog=provider_catalog)
         preflight_subcalls = _PreflightSubcallClient(
             budget.subcall_output_tokens,
             subcall_concurrency,
@@ -414,6 +404,13 @@ def _run_selected_request(
         model=subcall_model,
         reasoning_effort=subcall_reasoning_effort,
         max_parallel=subcall_concurrency,
+    )
+    # Bind live provider resources only after all request validation and client
+    # construction succeeds. create_environment takes ownership immediately.
+    registry = build_provider_registry(
+        request,
+        catalog=provider_catalog,
+        context=source_ctx,
     )
     environment = create_environment(
         environment_config,
