@@ -35,6 +35,8 @@ from .protocol import (
     resolve_operation,
 )
 from .sources import (
+    SourceOpener,
+    build_opened_provider_registry,
     build_preflight_provider_registry,
     build_provider_registry,
     default_provider_catalog,
@@ -209,6 +211,7 @@ def run(
     *,
     source_ctx: Any = None,
     provider_catalog: ProviderCatalog | None = None,
+    source_opener: SourceOpener | None = None,
 ) -> dict[str, Any]:
     refusal = _check_protocol_version(request)
     if refusal is not None:
@@ -224,6 +227,7 @@ def run(
         operation=operation,
         source_ctx=source_ctx,
         provider_catalog=provider_catalog or default_provider_catalog(),
+        source_opener=source_opener,
     )
 
 
@@ -233,6 +237,7 @@ def _run_selected_request(
     operation: RunnerOperation,
     source_ctx: Any = None,
     provider_catalog: ProviderCatalog,
+    source_opener: SourceOpener | None = None,
 ) -> dict[str, Any]:
     """Run a request after its protocol and operation have been selected."""
 
@@ -376,7 +381,16 @@ def _run_selected_request(
     system_prompt_additions = str(request.get("system_prompt_additions") or "")
 
     if operation is RunnerOperation.PREFLIGHT:
-        registry = build_preflight_provider_registry(request, catalog=provider_catalog)
+        registry = (
+            build_opened_provider_registry(
+                request,
+                opener=source_opener,
+                context=source_ctx,
+                dispatch_enabled=False,
+            )
+            if source_opener is not None
+            else build_preflight_provider_registry(request, catalog=provider_catalog)
+        )
         preflight_subcalls = _PreflightSubcallClient(
             budget.subcall_output_tokens,
             subcall_concurrency,
@@ -429,10 +443,18 @@ def _run_selected_request(
     )
     # Bind live provider resources only after all request validation and client
     # construction succeeds. create_environment takes ownership immediately.
-    registry = build_provider_registry(
-        request,
-        catalog=provider_catalog,
-        context=source_ctx,
+    registry = (
+        build_opened_provider_registry(
+            request,
+            opener=source_opener,
+            context=source_ctx,
+        )
+        if source_opener is not None
+        else build_provider_registry(
+            request,
+            catalog=provider_catalog,
+            context=source_ctx,
+        )
     )
     environment = create_environment(
         environment_config,
@@ -478,6 +500,7 @@ def run_worker_request(
     *,
     source_ctx: Any = None,
     provider_catalog: ProviderCatalog | None = None,
+    source_opener: SourceOpener | None = None,
 ) -> WorkerOutcome:
     """Handle one untrusted worker request with operation-aware exceptions."""
 
@@ -506,6 +529,7 @@ def run_worker_request(
             operation=operation,
             source_ctx=source_ctx,
             provider_catalog=provider_catalog or default_provider_catalog(),
+            source_opener=source_opener,
         )
     except Exception as exc:
         return WorkerOutcome(

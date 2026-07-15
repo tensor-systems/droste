@@ -239,7 +239,7 @@ one-based and inclusive. Evidence paths are source-relative POSIX paths and
 revisions are opaque stat-derived digests; neither exposes the configured host
 root.
 
-## MCP stdio transport
+## MCP transports
 
 `open_mcp_stdio_source()` acquires one host-configured local MCP process and
 maps its complete paginated `tools/list` snapshot into the same immutable
@@ -247,3 +247,11 @@ provider values. It returns a lifecycle-owned `BoundSource`, which may be
 combined directly with in-process bound sources in `ProviderRegistry`. MCP is
 not a provider type, prompt vocabulary, binding namespace, policy authority, or
 trace path. See the [local MCP stdio contract and spike report](mcp-stdio.md).
+
+`open_mcp_http_source()` performs the same acquisition transaction over MCP
+Streamable HTTP. The trusted host owns exact endpoints, tenant-scoped secret
+resolution, OAuth, DNS/IP policy, and sessions; none of those values enters the
+manifest or generated bindings. Cross-language hosts can implement
+`McpToolTransport` and call `bind_mcp_transport_source()` so the same pure
+`mcp_tools_to_manifest()` projection remains authoritative. See the
+[Streamable HTTP contract](mcp-http.md).

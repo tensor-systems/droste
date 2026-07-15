@@ -241,7 +241,7 @@ including nested recursion and remote execution:
 | principle | issue |
 |---|---|
 | bridge (`call`/`emit`, JSON-RPC 2.0, register) | shipped; typed brokered path across native + Pyodide |
-| providers are MCP; registry unification; wrapper_v1 demotion | shipped; transport exploration: #5 |
+| providers are MCP; registry unification; wrapper_v1 demotion | shipped; stdio and production Streamable HTTP transports |
 | one budget object; recursion as metered provider | #4 (budget) + #2 (recursion) |
 | event stream over `emit` | #1 |
 | prompt packs + RLM skills | #3 |

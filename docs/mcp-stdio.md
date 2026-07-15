@@ -6,8 +6,9 @@ to generated code. The trusted host launches the server, freezes one complete
 `BoundSource`. From that point onward, prompt text, Python bindings, policy,
 budgets, traces, and result envelopes use the ordinary broker path.
 
-This is deliberately a local stdio transport. Streamable HTTP, OAuth, remote
-sessions, redirects, and SSRF controls belong to [#92](https://github.com/tensor-systems/droste/issues/92).
+This is deliberately the local stdio transport. Remote servers use the
+[production Streamable HTTP transport](mcp-http.md), whose trusted host shell
+owns OAuth, sessions, endpoint policy, and SSRF defenses.
 MCP tasks, live tool refresh, and full cross-dialect JSON Schema validation
 belong to [#91](https://github.com/tensor-systems/droste/issues/91).
 
@@ -150,9 +151,9 @@ uv run python benchmarks/mcp_stdio_latency.py \
 ```
 
 The remaining impedance gaps are schema validation across arbitrary dialects,
-task results, refresh between sessions after `listChanged`, MCP progress as a
-bounded diagnostic, and evidence coordinates. They stay outside the spike so
-the transport does not become a second provider or budget architecture.
+task results, live in-run descriptor mutation after `listChanged`, and evidence
+coordinates. They stay outside this transport so MCP does not become a second
+provider or budget architecture.
 
 The implementation follows the current primary contracts: the
 [`2025-11-25` tools specification](https://modelcontextprotocol.io/specification/2025-11-25/server/tools),

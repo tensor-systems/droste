@@ -3,8 +3,9 @@ import sys
 import types
 from importlib import import_module
 
-from droste import Budget, ProviderCatalog
+from droste import Budget, ConfiguredSource, ProviderCatalog
 from droste.sources.sql_local import sqlite_provider
+from droste.testing import fake_records_provider
 from droste_runner import runner
 
 
@@ -287,6 +288,32 @@ def test_runner_preflight_is_content_free_and_constructs_no_http_clients(monkeyp
     assert manifest["id"].startswith("sha256:")
     assert manifest["inference"]["root_sampling"]["reasoning_effort"] == "none"
     assert marker not in json.dumps(response)
+
+
+def test_runner_preflight_can_acquire_dynamic_manifest_through_trusted_opener() -> None:
+    opened: list[ConfiguredSource] = []
+
+    def opener(source: ConfiguredSource, context: object):
+        assert context == {"tenant": "trusted"}
+        opened.append(source)
+        return fake_records_provider().bind(source)
+
+    response = runner.run(
+        {
+            "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
+            "operation": "preflight",
+            "model": "root-model",
+            "budget": Budget().as_dict(),
+            "data_sources": [{"type": "fake_records", "name": "records"}],
+        },
+        source_ctx={"tenant": "trusted"},
+        source_opener=opener,
+    )
+
+    assert response["status"] == "success"
+    assert opened == [ConfiguredSource("records", "fake_records")]
+    globals_ = response["preflight"]["scaffold_manifest"]["capabilities"]["model_visible_globals"]
+    assert "records" in globals_
 
 
 def test_root_reasoning_effort_is_one_typed_scaffold_fact() -> None:

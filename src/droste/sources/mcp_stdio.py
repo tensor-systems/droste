@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from threading import Lock
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Protocol
 
 from ..capabilities import (
     JSON_SCHEMA_2020_12,
@@ -79,6 +79,28 @@ class McpDescriptorError(ValueError):
     """A server descriptor cannot be represented without invention."""
 
 
+class McpToolTransport(Protocol):
+    """Trusted connector-neutral edge consumed by MCP provider binding.
+
+    Cross-language hosts can implement this edge with the existing provider
+    bridge: only the trusted provider shell sees raw MCP results, while the
+    generated-code broker receives normalized ``CapabilityOutcome`` values.
+    """
+
+    def list_tools(self) -> tuple[dict[str, Any], ...]: ...
+
+    def call_tool(
+        self,
+        execution: CapabilityExecutionContext,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> tuple[dict[str, Any], float, int]: ...
+
+    def stats(self) -> Mapping[str, Any]: ...
+
+    def close(self) -> None: ...
+
+
 class _OneShotRuntimeBinder:
     """Transfer exactly one acquired runtime into ProviderRegistration.bind."""
 
@@ -136,6 +158,43 @@ class McpManifestPolicy:
         object.__setattr__(self, "allowed_tools", allowed)
         object.__setattr__(self, "bindings", MappingProxyType(bindings))
         object.__setattr__(self, "budget_classes", MappingProxyType(budgets))
+
+
+@dataclass(frozen=True, slots=True)
+class McpBindingPolicy:
+    """Transport-independent host policy for one acquired MCP source."""
+
+    manifest: McpManifestPolicy
+    effects: Mapping[str, SideEffect]
+    policy_metadata: Mapping[str, Mapping[str, Any]]
+    source_description: str
+    max_result_bytes: int = 262_144
+
+    def __post_init__(self) -> None:
+        expected = set(self.manifest.allowed_tools)
+        effects = dict(self.effects)
+        if set(effects) != expected or not all(
+            isinstance(item, SideEffect) and item is not SideEffect.UNSPECIFIED
+            for item in effects.values()
+        ):
+            raise McpConfigurationError(
+                "MCP binding effects must explicitly classify every allowed tool"
+            )
+        policies = {key: dict(value) for key, value in self.policy_metadata.items()}
+        if not set(policies).issubset(expected) or not all(
+            isinstance(value, Mapping) for value in self.policy_metadata.values()
+        ):
+            raise McpConfigurationError("MCP binding policy metadata names an unknown tool")
+        if not isinstance(self.source_description, str):
+            raise McpConfigurationError("MCP source description must be a string")
+        if (
+            isinstance(self.max_result_bytes, bool)
+            or not isinstance(self.max_result_bytes, int)
+            or not 256 <= self.max_result_bytes <= 8_388_608
+        ):
+            raise McpConfigurationError("MCP max_result_bytes must be in 256..8388608")
+        object.__setattr__(self, "effects", MappingProxyType(effects))
+        object.__setattr__(self, "policy_metadata", MappingProxyType(policies))
 
 
 def _bounded_int(value: Any, name: str, *, default: int, minimum: int, maximum: int) -> int:
@@ -587,9 +646,9 @@ def normalize_mcp_tool_result(
 
 
 def _runtime(
-    config: _McpStdioConfig,
+    config: _McpStdioConfig | McpBindingPolicy,
     manifest: ProviderManifest,
-    session: McpStdioSession,
+    session: McpToolTransport,
 ) -> ProviderRuntime:
     def operation_handler(operation: ProviderOperation) -> Callable[..., CapabilityOutcome]:
         def invoke(
@@ -652,6 +711,39 @@ def _runtime(
     )
 
 
+def bind_mcp_transport_source(
+    source: ConfiguredSource,
+    transport: McpToolTransport,
+    policy: McpBindingPolicy,
+) -> BoundSource:
+    """Freeze a trusted MCP transport behind the ordinary capability ABI.
+
+    This is the cross-language host seam.  Transport/auth/session state stays
+    outside generated code; the returned source is indistinguishable from an
+    in-process or stdio provider at the broker boundary.
+    """
+
+    if not isinstance(source, ConfiguredSource):
+        raise TypeError("bind_mcp_transport_source requires a ConfiguredSource")
+    if not isinstance(policy, McpBindingPolicy):
+        raise TypeError("bind_mcp_transport_source requires McpBindingPolicy")
+    try:
+        manifest = mcp_tools_to_manifest(
+            source.provider_type, transport.list_tools(), policy.manifest
+        )
+        runtime = _runtime(policy, manifest, transport)
+        registration = ProviderRegistration(
+            manifest=manifest,
+            effects=policy.effects,
+            binder=_OneShotRuntimeBinder(source, runtime),
+            policy_metadata=policy.policy_metadata,
+        )
+        return registration.bind(source)
+    except BaseException:
+        transport.close()
+        raise
+
+
 def open_mcp_stdio_source(source: ConfiguredSource) -> BoundSource:
     """Acquire, discover, and bind one lifecycle-owned local MCP source.
 
@@ -664,28 +756,27 @@ def open_mcp_stdio_source(source: ConfiguredSource) -> BoundSource:
         raise TypeError("open_mcp_stdio_source requires a ConfiguredSource")
     config = _McpStdioConfig.from_mapping(source.config_dict())
     session = config.session()
-    try:
-        manifest = mcp_tools_to_manifest(
-            source.provider_type, session.list_tools(), config.manifest_policy()
-        )
-        runtime = _runtime(config, manifest, session)
-        registration = ProviderRegistration(
-            manifest=manifest,
+    return bind_mcp_transport_source(
+        source,
+        session,
+        McpBindingPolicy(
+            manifest=config.manifest_policy(),
             effects=config.effects,
-            binder=_OneShotRuntimeBinder(source, runtime),
             policy_metadata=config.policy_metadata,
-        )
-        return registration.bind(source)
-    except BaseException:
-        session.close()
-        raise
+            source_description=config.source_description,
+            max_result_bytes=config.max_result_bytes,
+        ),
+    )
 
 
 __all__ = [
     "MCP_PROTOCOL_VERSION",
     "McpConfigurationError",
     "McpDescriptorError",
+    "McpBindingPolicy",
     "McpManifestPolicy",
+    "McpToolTransport",
+    "bind_mcp_transport_source",
     "mcp_tools_to_manifest",
     "normalize_mcp_tool_result",
     "open_mcp_stdio_source",
