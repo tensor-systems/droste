@@ -20,6 +20,7 @@ from droste import (
 from droste.sources.sql_local import sqlite_provider
 from droste.testing import MockSubcallClient, fake_records_provider
 from droste_runner.sources import (
+    build_opened_provider_registry,
     build_provider_registry,
     default_provider_catalog,
     wrapper_provider,
@@ -232,3 +233,37 @@ def test_runner_binds_only_explicit_configured_sources() -> None:
             {"data_source": {"base_url": "https://example.com"}},
             catalog=default_provider_catalog(),
         )
+
+
+def test_runner_trusted_source_opener_acquires_dynamic_manifest_for_run_or_preflight() -> None:
+    observed: list[tuple[ConfiguredSource, object]] = []
+    context = object()
+
+    def opener(source: ConfiguredSource, source_context: object):
+        observed.append((source, source_context))
+        return fake_records_provider().bind(source)
+
+    request = {
+        "data_sources": [{"type": "fake_records", "name": "records"}],
+        "default_source": "records",
+    }
+    registry = build_opened_provider_registry(request, opener=opener, context=context)
+    assert registry is not None
+    try:
+        assert observed == [(ConfiguredSource("records", "fake_records"), context)]
+        assert registry.sources[0].registration.manifest == fake_records_provider().manifest
+    finally:
+        registry.close()
+
+    preflight = build_opened_provider_registry(
+        request,
+        opener=opener,
+        context=context,
+        dispatch_enabled=False,
+    )
+    assert preflight is not None
+    try:
+        with pytest.raises(RuntimeError, match="preflight cannot dispatch"):
+            preflight.sources[0].runtime.handlers["records.search"]()
+    finally:
+        preflight.close()

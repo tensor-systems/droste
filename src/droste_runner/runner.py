@@ -15,7 +15,9 @@ from .run import _read_request as _read_request
 from .run import _run_adapter as _run_adapter
 from .sources import (
     WRAPPER_PROVIDER_MANIFEST,
+    SourceOpener,
     WrapperTransport,
+    build_opened_provider_registry,
     build_provider_registry,
     default_provider_catalog,
     wrapper_provider,
@@ -33,9 +35,11 @@ __all__ = [
     "RootResponseMetadata",
     "RunnerOperation",
     "RunnerEnvironment",
+    "SourceOpener",
     "WRAPPER_PROVIDER_MANIFEST",
     "WrapperTransport",
     "WorkerOutcome",
+    "build_opened_provider_registry",
     "build_provider_registry",
     "build_response",
     "default_provider_catalog",

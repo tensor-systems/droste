@@ -270,6 +270,20 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - Evidence uses structured `EvidenceLocation` values with source, path,
   optional revision, and explicit byte/line/section ranges. Cursor pagination
   must describe both the input cursor and output `next_cursor`.
+- MCP transport binding is shared through `McpToolTransport`,
+  `McpBindingPolicy`, and `bind_mcp_transport_source`; stdio, native HTTP, and
+  cross-language host bridges must not copy descriptor/result projection.
+- Streamable HTTP source specs contain exact HTTPS allowlists and tenant-scoped
+  secret references only. Live `McpHttpHost` state owns resolved secrets,
+  private-network CIDR exceptions, TLS, DNS, and bounded raw debug sinks.
+  Redirects fail closed; every DNS answer is checked and the selected IP is
+  pinned through TLS. Startup and request timeouts are total budgets across
+  auth, retry, and SSE-resume hops; close uses only cached auth under one close
+  deadline. Generated code and durable traces receive none of the
+  URL/auth/session/raw protocol state.
+- Trusted runner hosts use `source_opener` for dynamic-manifest sources. The
+  request cannot choose the hook; both run and preflight acquire through it and
+  transfer lifecycle ownership to the ordinary registry/environment path.
 - Bridge invokes carry exact frozen execution facts and return a validated
   cumulative checkpoint. The unary bridge cannot stream checkpoints or observe
   a new cancellation request while a synchronous remote handler is running;

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 from droste.capabilities import (
@@ -332,6 +333,78 @@ def build_provider_registry(
         context=context,
         default_source_id=default_source,
     )
+
+
+SourceOpener = Callable[[ConfiguredSource, Any], BoundSource]
+
+
+def build_opened_provider_registry(
+    request: dict[str, Any],
+    *,
+    opener: SourceOpener,
+    context: Any = None,
+    dispatch_enabled: bool = True,
+) -> ProviderRegistry | None:
+    """Acquire dynamic-manifest sources through one trusted host hook."""
+
+    if not callable(opener):
+        raise TypeError("source opener must be callable")
+    if not isinstance(dispatch_enabled, bool):
+        raise TypeError("dispatch_enabled must be a boolean")
+    sources, default_source = _configured_sources(request)
+    if not sources:
+        return None
+    acquired: list[BoundSource] = []
+    try:
+        for source in sources:
+            bound = opener(source, context)
+            if not isinstance(bound, BoundSource):
+                raise TypeError("source opener must return BoundSource")
+            if bound.source != source:
+                try:
+                    bound.close()
+                except BaseException as cleanup:
+                    raise BaseExceptionGroup(
+                        "source opener returned a mismatched binding and cleanup failed",
+                        [
+                            ValueError("source opener returned a binding for a different source"),
+                            cleanup,
+                        ],
+                    ) from None
+                raise ValueError("source opener returned a binding for a different source")
+            if dispatch_enabled:
+                acquired.append(bound)
+            else:
+
+                def unavailable(*args: Any, **kwargs: Any) -> Any:
+                    del args, kwargs
+                    raise RuntimeError("preflight cannot dispatch provider operations")
+
+                acquired.append(
+                    BoundSource(
+                        source,
+                        bound.registration,
+                        ProviderRuntime(
+                            handlers={
+                                operation.operation_id: unavailable
+                                for operation in bound.registration.manifest.operations
+                            },
+                            source_description=bound.runtime.source_description,
+                            close_callback=bound.close,
+                        ),
+                    )
+                )
+        return ProviderRegistry(tuple(acquired), default_source_id=default_source)
+    except BaseException as primary:
+        failures: list[BaseException] = [primary]
+        for bound in reversed(acquired):
+            try:
+                bound.close()
+            except BaseException as cleanup:
+                failures.append(cleanup)
+        if len(failures) > 1:
+            raise BaseExceptionGroup("dynamic source acquisition and cleanup failed", failures)
+        raise
 
 
 def build_preflight_provider_registry(

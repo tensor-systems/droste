@@ -49,6 +49,26 @@ New scaffold manifests are version 2 and record the resolved state at
 `inference.input_capacity.subcall`. Stored version 1 manifests remain strictly
 readable and keep their original content identity; they are not rewritten.
 
+### Remote MCP sources use a trusted Streamable HTTP acquisition shell
+
+Hosts may call `open_mcp_http_source(ConfiguredSource(...), McpHttpHost(...))`
+to freeze a remote MCP `tools/list` snapshot into the same lifecycle-owned
+`BoundSource` returned by the stdio transport. Endpoint, OAuth, session, DNS/IP,
+payload, and reconnect state stays in the trusted host shell. Source auth values
+are secret references resolved with the exact tenant and source identity.
+
+Cross-language hosts can implement `McpToolTransport` and use
+`bind_mcp_transport_source()` with `McpBindingPolicy`; this preserves one
+manifest/schema projection without requiring the native Python HTTP transport.
+Trusted runner callers may instead supply `source_opener` to `run()` or
+`run_worker_request()`. Dynamic sources are acquired for both run and preflight,
+and preflight therefore performs remote discovery while still forbidding
+provider dispatch. Existing callers that omit the hook retain static-catalog,
+connection-free preflight behavior.
+
+There is no runner or provider protocol bump. The APIs are additive and no MCP
+authority is acquired implicitly.
+
 ### Local MCP stdio sources use one owned acquisition transaction
 
 Hosts may call `open_mcp_stdio_source(ConfiguredSource(...))` to initialize a
