@@ -531,8 +531,14 @@ class McpStdioSession:
                     },
                     expires=monotonic() + self._close_timeout,
                 )
-            except Exception:
-                # The reader's transport failure path will wake active callers.
+            except Exception as exc:
+                # A response write timeout is not otherwise terminal. Once we
+                # cannot answer a server request, fail the session instead of
+                # leaving queued ids behind a dead responder.
+                self._fail(exc)
+                with self._server_response_lock:
+                    self._server_responses.clear()
+                    self._server_responder = None
                 return
 
     def _read_stderr(self) -> None:
