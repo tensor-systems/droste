@@ -28,7 +28,7 @@ Deno.test("event channel requires one explicit descriptor above fd2", () => {
   }
 });
 
-Deno.test("event channel probes the descriptor and completes partial writes", () => {
+Deno.test("event channel inspects the descriptor and completes partial writes", () => {
   const received: number[] = [];
   const channel = eventChannelFromEnvironment(
     () => "3",
@@ -55,10 +55,10 @@ Deno.test("event channel latches descriptor and frame write failures", () => {
     () =>
       eventChannelFromEnvironment(
         () => "3",
+        () => 0,
         () => {
           throw new Error("private descriptor detail");
         },
-        () => {},
       ),
     "descriptor_unavailable",
   );

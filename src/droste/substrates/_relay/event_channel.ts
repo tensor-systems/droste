@@ -55,19 +55,6 @@ export class EventChannel {
     return this.#failure;
   }
 
-  probe(): void {
-    if (this.#failure !== null) {
-      throw this.#failure;
-    }
-    try {
-      if (this.#write(this.#descriptor, new Uint8Array()) !== 0) {
-        this.#fail("descriptor_unavailable");
-      }
-    } catch {
-      this.#fail("descriptor_unavailable");
-    }
-  }
-
   writeFrame(frame: string): void {
     if (this.#failure !== null) {
       throw this.#failure;
@@ -117,6 +104,5 @@ export function eventChannelFromEnvironment(
     throw new RelayEventChannelError("descriptor_unavailable");
   }
   const channel = new EventChannel(descriptor, writer);
-  channel.probe();
   return channel;
 }
