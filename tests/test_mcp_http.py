@@ -351,6 +351,92 @@ def test_explicit_private_network_is_still_pinned_to_named_cidr(server: _Server)
     bound.close()
 
 
+def test_hung_dns_is_time_bounded_and_cannot_multiply_resolver_threads(
+    server: _Server,
+) -> None:
+    bound = open_mcp_http_source(_source(), McpHttpHost())
+    session = bound.runtime.close_callback.__self__
+    started = threading.Event()
+    release = threading.Event()
+
+    def stalled(host: str, port: int) -> tuple[str, ...]:
+        del host, port
+        started.set()
+        release.wait(1)
+        return ("203.0.113.10",)
+
+    session._host = McpHttpHost(resolver=stalled)
+    began = time.monotonic()
+    with pytest.raises(McpTransportError, match="DNS resolution timed out"):
+        session._resolve_bounded(session._endpoint, execution=None, timeout_ms=30)
+    assert time.monotonic() - began < 0.2
+    assert started.is_set()
+    with pytest.raises(McpTransportError, match="already busy"):
+        session._resolve_bounded(session._endpoint, execution=None, timeout_ms=30)
+    release.set()
+    deadline = time.monotonic() + 1
+    while session._dns_lock.locked() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert not session._dns_lock.locked()
+    bound.close()
+
+
+def test_close_uses_one_total_close_deadline_without_reacquiring_auth(server: _Server) -> None:
+    server.expected_token = "token"
+    bound = open_mcp_http_source(
+        _source(
+            auth={"type": "bearer", "token_ref": "token"},
+            close_timeout_ms=30,
+        ),
+        McpHttpHost(resolve_secret=lambda request: "token"),
+    )
+    session = bound.runtime.close_callback.__self__
+    session._auth_lock.acquire()
+    began = time.monotonic()
+    try:
+        bound.close()
+    finally:
+        session._auth_lock.release()
+    assert time.monotonic() - began < 0.2
+    assert session._tokens is None
+    assert session._last_access_token is None
+
+
+def test_hung_secret_resolution_is_bounded_and_cannot_multiply_workers(server: _Server) -> None:
+    server.expected_token = "token"
+    bound = open_mcp_http_source(
+        _source(
+            auth={"type": "bearer", "token_ref": "token"},
+            request_timeout_ms=100,
+        ),
+        McpHttpHost(resolve_secret=lambda request: "token"),
+    )
+    session = bound.runtime.close_callback.__self__
+    started = threading.Event()
+    release = threading.Event()
+
+    def stalled(request: McpSecretRequest) -> str:
+        del request
+        started.set()
+        release.wait(1)
+        return "token"
+
+    session._host = McpHttpHost(resolve_secret=stalled)
+    began = time.monotonic()
+    with pytest.raises(McpTransportError, match="secret resolution timed out"):
+        session._access_token()
+    assert time.monotonic() - began < 0.3
+    assert started.is_set()
+    with pytest.raises(McpTransportError, match="already busy"):
+        session._access_token()
+    release.set()
+    deadline = time.monotonic() + 1
+    while session._secret_lock.locked() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert not session._secret_lock.locked()
+    bound.close()
+
+
 def test_secret_resolution_is_tenant_and_source_scoped(server: _Server) -> None:
     observed: list[McpSecretRequest] = []
 
@@ -495,7 +581,158 @@ def test_oauth_discovery_acquisition_and_401_refresh_keep_secrets_host_owned(
         registry.close()
 
 
-def test_cancellation_and_attempt_finalization_happen_once(server: _Server) -> None:
+def test_oauth_discovery_shares_one_total_startup_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mcp_url = "https://mcp.example.test/mcp"
+    metadata_url = "https://mcp.example.test/.well-known/oauth-protected-resource/mcp"
+    issuer = "https://auth.example.test/"
+    token_url = "https://auth.example.test/token"
+
+    def exchange(
+        session: McpHttpSession,
+        method: str,
+        endpoint: _Endpoint,
+        headers: Mapping[str, str],
+        body: bytes | None,
+        **kwargs: Any,
+    ) -> _HttpResponse:
+        del session, method, headers, body, kwargs
+        if endpoint.url == metadata_url:
+            time.sleep(0.12)
+            return _json_response({"resource": mcp_url, "authorization_servers": [issuer]})
+        raise AssertionError("startup continued after its total deadline")
+
+    monkeypatch.setattr(McpHttpSession, "_exchange", exchange)
+    began = time.monotonic()
+    with pytest.raises(McpTransportError, match="authentication timed out"):
+        open_mcp_http_source(
+            _source(
+                startup_timeout_ms=100,
+                auth={
+                    "type": "oauth_client_credentials",
+                    "client_id_ref": "oauth/client-id",
+                    "client_secret_ref": "oauth/client-secret",
+                    "resource_metadata_url": metadata_url,
+                    "authorization_server": issuer,
+                    "token_endpoints": [token_url],
+                },
+            ),
+            McpHttpHost(resolve_secret=lambda request: "unused"),
+        )
+    assert time.monotonic() - began < 0.3
+
+
+def test_close_prevents_in_flight_oauth_token_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mcp_url = "https://mcp.example.test/mcp"
+    metadata_url = "https://mcp.example.test/.well-known/oauth-protected-resource/mcp"
+    issuer = "https://auth.example.test/"
+    discovery_url = "https://auth.example.test/.well-known/oauth-authorization-server"
+    token_url = "https://auth.example.test/token"
+    mcp = _Server()
+    token_count = 0
+    block_refresh = False
+    refresh_started = threading.Event()
+    release_refresh = threading.Event()
+
+    def exchange(
+        session: McpHttpSession,
+        method: str,
+        endpoint: _Endpoint,
+        headers: Mapping[str, str],
+        body: bytes | None,
+        **kwargs: Any,
+    ) -> _HttpResponse:
+        nonlocal token_count
+        if endpoint.url == metadata_url:
+            return _json_response({"resource": mcp_url, "authorization_servers": [issuer]})
+        if endpoint.url == discovery_url:
+            return _json_response(
+                {
+                    "issuer": issuer,
+                    "token_endpoint": token_url,
+                    "grant_types_supported": ["client_credentials"],
+                }
+            )
+        if endpoint.url == token_url:
+            if block_refresh:
+                refresh_started.set()
+                release_refresh.wait(1)
+            token_count += 1
+            return _json_response({"access_token": f"access-{token_count}", "token_type": "Bearer"})
+        mcp.expected_token = f"access-{token_count}"
+        return mcp.exchange(session, method, endpoint, headers, body, **kwargs)
+
+    monkeypatch.setattr(McpHttpSession, "_exchange", exchange)
+    bound = open_mcp_http_source(
+        _source(
+            auth={
+                "type": "oauth_client_credentials",
+                "client_id_ref": "oauth/client-id",
+                "client_secret_ref": "oauth/client-secret",
+                "resource_metadata_url": metadata_url,
+                "authorization_server": issuer,
+                "token_endpoints": [token_url],
+            }
+        ),
+        McpHttpHost(resolve_secret=lambda request: "credential"),
+    )
+    session = bound.runtime.close_callback.__self__
+    block_refresh = True
+    outcomes: list[BaseException] = []
+
+    def refresh() -> None:
+        try:
+            session._access_token(force_refresh=True)
+        except BaseException as exc:
+            outcomes.append(exc)
+
+    worker = threading.Thread(target=refresh)
+    worker.start()
+    assert refresh_started.wait(1)
+    bound.close()
+    release_refresh.set()
+    worker.join(2)
+    assert not worker.is_alive()
+    assert len(outcomes) == 1
+    assert isinstance(outcomes[0], McpTransportError)
+    assert "closed" in str(outcomes[0])
+    assert session._tokens is None
+    assert session._last_access_token is None
+
+
+def test_safe_retries_share_one_total_request_deadline(
+    server: _Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bound = open_mcp_http_source(
+        _source(request_timeout_ms=100, reconnect_attempts=3, backoff_ms=10),
+        McpHttpHost(),
+    )
+    session = bound.runtime.close_callback.__self__
+
+    def unavailable(*args: Any, **kwargs: Any) -> _HttpResponse:
+        del args, kwargs
+        time.sleep(0.06)
+        return _HttpResponse(503, {}, b"")
+
+    monkeypatch.setattr(McpHttpSession, "_exchange", unavailable)
+    began = time.monotonic()
+    with pytest.raises(McpTransportError, match="timed out"):
+        session._post_message(
+            {"jsonrpc": "2.0", "method": "notifications/test"},
+            execution=None,
+            timeout_ms=100,
+            session_id="session-1",
+            safe_retry=True,
+        )
+    assert time.monotonic() - began < 0.2
+
+
+def test_cancellation_and_attempt_finalization_happen_once(
+    server: _Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
     started = threading.Event()
 
     def slow_exchange(
@@ -516,7 +753,7 @@ def test_cancellation_and_attempt_finalization_happen_once(server: _Server) -> N
                 time.sleep(0.005)
         return server.exchange(session, method, endpoint, headers, body, **kwargs)
 
-    McpHttpSession._exchange = slow_exchange
+    monkeypatch.setattr(McpHttpSession, "_exchange", slow_exchange)
     bound = open_mcp_http_source(_source(), McpHttpHost())
     registry = ProviderRegistry((bound,))
     settlements: list[str] = []

@@ -277,7 +277,9 @@ evidence with that status rather than leaving the model to interpret prefixes.
   secret references only. Live `McpHttpHost` state owns resolved secrets,
   private-network CIDR exceptions, TLS, DNS, and bounded raw debug sinks.
   Redirects fail closed; every DNS answer is checked and the selected IP is
-  pinned through TLS. Generated code and durable traces receive none of the
+  pinned through TLS. Startup and request timeouts are total budgets across
+  auth, retry, and SSE-resume hops; close uses only cached auth under one close
+  deadline. Generated code and durable traces receive none of the
   URL/auth/session/raw protocol state.
 - Trusted runner hosts use `source_opener` for dynamic-manifest sources. The
   request cannot choose the hook; both run and preflight acquire through it and

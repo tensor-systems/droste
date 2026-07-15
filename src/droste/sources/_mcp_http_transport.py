@@ -33,6 +33,8 @@ from ._mcp_stdio_transport import (
 _TRANSIENT_STATUSES = frozenset({429, 502, 503, 504})
 _MAX_SESSION_ID_BYTES = 1024
 _MAX_SECRET_BYTES = 65_536
+_DNS_SLOTS = threading.BoundedSemaphore(8)
+_SECRET_SLOTS = threading.BoundedSemaphore(8)
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,6 +226,8 @@ class McpHttpSession:
         self._state_lock = threading.Lock()
         self._session_lock = threading.Lock()
         self._auth_lock = threading.Lock()
+        self._dns_lock = threading.Lock()
+        self._secret_lock = threading.Lock()
         self._closed = False
         self._session_id: str | None = None
         self._generation = 0
@@ -236,6 +240,7 @@ class McpHttpSession:
         self._reconnects = 0
         self._auth_refreshes = 0
         self._tokens: _OAuthTokens | None = None
+        self._last_access_token: str | None = None
         self._token_endpoint: str | None = None
         self._frozen_tools: bytes | None = None
         self._startup_expires = monotonic() + config.startup_timeout_ms / 1000
@@ -246,6 +251,7 @@ class McpHttpSession:
             raise
 
     def _initialize(self, timeout_ms: int) -> None:
+        expires = monotonic() + timeout_ms / 1000
         result, headers, _ = self._rpc_once(
             "initialize",
             {
@@ -253,7 +259,7 @@ class McpHttpSession:
                 "capabilities": {},
                 "clientInfo": {"name": "droste", "version": _client_version()},
             },
-            timeout_ms=timeout_ms,
+            timeout_ms=self._remaining_ms(expires, "MCP initialization timed out"),
             session_id=None,
             safe_retry=True,
         )
@@ -281,7 +287,11 @@ class McpHttpSession:
         with self._state_lock:
             self._session_id = raw_session
             self._generation += 1
-        self._notify("notifications/initialized", {}, timeout_ms=timeout_ms)
+        self._notify(
+            "notifications/initialized",
+            {},
+            timeout_ms=self._remaining_ms(expires, "MCP initialization timed out"),
+        )
 
     def list_tools(self) -> tuple[dict[str, Any], ...]:
         tools = self._list_tools(
@@ -298,6 +308,7 @@ class McpHttpSession:
     def _list_tools(
         self, *, timeout_ms: int, allow_session_restart: bool
     ) -> tuple[dict[str, Any], ...]:
+        expires = monotonic() + timeout_ms / 1000
         tools: list[dict[str, Any]] = []
         cursor: str | None = None
         seen: set[str] = set()
@@ -306,7 +317,7 @@ class McpHttpSession:
             result = self._rpc(
                 "tools/list",
                 params,
-                timeout_ms=timeout_ms,
+                timeout_ms=self._remaining_ms(expires, "MCP tools/list timed out"),
                 safe_retry=True,
                 allow_session_restart=allow_session_restart,
             )
@@ -382,6 +393,7 @@ class McpHttpSession:
         safe_retry: bool = False,
         allow_session_restart: bool = True,
     ) -> tuple[Any, int]:
+        expires = monotonic() + (timeout_ms or self._config.request_timeout_ms) / 1000
         with self._state_lock:
             self._raise_open_locked()
             if self._in_flight >= self._config.max_in_flight:
@@ -395,7 +407,7 @@ class McpHttpSession:
                     method,
                     params,
                     execution=execution,
-                    timeout_ms=timeout_ms or self._config.request_timeout_ms,
+                    timeout_ms=self._remaining_ms(expires, "MCP request timed out"),
                     session_id=session_id,
                     safe_retry=safe_retry,
                 )
@@ -405,14 +417,14 @@ class McpHttpSession:
                     raise McpTransportError(
                         "MCP session expired again during bounded reconnection"
                     ) from None
-                self._restart_session(generation, execution)
+                self._restart_session(generation, execution, expires)
                 with self._state_lock:
                     session_id = self._session_id
                 result, _, size = self._rpc_once(
                     method,
                     params,
                     execution=execution,
-                    timeout_ms=timeout_ms or self._config.request_timeout_ms,
+                    timeout_ms=self._remaining_ms(expires, "MCP request timed out"),
                     session_id=session_id,
                     safe_retry=False,
                 )
@@ -422,7 +434,10 @@ class McpHttpSession:
                 self._in_flight -= 1
 
     def _restart_session(
-        self, generation: int, execution: CapabilityExecutionContext | None
+        self,
+        generation: int,
+        execution: CapabilityExecutionContext | None,
+        expires: float,
     ) -> None:
         with self._session_lock:
             if execution is not None:
@@ -431,9 +446,9 @@ class McpHttpSession:
                 if self._generation != generation:
                     return
                 self._session_id = None
-            self._initialize(self._config.request_timeout_ms)
+            self._initialize(self._remaining_ms(expires, "MCP session restart timed out"))
             tools = self._list_tools(
-                timeout_ms=self._config.request_timeout_ms,
+                timeout_ms=self._remaining_ms(expires, "MCP session restart timed out"),
                 allow_session_restart=False,
             )
             frozen = self._canonical_bytes(tools)
@@ -489,6 +504,7 @@ class McpHttpSession:
         session_id: str | None,
         safe_retry: bool,
     ) -> _HttpResponse:
+        expires = monotonic() + timeout_ms / 1000
         body = self._canonical_bytes(message)
         if len(body) > self._config.max_frame_bytes:
             raise McpProtocolError("MCP request exceeds the configured frame bound")
@@ -505,7 +521,11 @@ class McpHttpSession:
         refreshed = False
         refresh_next = False
         while True:
-            token = self._access_token(force_refresh=refresh_next, execution=execution)
+            token = self._access_token(
+                force_refresh=refresh_next,
+                execution=execution,
+                deadline=expires,
+            )
             refresh_next = False
             request_headers = dict(headers)
             if token is not None:
@@ -517,13 +537,13 @@ class McpHttpSession:
                     request_headers,
                     body,
                     execution=execution,
-                    timeout_ms=timeout_ms,
+                    timeout_ms=self._remaining_ms(expires, "MCP HTTP request timed out"),
                 )
             except _SseDisconnected as interrupted:
                 response = self._resume_sse(
                     interrupted,
                     execution=execution,
-                    timeout_ms=timeout_ms,
+                    deadline=expires,
                     session_id=session_id,
                 )
             if 300 <= response.status < 400:
@@ -531,7 +551,7 @@ class McpHttpSession:
             if response.status == 401 and self._config.auth_type == "oauth" and not refreshed:
                 refreshed = True
                 refresh_next = True
-                self._clear_tokens(execution)
+                self._clear_tokens(execution, deadline=expires)
                 continue
             if response.status == 404 and session_id is not None:
                 raise _SessionExpired
@@ -539,7 +559,7 @@ class McpHttpSession:
                 response.status in _TRANSIENT_STATUSES
                 and transient_attempt < max_transient_attempts
             ):
-                self._backoff(transient_attempt, execution)
+                self._backoff(transient_attempt, execution, deadline=expires)
                 transient_attempt += 1
                 continue
             if response.status not in {200, 202}:
@@ -554,10 +574,9 @@ class McpHttpSession:
         interrupted: _SseDisconnected,
         *,
         execution: CapabilityExecutionContext | None,
-        timeout_ms: int,
+        deadline: float,
         session_id: str | None,
     ) -> _HttpResponse:
-        expires = monotonic() + timeout_ms / 1000
         cursor = interrupted
         auth_refreshed = False
         refresh_next = False
@@ -567,14 +586,12 @@ class McpHttpSession:
                 if cursor.retry_ms is not None
                 else (self._config.backoff_ms * (2**attempt))
             )
-            wait_expires = min(expires, monotonic() + min(wait_ms, 60_000) / 1000)
+            wait_expires = min(deadline, monotonic() + min(wait_ms, 60_000) / 1000)
             while monotonic() < wait_expires:
                 if execution is not None:
                     execution.check()
                 sleep(min(0.01, max(0, wait_expires - monotonic())))
-            remaining_ms = max(1, int((expires - monotonic()) * 1000))
-            if monotonic() >= expires:
-                raise McpTransportError("MCP SSE reconnection timed out")
+            remaining_ms = self._remaining_ms(deadline, "MCP SSE reconnection timed out")
             headers = {
                 "Accept": "text/event-stream",
                 "Last-Event-ID": cursor.last_event_id,
@@ -582,7 +599,11 @@ class McpHttpSession:
             }
             if session_id is not None:
                 headers["MCP-Session-Id"] = session_id
-            token = self._access_token(force_refresh=refresh_next, execution=execution)
+            token = self._access_token(
+                force_refresh=refresh_next,
+                execution=execution,
+                deadline=deadline,
+            )
             refresh_next = False
             if token is not None:
                 headers["Authorization"] = f"Bearer {token}"
@@ -599,7 +620,7 @@ class McpHttpSession:
                 cursor = next_cursor
                 continue
             if response.status == 401 and self._config.auth_type == "oauth" and not auth_refreshed:
-                self._clear_tokens(execution)
+                self._clear_tokens(execution, deadline=deadline)
                 auth_refreshed = True
                 refresh_next = True
                 continue
@@ -629,6 +650,11 @@ class McpHttpSession:
         execution: CapabilityExecutionContext | None,
         timeout_ms: int,
     ) -> _HttpResponse:
+        addresses = self._resolve_bounded(
+            endpoint,
+            execution=execution,
+            timeout_ms=timeout_ms,
+        )
         result: list[_HttpResponse] = []
         failure: list[BaseException] = []
         complete = threading.Event()
@@ -636,7 +662,6 @@ class McpHttpSession:
 
         def run() -> None:
             try:
-                addresses = self._resolve(endpoint)
                 # One pinned address per exchange.  Trying another after an
                 # ambiguous POST failure could duplicate an effectful tool.
                 conn = _PinnedHTTPSConnection(
@@ -703,6 +728,50 @@ class McpHttpSession:
                 raise error
             raise McpTransportError(f"MCP HTTPS exchange failed: {type(error).__name__}") from error
         return result[0]
+
+    def _resolve_bounded(
+        self,
+        endpoint: _Endpoint,
+        *,
+        execution: CapabilityExecutionContext | None,
+        timeout_ms: int,
+    ) -> tuple[str, ...]:
+        # A resolver call cannot be forcefully cancelled by Python. Permit one
+        # live resolver per session, and leave the slot held by its worker until
+        # it actually returns. A stuck resolver therefore cannot multiply
+        # daemon threads across retries or concurrent calls.
+        if not self._dns_lock.acquire(blocking=False):
+            raise McpTransportError("MCP endpoint DNS resolver is already busy")
+        if not _DNS_SLOTS.acquire(blocking=False):
+            self._dns_lock.release()
+            raise McpTransportError("MCP host DNS resolver capacity is exhausted")
+        values: list[tuple[str, ...]] = []
+        failures: list[BaseException] = []
+        complete = threading.Event()
+
+        def resolve() -> None:
+            try:
+                values.append(self._resolve(endpoint))
+            except BaseException as exc:
+                failures.append(exc)
+            finally:
+                _DNS_SLOTS.release()
+                self._dns_lock.release()
+                complete.set()
+
+        threading.Thread(target=resolve, name="droste-mcp-dns", daemon=True).start()
+        expires = monotonic() + timeout_ms / 1000
+        while not complete.wait(0.01):
+            if execution is not None:
+                execution.check()
+            if monotonic() >= expires:
+                raise McpTransportError("MCP endpoint DNS resolution timed out")
+        if failures:
+            error = failures[0]
+            if isinstance(error, McpTransportError):
+                raise error
+            raise McpTransportError("MCP endpoint DNS resolution failed") from error
+        return values[0]
 
     def _read_sse_response(self, response: http.client.HTTPResponse) -> bytes:
         chunks: list[bytes] = []
@@ -858,28 +927,54 @@ class McpHttpSession:
         *,
         force_refresh: bool = False,
         execution: CapabilityExecutionContext | None = None,
+        deadline: float | None = None,
     ) -> str | None:
+        with self._state_lock:
+            self._raise_open_locked()
         if self._config.auth_type == "none":
             return None
         if self._config.auth_type == "bearer":
-            assert self._config.token_ref is not None
-            return self._secret(self._config.token_ref, execution)
-        self._acquire_auth_lock(execution)
+            self._acquire_auth_lock(execution, deadline)
+            try:
+                with self._state_lock:
+                    self._raise_open_locked()
+                assert self._config.token_ref is not None
+                token = self._secret(self._config.token_ref, execution, deadline)
+                with self._state_lock:
+                    self._raise_open_locked()
+                    self._last_access_token = token
+                return token
+            finally:
+                self._auth_lock.release()
+        self._acquire_auth_lock(execution, deadline)
         try:
-            now = monotonic()
-            if (
-                not force_refresh
-                and self._tokens is not None
-                and now < self._tokens.expires_at - 30
-            ):
-                return self._tokens.access
+            with self._state_lock:
+                self._raise_open_locked()
+                now = monotonic()
+                if (
+                    not force_refresh
+                    and self._tokens is not None
+                    and now < self._tokens.expires_at - 30
+                ):
+                    self._last_access_token = self._tokens.access
+                    return self._tokens.access
+                prior = self._tokens
             oauth = self._config.oauth
             assert oauth is not None
             if self._token_endpoint is None:
-                self._token_endpoint = self._discover_token_endpoint(oauth, execution)
-            token = self._request_oauth_token(oauth, self._token_endpoint, self._tokens, execution)
-            self._tokens = token
-            self._auth_refreshes += 1
+                self._token_endpoint = self._discover_token_endpoint(oauth, execution, deadline)
+            token = self._request_oauth_token(
+                oauth,
+                self._token_endpoint,
+                prior,
+                execution,
+                deadline,
+            )
+            with self._state_lock:
+                self._raise_open_locked()
+                self._tokens = token
+                self._last_access_token = token.access
+                self._auth_refreshes += 1
             return token.access
         finally:
             self._auth_lock.release()
@@ -888,6 +983,7 @@ class McpHttpSession:
         self,
         oauth: McpOAuthConfig,
         execution: CapabilityExecutionContext | None,
+        deadline: float | None,
     ) -> str:
         metadata_endpoint = canonical_https_url(
             oauth.resource_metadata_url, field="OAuth resource metadata URL"
@@ -898,7 +994,7 @@ class McpHttpSession:
             {"Accept": "application/json"},
             None,
             execution=execution,
-            timeout_ms=self._config.startup_timeout_ms,
+            timeout_ms=self._auth_remaining_ms(deadline),
         )
         if response.status != 200:
             raise McpTransportError("MCP OAuth protected-resource discovery failed")
@@ -931,7 +1027,7 @@ class McpHttpSession:
                 {"Accept": "application/json"},
                 None,
                 execution=execution,
-                timeout_ms=self._config.startup_timeout_ms,
+                timeout_ms=self._auth_remaining_ms(deadline),
             )
             if discovered.status == 404:
                 continue
@@ -955,9 +1051,10 @@ class McpHttpSession:
         token_url: str,
         prior: _OAuthTokens | None,
         execution: CapabilityExecutionContext | None,
+        deadline: float | None,
     ) -> _OAuthTokens:
-        client_id = self._secret(oauth.client_id_ref, execution)
-        client_secret = self._secret(oauth.client_secret_ref, execution)
+        client_id = self._secret(oauth.client_id_ref, execution, deadline)
+        client_secret = self._secret(oauth.client_secret_ref, execution, deadline)
         if prior is not None and prior.refresh:
             values = {
                 "grant_type": "refresh_token",
@@ -982,7 +1079,7 @@ class McpHttpSession:
             },
             urlencode(values).encode("ascii"),
             execution=execution,
-            timeout_ms=self._config.request_timeout_ms,
+            timeout_ms=self._auth_remaining_ms(deadline),
         )
         if response.status != 200:
             raise McpTransportError("MCP OAuth token request failed")
@@ -1009,12 +1106,18 @@ class McpHttpSession:
         self,
         reference: str,
         execution: CapabilityExecutionContext | None,
+        deadline: float | None = None,
     ) -> str:
         resolver = self._host.resolve_secret
         if resolver is None:
             raise McpTransportError("MCP authentication requires a trusted-host secret resolver")
         if execution is not None:
             execution.check()
+        if not self._secret_lock.acquire(blocking=False):
+            raise McpTransportError("MCP trusted-host secret resolver is already busy")
+        if not _SECRET_SLOTS.acquire(blocking=False):
+            self._secret_lock.release()
+            raise McpTransportError("MCP trusted-host secret resolver capacity is exhausted")
         values: list[str] = []
         failures: list[BaseException] = []
         complete = threading.Event()
@@ -1033,10 +1136,14 @@ class McpHttpSession:
             except BaseException as exc:
                 failures.append(exc)
             finally:
+                _SECRET_SLOTS.release()
+                self._secret_lock.release()
                 complete.set()
 
         threading.Thread(target=resolve, name="droste-mcp-secret", daemon=True).start()
         expires = monotonic() + self._config.request_timeout_ms / 1000
+        if deadline is not None:
+            expires = min(expires, deadline)
         while not complete.wait(0.01):
             if execution is not None:
                 execution.check()
@@ -1055,10 +1162,16 @@ class McpHttpSession:
             raise McpTransportError("MCP trusted-host secret resolver returned an invalid value")
         return value
 
-    def _acquire_auth_lock(self, execution: CapabilityExecutionContext | None) -> None:
+    def _acquire_auth_lock(
+        self,
+        execution: CapabilityExecutionContext | None,
+        deadline: float | None = None,
+    ) -> None:
         while not self._auth_lock.acquire(timeout=0.01):
             if execution is not None:
                 execution.check()
+            if deadline is not None:
+                self._remaining_ms(deadline, "MCP authentication lock timed out")
 
     @staticmethod
     def _json_mapping(body: bytes, label: str) -> dict[str, Any]:
@@ -1067,13 +1180,20 @@ class McpHttpSession:
             raise McpProtocolError(f"MCP {label} must be a JSON object")
         return value
 
-    def _backoff(self, attempt: int, execution: CapabilityExecutionContext | None) -> None:
+    def _backoff(
+        self,
+        attempt: int,
+        execution: CapabilityExecutionContext | None,
+        *,
+        deadline: float,
+    ) -> None:
         duration = min(5.0, self._config.backoff_ms / 1000 * (2**attempt))
-        expires = monotonic() + duration
+        expires = min(deadline, monotonic() + duration)
         while monotonic() < expires:
             if execution is not None:
                 execution.check()
             sleep(min(0.01, max(0, expires - monotonic())))
+        self._remaining_ms(deadline, "MCP HTTP request timed out during retry backoff")
 
     def _debug(self, direction: str, payload: bytes) -> None:
         limit = self._config.max_debug_payload_bytes
@@ -1086,10 +1206,20 @@ class McpHttpSession:
             pass
 
     def _startup_remaining_ms(self) -> int:
-        remaining = self._startup_expires - monotonic()
+        return self._remaining_ms(self._startup_expires, "MCP acquisition timed out")
+
+    @staticmethod
+    def _remaining_ms(expires: float, message: str) -> int:
+        remaining = expires - monotonic()
         if remaining <= 0:
-            raise McpTransportError("MCP acquisition timed out")
+            raise McpTransportError(message)
         return max(1, int(remaining * 1000))
+
+    def _auth_remaining_ms(self, deadline: float | None) -> int:
+        expires = monotonic() + self._config.request_timeout_ms / 1000
+        if deadline is not None:
+            expires = min(expires, deadline)
+        return self._remaining_ms(expires, "MCP authentication timed out")
 
     @staticmethod
     def _canonical_bytes(value: Any) -> bytes:
@@ -1100,10 +1230,17 @@ class McpHttpSession:
         except (TypeError, ValueError) as exc:
             raise McpProtocolError("MCP message is not finite JSON") from exc
 
-    def _clear_tokens(self, execution: CapabilityExecutionContext | None = None) -> None:
-        self._acquire_auth_lock(execution)
+    def _clear_tokens(
+        self,
+        execution: CapabilityExecutionContext | None = None,
+        *,
+        deadline: float | None = None,
+    ) -> None:
+        self._acquire_auth_lock(execution, deadline)
         try:
-            self._tokens = None
+            with self._state_lock:
+                self._tokens = None
+                self._last_access_token = None
         finally:
             self._auth_lock.release()
 
@@ -1127,34 +1264,37 @@ class McpHttpSession:
             )
 
     def close(self) -> None:
+        expires = monotonic() + self._config.close_timeout_ms / 1000
         with self._state_lock:
             if self._closed:
                 return
             self._closed = True
             session_id = self._session_id
             self._session_id = None
+            token = self._last_access_token
+            self._tokens = None
+            self._last_access_token = None
         if session_id is not None:
-            try:
-                headers = {
-                    "Accept": "application/json",
-                    "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
-                    "MCP-Session-Id": session_id,
-                }
-                token = self._access_token(execution=None)
-                if token is not None:
-                    headers["Authorization"] = f"Bearer {token}"
-                response = self._exchange(
-                    "DELETE",
-                    self._endpoint,
-                    headers,
-                    None,
-                    execution=None,
-                    timeout_ms=self._config.close_timeout_ms,
-                )
-                if response.status not in {200, 202, 204, 404, 405}:
-                    raise McpTransportError("MCP session close failed")
-            finally:
-                self._tokens = None
+            remaining_ms = max(1, int((expires - monotonic()) * 1000))
+            if monotonic() >= expires:
+                return
+            headers = {
+                "Accept": "application/json",
+                "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+                "MCP-Session-Id": session_id,
+            }
+            if token is not None:
+                headers["Authorization"] = f"Bearer {token}"
+            response = self._exchange(
+                "DELETE",
+                self._endpoint,
+                headers,
+                None,
+                execution=None,
+                timeout_ms=remaining_ms,
+            )
+            if response.status not in {200, 202, 204, 404, 405}:
+                raise McpTransportError("MCP session close failed")
 
 
 class _SessionExpired(Exception):

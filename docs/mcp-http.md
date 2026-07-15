@@ -109,6 +109,13 @@ Defaults and accepted configuration keys:
 | `backoff_ms` | 100; 10..5,000 |
 | `max_debug_payload_bytes` | 0 (disabled); maximum 4 KiB |
 
+Timeouts are total wall-clock budgets, not per-hop allowances. Startup shares
+one budget across secret resolution, OAuth discovery/token acquisition,
+initialization, notification, and tool discovery. Each request shares one
+budget across authentication, retries, backoff, and SSE resumption. Session
+close has one independent budget, uses only the last access token already held
+by the session, and never reacquires credentials during teardown.
+
 Ordinary stats and durable capability traces contain only normalized counts,
 latencies, sizes, status, and immutable capability identity. Raw MCP payload
 debugging is disabled by default. Enabling a bounded `max_debug_payload_bytes`
