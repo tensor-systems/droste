@@ -27,6 +27,10 @@ const RELAY_TS =
     .pathname;
 const EVENT_CHANNEL_PROBE =
   new URL("../../pyodide/event_channel_probe.ts", import.meta.url).pathname;
+const RUNNER_REFUSAL_FIXTURE = new URL(
+  "../../src/droste/testing/fixtures/runner-v6-refusal.ndjson",
+  import.meta.url,
+);
 const TEST_BUDGET = {
   tokens: 500_000,
   subcalls: 50,
@@ -817,7 +821,7 @@ Deno.test({
       // digits is the only way to prove relay.ts never routed `meta`
       // through a JS number anywhere along the path.
       assert(
-        raw.includes('"received_meta_large_id": 9223372036854775807'),
+        raw.includes('"received_meta_large_id":9223372036854775807'),
         `expected the exact int64 literal in the raw response, got:\n${raw}`,
       );
     } finally {
@@ -870,22 +874,14 @@ Deno.test({
 });
 
 Deno.test({
-  name:
-    "relay.ts: canonical preflight and pre-admission refusal leave fd3 empty",
+  name: "relay.ts: exact canonical refusal and preflight leave fd3 empty",
   fn: async () => {
     const { port, shutdown } = await startMockModelRelay();
     try {
       const sourcesDir = await buildTempSources();
       const { lastLine, stderrText, eventText } = await runRelayRaw(
         sourcesDir,
-        {
-          protocol_version: 5,
-          question: "must refuse before inference",
-          root_model: "test-model",
-          base_url: `http://127.0.0.1:${port}/api/v1`,
-          api_key: "test-key",
-          budget: TEST_BUDGET,
-        },
+        {},
         port,
         {},
         "_runner_protocol_adapter",
@@ -893,7 +889,11 @@ Deno.test({
       const response = JSON.parse(lastLine);
       assertEquals(response.status, "refusal");
       assertEquals(response.operation, null);
-      assertEquals(response.error.code, "protocol_version_mismatch");
+      assertEquals(response.error.code, "protocol_version_missing");
+      assertEquals(
+        `${lastLine}\n`,
+        await Deno.readTextFile(RUNNER_REFUSAL_FIXTURE),
+      );
       assertEquals(eventText, "");
       assertEquals(stderrText, "");
 

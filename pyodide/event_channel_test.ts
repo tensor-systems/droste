@@ -5,6 +5,12 @@ import {
   eventChannelFromEnvironment,
   RelayEventChannelError,
 } from "../src/droste/substrates/_relay/event_channel.ts";
+import { isRlmEvent } from "../src/droste/substrates/_relay/events.ts";
+
+const TRACE_LIFECYCLE_FIXTURE = new URL(
+  "../src/droste/testing/fixtures/trace-v2-lifecycle.ndjson",
+  import.meta.url,
+);
 
 function assertChannelError(
   action: () => unknown,
@@ -48,6 +54,25 @@ Deno.test("event channel inspects the descriptor and completes partial writes", 
     '{"type":"progress"}\n',
   );
   assertEquals(channel.failure, null);
+});
+
+Deno.test("event channel preserves the canonical Trace ABI corpus byte for byte", async () => {
+  const fixture = await Deno.readTextFile(TRACE_LIFECYCLE_FIXTURE);
+  assert(fixture.endsWith("\n"));
+  const frames = fixture.slice(0, -1).split("\n");
+  assert(frames.every(isRlmEvent));
+
+  const received: number[] = [];
+  const channel = new EventChannel(3, (_descriptor, bytes) => {
+    received.push(...bytes);
+    return bytes.length;
+  });
+  for (const frame of frames) channel.writeFrame(frame);
+
+  assertEquals(
+    new TextDecoder().decode(new Uint8Array(received)),
+    fixture,
+  );
 });
 
 Deno.test("event channel latches descriptor and frame write failures", () => {

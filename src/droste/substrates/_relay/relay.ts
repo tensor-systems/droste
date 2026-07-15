@@ -570,7 +570,10 @@ except Exception as e:
 _status = get_last_http_error_status()
 if _status and isinstance(resp.get("error"), dict):
     resp["error"]["status"] = _status
-json.dumps(resp)
+# Runner responses use the same deterministic UTF-8 representation as the
+# published protocol conformance fixtures. Python remains the sole serializer
+# so arbitrary-precision integer values never cross a JS number boundary.
+json.dumps(resp, ensure_ascii=False, separators=(",", ":"))
 `);
 } catch (error) {
   if (eventChannel.failure === null) {
