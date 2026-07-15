@@ -481,6 +481,40 @@ def test_lifecycle_bodies_are_strict_discriminated_values() -> None:
                 "batch_count": 1,
             }
         )
+    with pytest.raises(TypeError, match="field 'iteration' has invalid type bool"):
+        recorder.append(
+            {
+                "type": "subcall",
+                "phase": "start",
+                "call_id": "call-1",
+                "operation": "llm_query",
+                "iteration": True,
+                "reservation": {"tokens": 1, "subcalls": 1, "wall_ms": 1, "depth": 0},
+            }
+        )
+    with pytest.raises(TypeError, match="field 'batch_count' has invalid type bool"):
+        recorder.append(
+            {
+                "type": "subcall",
+                "phase": "start",
+                "call_id": "call-1",
+                "operation": "llm_batch",
+                "iteration": 1,
+                "reservation": {"tokens": 1, "subcalls": 1, "wall_ms": 1, "depth": 0},
+                "batch_count": True,
+            }
+        )
+    with pytest.raises(TypeError, match="field 'iteration' has invalid type bool"):
+        recorder.append(
+            {
+                "type": "repair",
+                "phase": "start",
+                "kind": "execution_error",
+                "iteration": True,
+            }
+        )
+    with pytest.raises(TypeError, match="field 'iteration' has invalid type bool"):
+        recorder.append({"type": "extract", "phase": "start", "iteration": True})
     with pytest.raises(ValueError, match="unknown body fields: detail"):
         recorder.append(
             {
