@@ -13,6 +13,26 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.13.0)
 
+### Runner exceptions retain their selected operation
+
+After runner protocol v4 accepts `run` or `preflight`, top-level worker
+exceptions now carry that operation instead of `null`, so hosts can retain the
+structured error without guessing which response schema applies. Missing or
+mismatched protocol versions still refuse first with `operation: null`.
+Preflight exceptions use the exact closed five-field preflight envelope with
+`status: "error"` and `preflight: null`; they are not run envelopes relabeled
+as preflight. Custom-catalog process hosts should replace outer exception
+wrappers with `run_worker_request(...)`, then write `WorkerOutcome.response`
+and use `WorkerOutcome.exit_code`.
+
+Runner requests also accept one optional non-empty `root_reasoning_effort`.
+The native and Pyodide root clients send the exact value on every root callback,
+and scaffold evidence records the same value under `root_sampling`. Hosts should
+derive this field from their immutable run specification. A conflicting
+`root_sampling.reasoning_effort` is rejected before inference.
+The bundled Deno/Pyodide relay applies the same operation-specific exception
+projection when an adapter raises.
+
 ## 0.13.0 (from 0.12.1)
 
 ### Runner protocol v4 adds safe, content-free scaffold preflight

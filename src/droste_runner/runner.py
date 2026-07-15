@@ -9,10 +9,10 @@ from .http_clients import _redact_secrets as _redact_secrets
 from .protocol import RUNNER_PROTOCOL_VERSION, RootResponseMetadata, RunnerOperation, build_response
 from .protocol import _check_protocol_version as _check_protocol_version
 from .protocol import _protocol_error_response as _protocol_error_response
+from .run import WorkerOutcome, main, run, run_worker_request
 from .run import _build_context as _build_context
 from .run import _read_request as _read_request
 from .run import _run_adapter as _run_adapter
-from .run import main, run
 from .sources import (
     WRAPPER_PROVIDER_MANIFEST,
     WrapperTransport,
@@ -35,11 +35,13 @@ __all__ = [
     "RunnerEnvironment",
     "WRAPPER_PROVIDER_MANIFEST",
     "WrapperTransport",
+    "WorkerOutcome",
     "build_provider_registry",
     "build_response",
     "default_provider_catalog",
     "describe_context",
     "main",
     "run",
+    "run_worker_request",
     "wrapper_provider",
 ]

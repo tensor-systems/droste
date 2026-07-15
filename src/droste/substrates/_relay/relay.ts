@@ -421,9 +421,19 @@ py.globals.set("get_last_http_error_status", () => lastHttpErrorStatus);
 // anywhere in the adapter's response (not just meta). `out` is the final
 // stdout payload as-is; nothing here re-parses it in JS.
 const out = await py.runPythonAsync(`
-import importlib, json, io, contextlib
+import importlib, json, io, contextlib, traceback
+from droste_runner.protocol import (
+    RUNNER_PROTOCOL_VERSION, build_exception_response, resolve_operation,
+)
 _adapter = importlib.import_module(adapter_module_name)
 _meta = json.loads(bridge_meta_json)
+_request = json.loads(request_json)
+_operation = None
+if _request.get("protocol_version") == RUNNER_PROTOCOL_VERSION:
+    try:
+        _operation = resolve_operation(_request)
+    except ValueError:
+        pass
 # Pyodide gotcha: a JS \`null\` set via globals.set() crosses over as a JsProxy
 # ("JsNull"), NOT Python's None — \`bridge_call is not None\` would not catch
 # it, and the adapter would try to call it. Normalize explicitly here rather
@@ -434,10 +444,10 @@ _buf = io.StringIO()
 try:
     with contextlib.redirect_stdout(_buf):
         resp = _adapter.run_for_host_pyodide(
-            json.loads(request_json), host_fetch, bridge_call=_bridge_call, meta=_meta,
+            _request, host_fetch, bridge_call=_bridge_call, meta=_meta,
         )
 except Exception as e:
-    resp = {"answer": None, "error": {"type": type(e).__name__, "message": str(e)}}
+    resp = build_exception_response(e, traceback.format_exc(), operation=_operation)
 _status = get_last_http_error_status()
 if _status and isinstance(resp.get("error"), dict):
     resp["error"]["status"] = _status

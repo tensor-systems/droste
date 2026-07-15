@@ -35,8 +35,13 @@ const TEST_BUDGET = {
 // Proves the answer actually came from a real query() round-trip through
 // BridgeProvider -> ProviderService -> the real SQLite file, not a stub.
 function startMockModelRelay(): Promise<
-  { port: number; shutdown: () => Promise<void> }
+  {
+    port: number;
+    rootPayloads: Record<string, unknown>[];
+    shutdown: () => Promise<void>;
+  }
 > {
+  const rootPayloads: Record<string, unknown>[] = [];
   const code = [
     "```python",
     'rows = query("SELECT COUNT(*) AS n FROM widgets")',
@@ -48,11 +53,12 @@ function startMockModelRelay(): Promise<
     // hostname must be explicit: Deno.serve defaults to 0.0.0.0, which the
     // documented least-privilege `--allow-net=127.0.0.1` permission rejects.
     { port: 0, hostname: "127.0.0.1", onListen: () => {} },
-    (req) => {
+    async (req) => {
       if (
         req.method === "POST" &&
         new URL(req.url).pathname.endsWith("/responses")
       ) {
+        rootPayloads.push(await req.json());
         return Response.json({
           output: [{
             type: "message",
@@ -66,6 +72,7 @@ function startMockModelRelay(): Promise<
   );
   return Promise.resolve({
     port: (server.addr as Deno.NetAddr).port,
+    rootPayloads,
     shutdown: () => server.shutdown(),
   });
 }
@@ -115,6 +122,11 @@ async function buildTempSources(): Promise<string> {
   await copy(
     `${HERE}_meta_precision_adapter.py`,
     `${dir}/_meta_precision_adapter.py`,
+    { overwrite: true },
+  );
+  await copy(
+    `${HERE}_failing_adapter.py`,
+    `${dir}/_failing_adapter.py`,
     { overwrite: true },
   );
   return dir;
@@ -205,7 +217,7 @@ Deno.test({
   name:
     "relay.ts + pyodide_host_adapter.py: DB-service (bridge) mode, real subprocess + Pyodide + mocked ModelRelay",
   fn: async () => {
-    const { port, shutdown } = await startMockModelRelay();
+    const { port, rootPayloads, shutdown } = await startMockModelRelay();
     try {
       const sourcesDir = await buildTempSources();
       const dbPath = await buildTempDb();
@@ -213,6 +225,7 @@ Deno.test({
         question: "how many widgets are there",
         db_path: dbPath,
         root_model: "test-model",
+        root_reasoning_effort: "none",
         base_url: `http://127.0.0.1:${port}/api/v1`,
         api_key: "test-key",
         budget: TEST_BUDGET,
@@ -229,6 +242,8 @@ Deno.test({
       });
       assertEquals(resp.error, null);
       assertEquals(resp.answer, "3"); // real COUNT(*) via the real bridged query()
+      assertEquals(rootPayloads.length, 1);
+      assertEquals(rootPayloads[0].reasoning_effort, "none");
       // The legacy-mode WARNING must NOT fire on the default path.
       assert(
         !stderrText.includes("RLM_DB_SERVICE=0"),
@@ -257,7 +272,7 @@ Deno.test({
   name:
     "relay.ts + pyodide_host_adapter.py: single-interpreter (RLM_DB_SERVICE=0) mode, meta stays null",
   fn: async () => {
-    const { port, shutdown } = await startMockModelRelay();
+    const { port, rootPayloads, shutdown } = await startMockModelRelay();
     try {
       const sourcesDir = await buildTempSources();
       const dbPath = await buildTempDb();
@@ -277,6 +292,8 @@ Deno.test({
       });
       assertEquals(resp.error, null);
       assertEquals(resp.answer, "3");
+      assertEquals(rootPayloads.length, 1);
+      assert(!("reasoning_effort" in rootPayloads[0]));
       // Legacy mode must announce itself (#7): a WARNING progress event on
       // stderr, so this mode can never be enabled silently.
       assert(
@@ -321,6 +338,48 @@ Deno.test({
         raw.includes('"received_meta_large_id": 9223372036854775807'),
         `expected the exact int64 literal in the raw response, got:\n${raw}`,
       );
+    } finally {
+      await shutdown();
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "relay.ts: adapter exceptions retain strict run/preflight protocol-v4 envelopes",
+  fn: async () => {
+    const { port, shutdown } = await startMockModelRelay();
+    try {
+      const sourcesDir = await buildTempSources();
+      for (const operation of ["run", "preflight"] as const) {
+        const { lastLine } = await runRelayRaw(
+          sourcesDir,
+          { protocol_version: 4, operation },
+          port,
+          {},
+          "_failing_adapter",
+        );
+        const response = JSON.parse(lastLine);
+        assertEquals(response.protocol_version, 4);
+        assertEquals(response.operation, operation);
+        assertEquals(response.status, "error");
+        assertEquals(response.error.type, "RuntimeError");
+        assertEquals(response.error.message, "adapter boom");
+        assert(typeof response.error.traceback === "string");
+        if (operation === "preflight") {
+          assertEquals(Object.keys(response).sort(), [
+            "error",
+            "operation",
+            "preflight",
+            "protocol_version",
+            "status",
+          ]);
+          assertEquals(response.preflight, null);
+        } else {
+          assert(!("preflight" in response));
+          assert("answer" in response);
+        }
+      }
     } finally {
       await shutdown();
     }

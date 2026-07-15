@@ -83,6 +83,11 @@ rejects a mismatch with `RolloutConfiguration.concurrency` before inference.
 The compatibility default is 5. Custom clients that do not expose the optional
 read-only metadata remain source-compatible and must honor the declared value.
 
+Runner `root_reasoning_effort` is one host-resolved inference fact: the native
+and Pyodide clients send it on root callbacks, while the scaffold records the
+same value in `inference.root_sampling.reasoning_effort`. A conflicting value
+inside an explicit runner `root_sampling` object is rejected before inference.
+
 ## Compatibility and storage
 
 `ScaffoldRequirements` accepts an exact `manifest_id`, a partial nested

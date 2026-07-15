@@ -38,6 +38,7 @@ from droste import (
     EnvironmentConfig,
     ProviderCatalog,
     RLMConfig,
+    RolloutConfiguration,
     SandboxLimits,
     SideEffect,
     create_environment,
@@ -111,11 +112,17 @@ def run_for_host_pyodide(
     # also carry a stale/irrelevant customer_token field.
     auth_type = request.get("auth_type", "api_key")
     customer_token = request.get("customer_token") if auth_type == "customer_token" else None
+    root_reasoning_effort = request.get("root_reasoning_effort")
+    if root_reasoning_effort is not None and (
+        not isinstance(root_reasoning_effort, str) or not root_reasoning_effort
+    ):
+        raise ValueError("request.root_reasoning_effort must be a non-empty string or null")
     client = BridgedLLMClient(
         host_fetch,
         api_key=request.get("api_key"),
         customer_token=customer_token,
         base_url=request.get("base_url") or _DEFAULT_BASE_URL,
+        reasoning_effort=root_reasoning_effort or "",
     )
 
     if bridge_call is not None:
@@ -167,6 +174,11 @@ def run_for_host_pyodide(
         budget=budget,
         sandbox=sandbox,
         root_model=request.get("root_model"),
+        rollout=RolloutConfiguration(
+            root_sampling=(
+                {"reasoning_effort": root_reasoning_effort} if root_reasoning_effort else {}
+            )
+        ),
     )
 
     res = run_rlm(
