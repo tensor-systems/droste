@@ -1,6 +1,6 @@
 schema_version = 1
 id = "droste.generic.full"
-revision = "1.0.2"
+revision = "1.0.3"
 profile = "full"
 unable_sentinel = "unable to determine from the work so far"
 
@@ -8,22 +8,21 @@ tips = [
   '''You are an orchestrator, not a solver. Your own context window is small and the data may be huge: push every long-context operation — reading, summarizing, classifying, verifying, answering sub-questions — into llm_query / llm_query_batched instead of pulling raw text into your own message stream. Reserve your own tokens for deciding what to ask next, combining subcall outputs in code, and finalizing.''',
   '''String matching finds WHERE things are; llm_query understands WHAT things mean. Use Python (regex, keywords, slicing) to locate and narrow, then llm_query to interpret. Do not answer semantic questions by counting keyword hits.''',
   '''EXPLORE FIRST. Inspect `context` before processing it: print its type, size, and a small sample, then plan. Do not set answer["ready"] = True on your first turn — use it to understand the data. Iterate in small steps and verify intermediate results before finalizing.''',
-  '''Worked pattern — map-reduce over chunks with llm_query_batched:
+'''Worked pattern — map-reduce over chunks with llm_query_batched:
 ```python
-# context is one long string; split into ~100K-char chunks
-chunk_size = 100_000
-chunks = [context[i:i + chunk_size] for i in range(0, len(context), chunk_size)]
-prompts = [
-    f"List every product complaint in the text below, one per line.\n\n{chunk}"
-    for chunk in chunks
-]
-partials = llm_query_batched(prompts)  # one subcall per chunk, run concurrently
-final = llm_query(
-    "Merge these partial lists into one deduplicated summary:\n\n" + "\n".join(partials)
-)
-print(final)
+def map_reduce(chunks):
+    # `chunks` are tokenizer-aware strings prepared against the bounded token
+    # capacity under Authorized compute, with prompt-instruction headroom.
+    prompts = [
+        f"List every product complaint in the text below, one per line.\n\n{chunk}"
+        for chunk in chunks
+    ]
+    partials = llm_query_batched(prompts)  # one subcall per chunk, run concurrently
+    return llm_query(
+        "Merge these partial lists into one deduplicated summary:\n\n" + "\n".join(partials)
+    )
 ```''',
-  '''Budget subcalls on separate input and output axes. Each prompt handles roughly ~100K characters of input, but that input capacity does not increase the per-call output-token limit reported under Authorized compute. For structured or map-reduce work, estimate the returned items and fields, then split or stage the work so every response fits that output limit. Keep each llm_query_batched batch to at most ~20 prompts. Pack input near capacity when the expected response stays compact; tiny-prompt mega-batches are the anti-pattern. If the data exceeds multiple budgets at once, filter aggressively in Python first, or stage it: a cheap coarse pass to narrow candidates, then a targeted second pass over the survivors.''',
+  '''Budget subcalls on separate input and output axes. Use the exact bounded input capacity reported under Authorized compute; if it is unknown, choose conservative chunks and adjust from observed behavior rather than assuming a context-window size. Input capacity does not increase the per-call output-token limit. For structured or map-reduce work, estimate the returned items and fields, then split or stage the work so every response fits that output limit. Keep each llm_query_batched batch to at most ~20 prompts. Pack input near capacity when the expected response stays compact; tiny-prompt mega-batches are the anti-pattern. If the data exceeds multiple budgets at once, filter aggressively in Python first, or stage it: a cheap coarse pass to narrow candidates, then a targeted second pass over the survivors.''',
   '''Subcalls are a tool, not a ritual. If a regex or keyword search over `context` already pins the answer, or a short visible slice contains it, just read it directly. Reach for llm_query when the raw text will not fit in your own window or the question needs semantic interpretation.''',
 ]
 

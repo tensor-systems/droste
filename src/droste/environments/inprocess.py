@@ -25,6 +25,7 @@ from ..capabilities import (
 )
 from ..execution.budget import BudgetLedger
 from ..protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
+from ..protocols.subcall_capacity import SubcallInputCapacity
 from ..protocols.subcall_client import SubcallClient
 from ..protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest
 from ..providers import ProviderRegistry
@@ -197,6 +198,11 @@ class RunnerEnvironment(RLMEnvironment):
             )
         return self._sandbox_subcalls
 
+    def subcall_input_capacity(self) -> SubcallInputCapacity:
+        """Return the immutable capacity snapshot captured during construction."""
+
+        return self._sandbox_subcalls.input_token_capacity
+
     def capabilities(self) -> EnvCapabilities:
         return {
             "tools_in_root": False,
@@ -226,10 +232,6 @@ class RunnerEnvironment(RLMEnvironment):
         description = describe_context(self._context)
         if description:
             parts.append(description)
-        parts.append(
-            "Each llm_query / llm_query_batched subcall can handle roughly ~100k tokens; "
-            "size chunks accordingly."
-        )
         if self._registry is not None:
             fragment = self._registry.prompt_fragment()
             if fragment:

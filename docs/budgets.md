@@ -72,7 +72,7 @@ become a second accounting authority.
 
 ## Runner and CLI
 
-Runner protocol v4 requires an exact `budget` object with all six fields.
+Runner protocol v4 and later require an exact `budget` object with all six fields.
 Missing and unknown fields fail before work. The CLI resolves its six budget
 flags into the same value. There are no legacy `max_*` aliases or translation
 rules.

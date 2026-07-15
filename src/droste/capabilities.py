@@ -22,6 +22,10 @@ from types import MappingProxyType
 from typing import Any, Protocol
 from uuid import uuid4
 
+from .protocols.subcall_capacity import (
+    SubcallInputCapacity,
+    reported_subcall_input_capacity,
+)
 from .protocols.subcall_client import SubcallClient
 
 JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema"
@@ -1833,6 +1837,11 @@ class BrokeredSubcallClient:
             if metadata_source is not None
             else _MISSING_OUTPUT_TOKEN_LIMIT
         )
+        self._input_capacity = (
+            reported_subcall_input_capacity(metadata_source)
+            if metadata_source is not None
+            else SubcallInputCapacity.unknown()
+        )
 
     @property
     def output_token_limit(self) -> int | None:
@@ -1842,6 +1851,11 @@ class BrokeredSubcallClient:
         if isinstance(self._output_token_limit, int):
             return self._output_token_limit
         raise AttributeError("wrapped subcall client did not report an output token limit")
+
+    @property
+    def input_token_capacity(self) -> SubcallInputCapacity:
+        """Forward optional planning metadata without exposing the raw client."""
+        return self._input_capacity
 
 
 def broker_subcalls(subcalls: SubcallClient, ledger: Any) -> BrokeredSubcallClient:

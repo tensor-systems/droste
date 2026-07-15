@@ -255,7 +255,7 @@ Deno.test({
         .map((l) => JSON.parse(l))
         .find((e) => e.type === "startup");
       assert(startup, `no startup handshake event on stderr:\n${stderrText}`);
-      assertEquals(startup.runner_protocol, 4);
+      assertEquals(startup.runner_protocol, 5);
       assertEquals(startup.provider_protocol, 4);
       assert(
         typeof startup.engine_version === "string" &&
@@ -399,7 +399,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "relay.ts: adapter exceptions retain strict run/preflight protocol-v4 envelopes",
+    "relay.ts: adapter exceptions retain strict run/preflight protocol-v5 envelopes",
   fn: async () => {
     const { port, shutdown } = await startMockModelRelay();
     try {
@@ -407,13 +407,13 @@ Deno.test({
       for (const operation of ["run", "preflight"] as const) {
         const { lastLine } = await runRelayRaw(
           sourcesDir,
-          { protocol_version: 4, operation },
+          { protocol_version: 5, operation },
           port,
           {},
           "_failing_adapter",
         );
         const response = JSON.parse(lastLine);
-        assertEquals(response.protocol_version, 4);
+        assertEquals(response.protocol_version, 5);
         assertEquals(response.operation, operation);
         assertEquals(response.status, "error");
         assertEquals(response.error.type, "RuntimeError");

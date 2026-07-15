@@ -1,12 +1,12 @@
 schema_version = 1
 id = "droste.generic.minimal"
-revision = "1.0.2"
+revision = "1.0.3"
 profile = "minimal"
 unable_sentinel = "unable to determine from the work so far"
 
 tips = [
   '''You are an orchestrator, not a solver: push long-context reading, summarizing, and classifying into llm_query / llm_query_batched, and keep your own tokens for planning and combining results. String matching finds WHERE things are; llm_query understands WHAT things mean.''',
-  '''Inspect `context` (type, size, sample) before processing; do not finalize on turn 1. Budget input and output separately: roughly ~100K characters per subcall prompt does not enlarge the per-call output-token limit. Keep structured or map-reduce responses within that reported limit and use at most ~20 prompts per batch. If a simple search already pins the answer, just read it directly.''',
+  '''Inspect `context` (type, size, sample) before processing; do not finalize on turn 1. Budget input and output separately: use the exact bounded input capacity under Authorized compute, or conservative chunks when it is unknown. Input capacity does not enlarge the per-call output-token limit. Keep structured or map-reduce responses within that reported limit and use at most ~20 prompts per batch. If a simple search already pins the answer, just read it directly.''',
 ]
 
 [provenance]

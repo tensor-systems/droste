@@ -20,7 +20,11 @@ def test_rlm_runner_adapter_delegates() -> None:
 
     try:
         result = runner.run(
-            {"adapter_module": module_name, "answer": "hello", "protocol_version": 4}
+            {
+                "adapter_module": module_name,
+                "answer": "hello",
+                "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
+            }
         )
     finally:
         sys.modules.pop(module_name, None)
@@ -41,7 +45,12 @@ def test_adapter_claimed_protocol_version_is_not_overwritten() -> None:
     module.run = run  # type: ignore[attr-defined]
     sys.modules[module_name] = module
     try:
-        result = runner.run({"adapter_module": module_name, "protocol_version": 4})
+        result = runner.run(
+            {
+                "adapter_module": module_name,
+                "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
+            }
+        )
     finally:
         sys.modules.pop(module_name, None)
     assert result["protocol_version"] == 99
@@ -336,7 +345,7 @@ def test_runner_preflight_returns_typed_scaffold_refusal_without_dispatch(monkey
         {
             "path": "prompt_pack.revision",
             "expected": "not-this-revision",
-            "actual": "1.0.2",
+            "actual": "1.0.3",
         }
     ]
 
@@ -407,7 +416,10 @@ def test_v3_preflight_intent_is_refused_before_any_runner_resolution(monkeypatch
     assert refusal["status"] == "refusal"
     assert refusal["operation"] is None
     assert refusal["error"]["code"] == "protocol_version_mismatch"
-    assert refusal["error"]["details"] == {"requested": 3, "supported": 4}
+    assert refusal["error"]["details"] == {
+        "requested": 3,
+        "supported": runner.RUNNER_PROTOCOL_VERSION,
+    }
 
 
 def test_preflight_never_binds_or_connects_configured_providers(monkeypatch) -> None:

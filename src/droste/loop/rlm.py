@@ -44,6 +44,12 @@ from ..prompts.pack import (
 )
 from ..protocols.environment import RLMEnvironment
 from ..protocols.llm_client import LLMClient
+from ..protocols.subcall_capacity import (
+    SubcallInputCapacity,
+    render_subcall_input_capacity,
+    reported_subcall_input_capacity,
+    resolve_subcall_input_capacity,
+)
 from ..protocols.subcall_client import SubcallClient
 from ..protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest
 from ..providers import PROVIDER_PROTOCOL_VERSION
@@ -254,13 +260,17 @@ def preflight_rlm(
     refinement_prompt_template: str | None = None,
     prompt_pack: PromptPack | None = None,
     consumer_prompt_catalog: PromptPackCatalog | None = None,
+    subcalls: SubcallClient | None = None,
 ) -> RLMPreflight:
     """Resolve and check a run scaffold without model or provider execution."""
 
     try:
+        cfg = config or RLMConfig()
+        reported_capacity = _snapshot_subcall_input_capacity(environment, subcalls)
+        cfg = _with_resolved_subcall_input_capacity(cfg, reported_capacity)
         resolved, _ = _prepare_rlm_scaffold(
             environment=environment,
-            config=config,
+            config=cfg,
             system_prompt=system_prompt,
             system_prompt_additions=system_prompt_additions,
             user_prompt_template=user_prompt_template,
@@ -317,6 +327,11 @@ class _SubcallGate:
     def output_token_limit(self) -> int | None:
         """Forward optional planning metadata without changing the base protocol."""
         return getattr(self._subcalls, "output_token_limit")
+
+    @property
+    def input_token_capacity(self) -> SubcallInputCapacity:
+        """Forward optional planning metadata without changing the base protocol."""
+        return getattr(self._subcalls, "input_token_capacity")
 
     def block(self) -> None:
         """Permanently revoke this run's model-visible subcall bindings."""
@@ -425,6 +440,35 @@ def _reported_subcall_concurrency(subcalls: SubcallClient) -> int | object:
     return validate_subcall_concurrency(concurrency)
 
 
+def _with_resolved_subcall_input_capacity(
+    cfg: "RLMConfig", reported: SubcallInputCapacity
+) -> "RLMConfig":
+    resolved = resolve_subcall_input_capacity(
+        cfg.rollout.subcall_input_capacity,
+        reported,
+    )
+    if resolved == cfg.rollout.subcall_input_capacity:
+        return cfg
+    return replace(cfg, rollout=replace(cfg.rollout, subcall_input_capacity=resolved))
+
+
+def _snapshot_subcall_input_capacity(
+    environment: RLMEnvironment,
+    subcalls: SubcallClient | None,
+) -> SubcallInputCapacity:
+    """Read one host-owned capacity snapshot before scaffold resolution."""
+
+    environment_snapshot = getattr(environment, "subcall_input_capacity", None)
+    if callable(environment_snapshot):
+        value = environment_snapshot()
+        if not isinstance(value, SubcallInputCapacity):
+            raise TypeError("environment subcall_input_capacity must return SubcallInputCapacity")
+        return value
+    if subcalls is None:
+        return SubcallInputCapacity.unknown()
+    return reported_subcall_input_capacity(subcalls)
+
+
 def _budget_prompt(cfg: "RLMConfig", subcalls: SubcallClient) -> str:
     limit = _reported_output_token_limit(subcalls)
     if limit is _UNKNOWN_OUTPUT_TOKEN_LIMIT:
@@ -433,6 +477,7 @@ def _budget_prompt(cfg: "RLMConfig", subcalls: SubcallClient) -> str:
         rendered_limit = "unbounded (deliberate)"
     else:
         rendered_limit = f"{limit} (bounded)"
+    rendered_input_capacity = render_subcall_input_capacity(cfg.rollout.subcall_input_capacity)
     return (
         "## Authorized compute\n"
         f"tokens={cfg.budget.tokens}; subcalls={cfg.budget.subcalls}; "
@@ -440,6 +485,9 @@ def _budget_prompt(cfg: "RLMConfig", subcalls: SubcallClient) -> str:
         f"root_output_tokens_per_call={cfg.budget.root_output_tokens}; "
         f"subcall_output_tokens_per_call={cfg.budget.subcall_output_tokens}\n"
         f"client_reported_subcall_output_limit={rendered_limit}\n"
+        f"subcall_input_capacity={rendered_input_capacity}\n"
+        "Input capacity guides prompt/context chunking only; it does not increase "
+        "the per-call subcall output-token limit.\n"
         f"Sandbox output_chars_per_iteration={cfg.sandbox.output_chars}."
     )
 
@@ -613,19 +661,6 @@ def run_rlm(
                 "rollout concurrency does not match the subcall client: "
                 f"{cfg.rollout.concurrency} != {reported_concurrency}"
             )
-        resolved_scaffold, env_globals = _prepare_rlm_scaffold(
-            environment=environment,
-            config=cfg,
-            system_prompt=system_prompt,
-            system_prompt_additions=system_prompt_additions,
-            user_prompt_template=user_prompt_template,
-            refinement_prompt_template=refinement_prompt_template,
-            prompt_pack=prompt_pack,
-            consumer_prompt_catalog=consumer_prompt_catalog,
-        )
-        cfg = resolved_scaffold.config
-        resolved_prompt_pack = resolved_scaffold.prompt_pack
-        prompt_pack_record = resolved_scaffold.prompt_pack_record
         if context is None:
             context = create_execution_context(
                 budget=cfg.budget,
@@ -651,6 +686,21 @@ def run_rlm(
         # The environment contract owns one brokered subcall surface. The host's
         # raw client remains trusted loop state for context binding/accounting.
         sandbox_subcalls = environment.sandbox_subcalls(subcalls, context.ledger)
+        reported_capacity = reported_subcall_input_capacity(sandbox_subcalls)
+        cfg = _with_resolved_subcall_input_capacity(cfg, reported_capacity)
+        resolved_scaffold, env_globals = _prepare_rlm_scaffold(
+            environment=environment,
+            config=cfg,
+            system_prompt=system_prompt,
+            system_prompt_additions=system_prompt_additions,
+            user_prompt_template=user_prompt_template,
+            refinement_prompt_template=refinement_prompt_template,
+            prompt_pack=prompt_pack,
+            consumer_prompt_catalog=consumer_prompt_catalog,
+        )
+        cfg = resolved_scaffold.config
+        resolved_prompt_pack = resolved_scaffold.prompt_pack
+        prompt_pack_record = resolved_scaffold.prompt_pack_record
         answer = env_globals.get("answer")
         if not isinstance(answer, dict):
             answer = {"content": "", "ready": False}

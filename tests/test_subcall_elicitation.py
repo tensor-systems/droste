@@ -133,11 +133,21 @@ def test_full_tips_wire_into_built_system_prompt() -> None:
     assert "WHERE" in prompt and "WHAT" in prompt  # dspy rule 4
     assert "EXPLORE FIRST" in prompt
     assert "llm_query_batched" in prompt  # canonical batch name, incl. worked example
-    assert "~100K characters" in prompt  # batching budget
-    assert "input capacity does not increase the per-call output-token limit" in prompt
+    assert "exact bounded input capacity" in prompt
+    assert "~100K" not in prompt
+    assert "input capacity does not increase the per-call output-token limit" in prompt.casefold()
     assert "structured or map-reduce work" in prompt
     assert "~20 prompts" in prompt
     assert "just read it" in prompt  # balancing nuance: search-pinned answers
+
+
+def test_map_reduce_tip_is_complete_python_without_fixed_character_chunking() -> None:
+    tip = next(value for value in TIPS_PROFILES["full"] if "Worked pattern" in value)
+    code = tip.split("```python\n", 1)[1].split("```", 1)[0]
+
+    compile(code, "<map-reduce-tip>", "exec")
+    assert "def map_reduce(chunks):" in code
+    assert "chunk_size" not in code
 
 
 def test_minimal_tips_are_compact_subset() -> None:
@@ -172,13 +182,13 @@ def test_run_rlm_default_profile_carries_tips_to_root_llm() -> None:
 # --- context size + preview in prompt_fragment -------------------------
 
 
-def test_prompt_fragment_includes_length_preview_and_subcall_capacity() -> None:
+def test_prompt_fragment_includes_length_preview_without_guessing_subcall_capacity() -> None:
     context = "alpha beta gamma " * 100  # 1,700 chars
     frag = _runner_env(context).prompt_fragment()
     assert "`context` is a str of 1,700 characters" in frag
     assert "alpha beta gamma" in frag  # head preview
     assert "..." in frag  # preview truncation marker
-    assert "roughly ~100k tokens" in frag
+    assert "100k" not in frag.casefold()
 
 
 def test_prompt_fragment_describes_files_dict_shape_not_raw_dump() -> None:
@@ -314,7 +324,7 @@ def test_runner_complete_default_budget_allows_subcalls() -> None:
     try:
         response = run(
             {
-                "protocol_version": 4,
+                "protocol_version": 5,
                 "model": "test-model",
                 "question": "q",
                 "budget": Budget().as_dict(),
@@ -332,7 +342,7 @@ def test_runner_complete_default_budget_allows_subcalls() -> None:
     assert response["answer"] == "got: sub"
     assert response["subcalls"] == 1
     assert response["prompt_pack"]["id"] == "droste.generic.full"
-    assert response["prompt_pack"]["revision"] == "1.0.2"
+    assert response["prompt_pack"]["revision"] == "1.0.3"
     assert response["prompt_pack"]["profile"] == "full"
     assert response["prompt_pack"]["resolution_tier"] == "generic"
     assert response["prompt_pack"]["model_family"] == "generic"
@@ -382,7 +392,7 @@ def test_runner_zero_subcall_budget_is_honored() -> None:
     try:
         response = run(
             {
-                "protocol_version": 4,
+                "protocol_version": 5,
                 "model": "test-model",
                 "question": "q",
                 "budget": Budget(subcalls=0).as_dict(),
