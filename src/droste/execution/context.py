@@ -142,8 +142,12 @@ class ExecutionContext:
         if (
             capability_id.kind is not CapabilityKind.INFERENCE
             or capability_id.provider_type != "subcall"
-            or self._iteration == 0
         ):
+            return
+        # Environment capabilities may be exercised directly for probes and
+        # tests. Without an active loop iteration there is no run-stream fact
+        # to label, so do not manufacture an invalid iteration number.
+        if self._iteration == 0:
             return
         value: dict[str, Any] = {
             "type": "subcall",
@@ -162,8 +166,9 @@ class ExecutionContext:
             prompts = (
                 event.call.args[0] if event.call.args else event.call.kwargs.get("prompts", ())
             )
-            if isinstance(prompts, (FrozenList, FrozenTuple)) and prompts.items:
-                value["batch_count"] = len(prompts.items)
+            if not isinstance(prompts, (FrozenList, FrozenTuple)):
+                raise TypeError("batch subcall observation requires a frozen prompt sequence")
+            value["batch_count"] = len(prompts.items)
         self.emit_event(value)
 
     @property

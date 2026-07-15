@@ -129,13 +129,12 @@ function validSubcallBody(body: Record<string, unknown>): boolean {
       if (!validStringObject(error, ["code", "type"])) return false;
     } else if (error !== undefined) return false;
   }
-  if (
-    body.batch_count !== undefined &&
-    (!isInteger(body.batch_count) || body.batch_count < 1)
-  ) {
-    return false;
-  }
-  return true;
+  const isBatch = body.operation === "llm_batch" ||
+    body.operation === "llm_batch_with_errors";
+  if (isBatch && body.batch_count === undefined) return false;
+  if (!isBatch && body.batch_count !== undefined) return false;
+  return body.batch_count === undefined ||
+    (isInteger(body.batch_count) && body.batch_count >= 0);
 }
 
 function validBody(type: string, body: Record<string, unknown>): boolean {

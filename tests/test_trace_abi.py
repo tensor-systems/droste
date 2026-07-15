@@ -254,6 +254,43 @@ def test_batch_fanout_uses_call_identity_without_body_sequence() -> None:
     assert all(set(event).isdisjoint({"prompt", "context", "result"}) for event in lifecycle)
 
 
+def test_empty_batch_still_reports_its_explicit_zero_count() -> None:
+    events: list[dict[str, object]] = []
+    context = create_execution_context(
+        budget=Budget(tokens=100_000, subcalls=10),
+        on_event=events.append,
+    )
+    context.begin_iteration(1)
+    subcalls = broker_subcalls(
+        MockSubcallClient(context=context),
+        context.ledger,
+        attempt_observer=context.observe_capability_attempt,
+    )
+
+    assert subcalls.llm_batch([]) == []
+
+    lifecycle = [event for event in events if event["type"] == "subcall"]
+    assert [event["phase"] for event in lifecycle] == ["start", "completion"]
+    assert [event["batch_count"] for event in lifecycle] == [0, 0]
+
+
+def test_direct_subcall_outside_a_run_does_not_invent_an_iteration() -> None:
+    events: list[dict[str, object]] = []
+    context = create_execution_context(
+        budget=Budget(tokens=100_000, subcalls=10),
+        on_event=events.append,
+    )
+    subcalls = broker_subcalls(
+        MockSubcallClient(context=context),
+        context.ledger,
+        attempt_observer=context.observe_capability_attempt,
+    )
+
+    assert subcalls.llm_query("prompt") == ""
+
+    assert all(event["type"] != "subcall" for event in events)
+
+
 def test_run_record_allows_repeated_durable_budget_mutations() -> None:
     recorder = TraceRecorder(run_id="budget-ledger")
     recorder.append(
@@ -419,6 +456,29 @@ def test_lifecycle_bodies_are_strict_discriminated_values() -> None:
                 "iteration": 1,
                 "reservation": {"tokens": 1, "subcalls": 1, "wall_ms": 1, "depth": 0},
                 "batch_id": "redundant-call-identity",
+            }
+        )
+    with pytest.raises(ValueError, match="batch subcall requires batch_count"):
+        recorder.append(
+            {
+                "type": "subcall",
+                "phase": "start",
+                "call_id": "call-1",
+                "operation": "llm_batch",
+                "iteration": 1,
+                "reservation": {"tokens": 1, "subcalls": 1, "wall_ms": 1, "depth": 0},
+            }
+        )
+    with pytest.raises(ValueError, match="unary subcall cannot carry batch_count"):
+        recorder.append(
+            {
+                "type": "subcall",
+                "phase": "start",
+                "call_id": "call-1",
+                "operation": "llm_query",
+                "iteration": 1,
+                "reservation": {"tokens": 1, "subcalls": 1, "wall_ms": 1, "depth": 0},
+                "batch_count": 1,
             }
         )
     with pytest.raises(ValueError, match="unknown body fields: detail"):

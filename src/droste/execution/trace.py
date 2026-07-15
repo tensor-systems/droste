@@ -272,8 +272,13 @@ def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
                 name="subcall.error",
                 fields={"code": str, "type": str},
             )
-        if "batch_count" in body and body["batch_count"] < 1:
-            raise ValueError("subcall batch_count must be positive")
+        is_batch = body["operation"] in {"llm_batch", "llm_batch_with_errors"}
+        if is_batch and "batch_count" not in body:
+            raise ValueError("batch subcall requires batch_count")
+        if not is_batch and "batch_count" in body:
+            raise ValueError("unary subcall cannot carry batch_count")
+        if "batch_count" in body and body["batch_count"] < 0:
+            raise ValueError("subcall batch_count must be non-negative")
     elif event_type == "repair":
         if body["phase"] not in {"start", "completion", "failure"}:
             raise ValueError("repair phase is not recognized by Trace ABI v2")

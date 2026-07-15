@@ -184,6 +184,35 @@ Deno.test("rejects malformed and unknown discriminated lifecycle bodies", () => 
       secret: "not in the ABI",
     })),
   );
+  assert(
+    !isRlmEvent(wire("subcall", {
+      phase: "start",
+      call_id: "batch",
+      operation: "llm_batch",
+      iteration: 1,
+      reservation: { tokens: 1, subcalls: 1, wall_ms: 1, depth: 0 },
+    })),
+  );
+  assert(
+    !isRlmEvent(wire("subcall", {
+      phase: "start",
+      call_id: "query",
+      operation: "llm_query",
+      iteration: 1,
+      reservation: { tokens: 1, subcalls: 1, wall_ms: 1, depth: 0 },
+      batch_count: 1,
+    })),
+  );
+  assert(
+    isRlmEvent(wire("subcall", {
+      phase: "start",
+      call_id: "empty-batch",
+      operation: "llm_batch",
+      iteration: 1,
+      reservation: { tokens: 0, subcalls: 0, wall_ms: 1, depth: 0 },
+      batch_count: 0,
+    })),
+  );
 });
 
 Deno.test("successful output beginning ERROR remains an output event", () => {

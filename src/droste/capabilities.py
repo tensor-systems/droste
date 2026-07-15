@@ -16,7 +16,7 @@ import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from threading import Event, Lock
+from threading import Event, Lock, RLock
 from time import monotonic
 from types import MappingProxyType
 from typing import Any, Protocol
@@ -1120,16 +1120,30 @@ class _CapabilityAttemptController:
         admission: CapabilityAdmission,
         authority: CapabilityAttemptAuthority | None,
         *,
-        on_checkpoint: Callable[[CapabilityCall, CapabilityCheckpoint], None] | None = None,
+        on_attempt: (
+            Callable[
+                [
+                    CapabilityAttemptPhase,
+                    CapabilityCall,
+                    CapabilityCheckpoint,
+                    CapabilityError | None,
+                ],
+                None,
+            ]
+            | None
+        ) = None,
         clock: Callable[[], float] = monotonic,
     ) -> None:
         self.call = call
         self._authority = authority
         self._clock = clock
-        self._on_checkpoint = on_checkpoint
+        self._on_attempt = on_attempt
         self._cancelled = Event()
         self._lock = Lock()
         self._transition_lock = Lock()
+        # This lock orders observer callbacks only; it protects no broker or
+        # accounting state and is reentrant for observational sinks.
+        self._observation_lock = RLock()
         self._checkpoint_value = CapabilityCheckpoint()
         self._finishing = False
         self._settled = False
@@ -1181,42 +1195,59 @@ class _CapabilityAttemptController:
     def checkpoint(self, cumulative: CapabilityCheckpoint) -> CapabilityCheckpoint:
         if not isinstance(cumulative, CapabilityCheckpoint):
             raise TypeError("capability checkpoint requires a CapabilityCheckpoint")
-        with self._transition_lock:
-            with self._lock:
-                if self._finishing or self._settled:
-                    raise RuntimeError("capability attempt is already finalizing")
-                error = self._terminal_error_locked()
+        # Claim observation order before changing checkpoint state. Terminal
+        # accounting may proceed concurrently, but its observer waits on this
+        # lock, so progress is delivered first without invoking a sink under a
+        # state or accounting lock.
+        with self._observation_lock:
+            with self._transition_lock:
+                with self._lock:
+                    if self._finishing or self._settled:
+                        raise RuntimeError("capability attempt is already finalizing")
+                    error = self._terminal_error_locked()
+                    if error is not None:
+                        if error.code == CapabilityErrorCode.CANCELLED:
+                            raise CapabilityCancelled(error.message)
+                        raise CapabilityDeadlineExceeded(error.message)
+                    previous = self._checkpoint_value
+                    if (
+                        cumulative.tokens < previous.tokens
+                        or cumulative.subcalls < previous.subcalls
+                    ):
+                        raise ValueError("capability checkpoint cannot move backward")
+                    if cumulative.tokens > self.context.reservation.tokens:
+                        raise ValueError("capability checkpoint tokens exceed reservation")
+                    if cumulative.subcalls > self.context.reservation.subcalls:
+                        raise ValueError("capability checkpoint subcalls exceed reservation")
+                    if cumulative == previous:
+                        return previous
+                # Accounting may synchronously deliver its own facts. Never
+                # hold the attempt state lock while calling that authority.
+                if self._authority is not None:
+                    cumulative = self._authority.checkpoint(self.call, cumulative)
+                    if not isinstance(cumulative, CapabilityCheckpoint):
+                        raise TypeError("attempt authority must return a CapabilityCheckpoint")
+                with self._lock:
+                    self._checkpoint_value = cumulative
+                    error = self._terminal_error_locked()
                 if error is not None:
                     if error.code == CapabilityErrorCode.CANCELLED:
                         raise CapabilityCancelled(error.message)
                     raise CapabilityDeadlineExceeded(error.message)
-                previous = self._checkpoint_value
-                if cumulative.tokens < previous.tokens or cumulative.subcalls < previous.subcalls:
-                    raise ValueError("capability checkpoint cannot move backward")
-                if cumulative.tokens > self.context.reservation.tokens:
-                    raise ValueError("capability checkpoint tokens exceed reservation")
-                if cumulative.subcalls > self.context.reservation.subcalls:
-                    raise ValueError("capability checkpoint subcalls exceed reservation")
-                if cumulative == previous:
-                    return previous
-            # Accounting may synchronously deliver observational events. Never
-            # hold the attempt state lock while calling that external seam.
-            if self._authority is not None:
-                cumulative = self._authority.checkpoint(self.call, cumulative)
-                if not isinstance(cumulative, CapabilityCheckpoint):
-                    raise TypeError("attempt authority must return a CapabilityCheckpoint")
-            with self._lock:
-                self._checkpoint_value = cumulative
-                error = self._terminal_error_locked()
-            if error is not None:
-                if error.code == CapabilityErrorCode.CANCELLED:
-                    raise CapabilityCancelled(error.message)
-                raise CapabilityDeadlineExceeded(error.message)
-            # Serialize observation with begin_finish so a delayed progress
-            # callback cannot appear after the terminal attempt fact.
-            if self._on_checkpoint is not None:
-                self._on_checkpoint(self.call, cumulative)
+            if self._on_attempt is not None:
+                self._on_attempt(CapabilityAttemptPhase.PROGRESS, self.call, cumulative, None)
         return cumulative
+
+    def observe_terminal(
+        self,
+        phase: CapabilityAttemptPhase,
+        error: CapabilityError | None,
+    ) -> None:
+        """Deliver the terminal fact after every accepted progress callback."""
+
+        with self._observation_lock:
+            if self._on_attempt is not None:
+                self._on_attempt(phase, self.call, self.checkpoint_value, error)
 
     @property
     def checkpoint_value(self) -> CapabilityCheckpoint:
@@ -1426,10 +1457,13 @@ class CapabilityBroker:
                 call,
                 admission,
                 self._attempt_authority,
-                on_checkpoint=lambda observed_call, checkpoint: self.emit_attempt(
-                    CapabilityAttemptPhase.PROGRESS,
-                    observed_call,
-                    checkpoint=checkpoint,
+                on_attempt=lambda phase, observed_call, checkpoint, observed_error: (
+                    self.emit_attempt(
+                        phase,
+                        observed_call,
+                        checkpoint=checkpoint,
+                        error=observed_error,
+                    )
                 ),
                 clock=self._clock,
             )
@@ -1699,15 +1733,13 @@ class CapabilityBroker:
             child_run_id=metadata.child_run_id,
         )
         if attempt is not None:
-            self.emit_attempt(
+            attempt.observe_terminal(
                 (
                     CapabilityAttemptPhase.COMPLETION
                     if envelope.ok
                     else CapabilityAttemptPhase.FAILURE
                 ),
-                call,
-                checkpoint=attempt.checkpoint_value,
-                error=envelope.error,
+                envelope.error,
             )
         self.emit(envelope)
         if annotation_control is not None:

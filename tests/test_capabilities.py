@@ -284,6 +284,53 @@ def test_progress_observation_precedes_the_terminal_attempt_fact() -> None:
     ]
 
 
+def test_progress_observer_can_reentrantly_checkpoint_without_deadlock() -> None:
+    authority = _AttemptAuthority()
+    phases: list[CapabilityAttemptPhase] = []
+    contexts: list[CapabilityExecutionContext] = []
+    reentered = False
+
+    def observer(event) -> None:
+        nonlocal reentered
+        phases.append(event.phase)
+        if event.phase is CapabilityAttemptPhase.PROGRESS and not reentered:
+            reentered = True
+            contexts[0].checkpoint(tokens=20, subcalls=1)
+
+    def handler(context: CapabilityExecutionContext) -> str:
+        contexts.append(context)
+        context.checkpoint(tokens=10, subcalls=1)
+        return "ok"
+
+    broker = CapabilityBroker(
+        (CapabilityRegistration(QUERY, handler),),
+        run_id="run-1",
+        attempt_authority=authority,
+        attempt_observer=observer,
+    )
+    results = []
+    worker = Thread(
+        target=lambda: results.append(
+            broker.dispatch(CapabilityCall(QUERY.capability_id, "call-1", "run-1"))
+        )
+    )
+    worker.start()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert results[0].ok is True
+    assert phases == [
+        CapabilityAttemptPhase.START,
+        CapabilityAttemptPhase.PROGRESS,
+        CapabilityAttemptPhase.PROGRESS,
+        CapabilityAttemptPhase.COMPLETION,
+    ]
+    assert authority.checkpoints == [
+        CapabilityCheckpoint(10, 1),
+        CapabilityCheckpoint(20, 1),
+    ]
+
+
 def test_deadline_before_handler_is_typed_and_releases_at_admission_boundary() -> None:
     authority = _AttemptAuthority(deadline=10.0)
     invoked = False
