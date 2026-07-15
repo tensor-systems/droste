@@ -9,6 +9,13 @@ This project uses **uv** as the default package manager.
 - Add a dev dependency: `uv add --group dev <package>`
 - Run tests: `uv run pytest`
 
+## CI Runners
+
+- CI targets the organization runner labels `[self-hosted, macOS, ARM64]`.
+- Keep workflows host-agnostic: do not encode runner names, network addresses,
+  credentials, or mutable machine state. Preserve job names because they are
+  part of the required-check contract.
+
 ## Policy Hints (Contract Enforcement)
 
 droste does **not** infer semantic or count intent from the question text.
