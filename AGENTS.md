@@ -408,7 +408,10 @@ The package ships on public PyPI, released by CI — never by hand:
    degradations, and PR bodies don't reach public users.
 1. Bump `version` in `pyproject.toml`, run `uv lock` (the lockfile pins the
    project's own version — `uv sync --locked` in the release job aborts on a
-   stale one), and merge both to main.
+   stale one), and merge both to main. Before tagging, verify that release
+   workflow changes (including runner selection) are already merged: a tag
+   runs the workflow definition at its tagged commit, not the newer one on
+   `main`.
 2. Tag the merge commit `vX.Y.Z` and push the tag.
 3. `.github/workflows/release.yml` runs tests, builds sdist+wheel,
    publishes to PyPI via **trusted publishing** (OIDC — no token secret),
@@ -419,6 +422,11 @@ The package ships on public PyPI, released by CI — never by hand:
    return exit 0. The mocked e2e suite cannot see edge/WAF behavior — a
    Cloudflare rule once blocked every fresh install by User-Agent (#49)
    while the whole suite stayed green.
+
+Release tags are immutable. Rerun the unchanged job for a transient failure,
+but never delete, move, or recreate a failed tag. If the workflow definition
+itself needs a fix, merge that fix first and release a new version/tag; a change
+on `main` cannot repair the workflow attached to the old tag (#147).
 
 The PyPI trusted publisher (project `droste` → Publishing) must name this
 repo and `release.yml`. A local `uv build && uv publish` remains possible
