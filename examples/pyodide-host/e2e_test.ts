@@ -17,6 +17,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import { copy } from "jsr:@std/fs@1/copy";
 import { spawn } from "node:child_process";
 import { dirname } from "node:path";
+import type { Readable } from "node:stream";
 import { isRlmEvent } from "../../src/droste/substrates/_relay/events.ts";
 
 const HERE = new URL(".", import.meta.url).pathname;
@@ -52,6 +53,67 @@ async function collectNodeStream(
     text += decoder.decode(chunk, { stream: true });
   }
   return text + decoder.decode();
+}
+
+function captureNodeStream(stream: Readable): {
+  firstLine: Promise<string>;
+  completed: Promise<string>;
+} {
+  const decoder = new TextDecoder();
+  let text = "";
+  let firstLineSettled = false;
+  let resolveFirstLine!: (line: string) => void;
+  let rejectFirstLine!: (error: Error) => void;
+  const firstLine = new Promise<string>((resolve, reject) => {
+    resolveFirstLine = resolve;
+    rejectFirstLine = reject;
+  });
+  const completed = new Promise<string>((resolve, reject) => {
+    stream.on("data", (chunk: Uint8Array) => {
+      text += decoder.decode(chunk, { stream: true });
+      const newline = text.indexOf("\n");
+      if (!firstLineSettled && newline >= 0) {
+        firstLineSettled = true;
+        resolveFirstLine(text.slice(0, newline));
+      }
+    });
+    stream.once("error", (error) => {
+      if (!firstLineSettled) {
+        firstLineSettled = true;
+        rejectFirstLine(error);
+      }
+      reject(error);
+    });
+    stream.once("end", () => {
+      text += decoder.decode();
+      if (!firstLineSettled) {
+        firstLineSettled = true;
+        rejectFirstLine(new Error("stream ended before its first line"));
+      }
+      resolve(text);
+    });
+  });
+  return { firstLine, completed };
+}
+
+async function waitBounded<T>(
+  promise: Promise<T>,
+  description: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`timed out waiting for ${description}`)),
+          10_000,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 // A minimal ModelRelay stand-in: any POST to /responses gets one scripted
@@ -121,6 +183,49 @@ function startFailingMockModelRelay(): Promise<
   });
 }
 
+function startGatedMockModelRelay(): Promise<{
+  port: number;
+  requestStarted: Promise<void>;
+  release: () => void;
+  shutdown: () => Promise<void>;
+}> {
+  let markRequestStarted!: () => void;
+  const requestStarted = new Promise<void>((resolve) => {
+    markRequestStarted = resolve;
+  });
+  let releaseResponse!: () => void;
+  const responseGate = new Promise<void>((resolve) => {
+    releaseResponse = resolve;
+  });
+  const server = Deno.serve(
+    { port: 0, hostname: "127.0.0.1", onListen: () => {} },
+    async (req) => {
+      if (
+        req.method === "POST" &&
+        new URL(req.url).pathname.endsWith("/responses")
+      ) {
+        await req.json();
+        markRequestStarted();
+        await responseGate;
+        return Response.json({
+          output: [{
+            type: "message",
+            role: "assistant",
+            content: [{ type: "text", text: QUERY_CODE }],
+          }],
+        });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  );
+  return Promise.resolve({
+    port: (server.addr as Deno.NetAddr).port,
+    requestStarted,
+    release: releaseResponse,
+    shutdown: () => server.shutdown(),
+  });
+}
+
 async function buildTempSources(): Promise<string> {
   // Copy, not symlink: Pyodide's mountNodeFS does not reliably follow
   // symlinked entries inside the mounted directory (a symlinked .py file
@@ -155,6 +260,11 @@ async function buildTempSources(): Promise<string> {
     `${dir}/_runner_protocol_adapter.py`,
     { overwrite: true },
   );
+  await copy(
+    `${HERE}_large_event_adapter.py`,
+    `${dir}/_large_event_adapter.py`,
+    { overwrite: true },
+  );
   return dir;
 }
 
@@ -185,6 +295,44 @@ async function runRelayRaw(
   env: Record<string, string>,
   adapterModule = "pyodide_host_adapter",
 ): Promise<{ lastLine: string; stderrText: string; eventText: string }> {
+  const child = spawnRelayRaw(sourcesDir, request, port, env, adapterModule);
+  const completion = probeCompletion(child);
+  const stdoutPromise = collectNodeStream(child.stdout!);
+  const stderrPromise = collectNodeStream(child.stderr!);
+  const eventPromise = collectNodeStream(
+    child.stdio[3] as AsyncIterable<Uint8Array>,
+  );
+  const [{ code, signal }, stdoutText, stderrText, eventText] = await Promise
+    .all([
+      completion,
+      stdoutPromise,
+      stderrPromise,
+      eventPromise,
+    ]);
+  if (code !== 0) {
+    throw new Error(
+      `relay.ts exited ${
+        code ?? signal
+      }\nstdout: ${stdoutText}\nstderr: ${stderrText}`,
+    );
+  }
+  const lines = stdoutText.trimEnd().split("\n");
+  assertEquals(
+    lines.length,
+    1,
+    `stdout must contain one HostResponse:\n${stdoutText}`,
+  );
+  JSON.parse(lines[0]);
+  return { lastLine: lines[0], stderrText, eventText };
+}
+
+function spawnRelayRaw(
+  sourcesDir: string,
+  request: Record<string, unknown>,
+  port: number,
+  env: Record<string, string>,
+  adapterModule = "pyodide_host_adapter",
+) {
   const child = spawn(
     "deno",
     [
@@ -209,42 +357,8 @@ async function runRelayRaw(
       stdio: ["pipe", "pipe", "pipe", "pipe"],
     },
   );
-  const completion = new Promise<
-    { code: number | null; signal: string | null }
-  >(
-    (resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) => resolve({ code, signal }));
-    },
-  );
-  const stdoutPromise = collectNodeStream(child.stdout!);
-  const stderrPromise = collectNodeStream(child.stderr!);
-  const eventPromise = collectNodeStream(
-    child.stdio[3] as AsyncIterable<Uint8Array>,
-  );
   child.stdin!.end(JSON.stringify(request));
-  const [{ code, signal }, stdoutText, stderrText, eventText] = await Promise
-    .all([
-      completion,
-      stdoutPromise,
-      stderrPromise,
-      eventPromise,
-    ]);
-  if (code !== 0) {
-    throw new Error(
-      `relay.ts exited ${
-        code ?? signal
-      }\nstdout: ${stdoutText}\nstderr: ${stderrText}`,
-    );
-  }
-  const lines = stdoutText.trimEnd().split("\n");
-  assertEquals(
-    lines.length,
-    1,
-    `stdout must contain one HostResponse:\n${stdoutText}`,
-  );
-  JSON.parse(lines[0]);
-  return { lastLine: lines[0], stderrText, eventText };
+  return child;
 }
 
 async function runRelay(
@@ -318,6 +432,12 @@ Deno.test("large response, diagnostic, and event lanes drain independently", asy
   const frames = result.events.trimEnd().split("\n");
   assertEquals(frames.length, 65);
   assert(frames.every(isRlmEvent));
+  const events = frames.map((frame) => JSON.parse(frame));
+  assertEquals(events[0].type, "startup");
+  assert(events.every((event) => event.type !== "done"));
+  assertEquals(events.map((event) => event.seq), [
+    ...Array.from({ length: 65 }, (_, index) => index + 1),
+  ]);
   assert(result.stderr.length > 4_000_000);
   assert(result.events.length > 4_000_000);
 });
@@ -340,26 +460,80 @@ Deno.test("cancellation leaves a valid nonterminal event prefix", async () => {
   const events = collectNodeStream(
     child.stdio[3] as AsyncIterable<Uint8Array>,
   );
+  const diagnostics = captureNodeStream(child.stderr!);
   const completion = probeCompletion(child);
-  await new Promise<void>((resolve, reject) => {
-    child.stderr!.once("data", (chunk) => {
-      assertEquals(
-        new TextDecoder().decode(chunk),
-        "event-channel-probe-ready\n",
-      );
-      resolve();
-    });
-    child.once("error", reject);
-  });
+  assertEquals(
+    await waitBounded(diagnostics.firstLine, "probe readiness"),
+    "event-channel-probe-ready",
+  );
   assert(child.kill("SIGTERM"));
   const status = await completion;
   assertEquals(status.code, null);
   assertEquals(status.signal, "SIGTERM");
   assertEquals(await stdout, "");
+  assertEquals(await diagnostics.completed, "event-channel-probe-ready\n");
   const frames = (await events).trimEnd().split("\n");
   assertEquals(frames.length, 1);
   assert(isRlmEvent(frames[0]));
   assertEquals(JSON.parse(frames[0]).type, "startup");
+});
+
+Deno.test("relay hard cancellation and process death leave only a nonterminal prefix", async () => {
+  const sourcesDir = await buildTempSources();
+  const dbPath = await buildTempDb();
+  for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+    const server = await startGatedMockModelRelay();
+    const child = spawnRelayRaw(
+      sourcesDir,
+      {
+        question: "wait for hard stop",
+        db_path: dbPath,
+        root_model: "test-model",
+        base_url: `http://127.0.0.1:${server.port}/api/v1`,
+        api_key: "test-key",
+        budget: TEST_BUDGET,
+      },
+      server.port,
+      {},
+    );
+    const completion = probeCompletion(child);
+    const stdout = collectNodeStream(child.stdout!);
+    const diagnostics = collectNodeStream(child.stderr!);
+    const eventCapture = captureNodeStream(child.stdio[3] as Readable);
+    try {
+      assertEquals(
+        JSON.parse(
+          await waitBounded(eventCapture.firstLine, `${signal} startup event`),
+        ).type,
+        "startup",
+      );
+      await waitBounded(server.requestStarted, `${signal} provider request`);
+      assert(child.kill(signal));
+      const status = await waitBounded(completion, `${signal} process exit`);
+      assertEquals(status.code, null);
+      assertEquals(status.signal, signal);
+      assertEquals(await stdout, "");
+      const diagnosticText = await diagnostics;
+      assert(
+        diagnosticText.trimEnd().split("\n").filter(Boolean).every((line) =>
+          !isRlmEvent(line)
+        ),
+      );
+      const eventText = await eventCapture.completed;
+      const frames = eventText.trimEnd().split("\n");
+      assert(frames.every(isRlmEvent));
+      const events = frames.map((frame) => JSON.parse(frame));
+      assertEquals(events[0].type, "startup");
+      assert(events.every((event) => event.type !== "done"));
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+        await completion.catch(() => {});
+      }
+      server.release();
+      await server.shutdown();
+    }
+  }
 });
 
 async function runRelayEventChannelFailure(
@@ -433,6 +607,35 @@ Deno.test({
 
 Deno.test({
   name:
+    "relay.ts drains a large canonical event on fd3 without polluting stdout or fd2",
+  fn: async () => {
+    const { port, shutdown } = await startMockModelRelay();
+    try {
+      const sourcesDir = await buildTempSources();
+      const { lastLine, stderrText, eventText } = await runRelayRaw(
+        sourcesDir,
+        {},
+        port,
+        {},
+        "_large_event_adapter",
+      );
+      assertEquals(JSON.parse(lastLine), { answer: "ok", error: null });
+      assertEquals(stderrText, "");
+      const frames = eventText.trimEnd().split("\n");
+      assertEquals(frames.length, 2);
+      assert(frames.every(isRlmEvent));
+      assertEquals(JSON.parse(frames[0]).type, "startup");
+      const largeEvent = JSON.parse(frames[1]);
+      assertEquals(largeEvent.type, "code");
+      assertEquals(largeEvent.code.length, 1_048_576);
+    } finally {
+      await shutdown();
+    }
+  },
+});
+
+Deno.test({
+  name:
     "relay.ts + pyodide_host_adapter.py: brokered provider, real subprocess + Pyodide + mocked ModelRelay",
   fn: async () => {
     const { port, rootPayloads, shutdown } = await startMockModelRelay();
@@ -462,11 +665,13 @@ Deno.test({
       assertEquals(rootPayloads[0].reasoning_effort, "none");
       // Contract handshake (#33): the relay announces engine + protocol
       // versions on the dedicated event descriptor before doing any work.
-      const startup = eventText.split("\n")
-        .filter((l) => l.trim().startsWith("{"))
-        .map((l) => JSON.parse(l))
-        .find((e) => e.type === "startup");
-      assert(startup, `no startup handshake event on fd3:\n${eventText}`);
+      const eventFrames = eventText.trimEnd().split("\n");
+      assert(
+        eventFrames.length > 1 && eventFrames.every(isRlmEvent),
+        `fd3 must contain only canonical events:\n${eventText}`,
+      );
+      const startup = JSON.parse(eventFrames[0]);
+      assertEquals(startup.type, "startup");
       assert(
         !stderrText.split("\n").some((line) => line.trim().startsWith("{")),
         `fd2 must remain diagnostic-only:\n${stderrText}`,
