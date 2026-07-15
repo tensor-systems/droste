@@ -341,32 +341,56 @@ function spawnRelayRaw(
   port: number,
   env: Record<string, string>,
   adapterModule = "pyodide_host_adapter",
-  eventStdio: "pipe" | number = "pipe",
+  options: {
+    eventStdio?: "pipe" | number;
+    shellParent?: boolean;
+    registerExtraStdio?: boolean;
+  } = {},
 ) {
-  const child = spawn(
-    "deno",
-    [
-      "run",
-      `--allow-net=127.0.0.1:${port}`,
-      // Unscoped read: this dev/CI run uses the ambient Deno cache (Pyodide's
-      // wasm assets live there), unlike a production host's offline bundle
-      // (own isolated DENO_DIR, narrowly --allow-read-scoped — the shape a
-      // host's runner spawn args / the CLI relay invocation use).
-      "--allow-read",
-      "--allow-env",
-      RELAY_TS,
-      sourcesDir,
-      adapterModule,
-    ],
-    {
-      env: {
-        ...Deno.env.toObject(),
-        ...env,
-        DROSTE_RELAY_EVENT_FD: "3",
-      },
-      stdio: ["pipe", "pipe", "pipe", eventStdio],
+  const denoArgs = [
+    "run",
+    `--allow-net=127.0.0.1:${port}`,
+    // Unscoped read: this dev/CI run uses the ambient Deno cache (Pyodide's
+    // wasm assets live there), unlike a production host's offline bundle
+    // (own isolated DENO_DIR, narrowly --allow-read-scoped — the shape a
+    // host's runner spawn args / the CLI relay invocation use).
+    "--allow-read",
+    "--allow-env",
+    RELAY_TS,
+    sourcesDir,
+    adapterModule,
+  ];
+  const shellParent = options.shellParent ?? true;
+  const registerExtraStdio = options.registerExtraStdio ?? true;
+  // A native shell, not Deno's child_process shim, is the relay's immediate
+  // parent. Deno only exposes inherited fd3 to node:fs when the parent sets
+  // DENO_EXTRA_STDIO_FDS; the negative mode proves omission fails closed.
+  const command = shellParent ? "/bin/sh" : Deno.execPath();
+  const args = shellParent
+    ? [
+      "-c",
+      registerExtraStdio
+        ? 'DENO_EXTRA_STDIO_FDS="$DROSTE_RELAY_EVENT_FD" "$@"'
+        : 'unset DENO_EXTRA_STDIO_FDS; "$@"',
+      "droste-relay",
+      Deno.execPath(),
+      ...denoArgs,
+    ]
+    : denoArgs;
+  const child = spawn(command, args, {
+    env: {
+      ...Deno.env.toObject(),
+      ...env,
+      DROSTE_RELAY_EVENT_FD: "3",
+      ...(shellParent ? {} : { DENO_EXTRA_STDIO_FDS: "3" }),
     },
-  );
+    stdio: [
+      "pipe",
+      "pipe",
+      "pipe",
+      options.eventStdio ?? "pipe",
+    ],
+  });
   child.stdin!.end(JSON.stringify(request));
   return child;
 }
@@ -501,6 +525,8 @@ Deno.test("relay hard cancellation and process death leave only a nonterminal pr
       },
       server.port,
       {},
+      "pyodide_host_adapter",
+      { shellParent: false },
     );
     const completion = probeCompletion(child);
     const stdout = collectNodeStream(child.stdout!);
@@ -612,6 +638,40 @@ Deno.test({
 });
 
 Deno.test({
+  name: "external shell parent must register inherited fd3 with Deno",
+  fn: async () => {
+    const child = spawnRelayRaw(
+      "/unused-before-event-channel-validation",
+      {},
+      1,
+      {},
+      "pyodide_host_adapter",
+      { registerExtraStdio: false },
+    );
+    const [status, stdout, stderr, events] = await Promise.all([
+      probeCompletion(child),
+      collectNodeStream(child.stdout!),
+      collectNodeStream(child.stderr!),
+      collectNodeStream(child.stdio[3] as AsyncIterable<Uint8Array>),
+    ]);
+    assertEquals(status, { code: 0, signal: null });
+    assertEquals(JSON.parse(stdout), {
+      answer: null,
+      error: {
+        type: "RelayEventChannelError",
+        code: "descriptor_unavailable",
+        message: "dedicated relay event channel is unavailable",
+      },
+    });
+    assertEquals(
+      stderr,
+      "droste relay: event_channel_error code=descriptor_unavailable\n",
+    );
+    assertEquals(events, "");
+  },
+});
+
+Deno.test({
   name: "relay.ts returns one structured failure when fd3 is read-only",
   fn: async () => {
     const sourcesDir = await buildTempSources();
@@ -623,7 +683,7 @@ Deno.test({
         1,
         {},
         "_large_event_adapter",
-        descriptor,
+        { eventStdio: descriptor },
       );
       const [status, stdout, stderr] = await Promise.all([
         probeCompletion(child),
@@ -652,7 +712,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "relay.ts drains a large canonical event on fd3 without polluting stdout or fd2",
+    "external shell parent preserves a large canonical fd3 event without lane pollution",
   fn: async () => {
     const { port, shutdown } = await startMockModelRelay();
     try {

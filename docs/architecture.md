@@ -300,9 +300,12 @@ decision; the engine never opens a trace store.
 The Deno/Pyodide relay keeps its three process output concerns physically
 separate. fd1 carries exactly one unary response JSON line. A required
 `DROSTE_RELAY_EVENT_FD` names one inherited writable descriptor (fd3 by
-convention) that carries canonical Trace ABI v2 NDJSON only. fd2 carries only
-diagnostics. Missing, malformed, or unavailable event descriptors—and fd0
-through fd2 even when writable—fail closed with a typed
+convention) that carries canonical Trace ABI v2 NDJSON only. An external
+launcher also includes that number in `DENO_EXTRA_STDIO_FDS`, which Deno
+consumes at startup to register inherited descriptors above fd2. Passing an
+OS-level descriptor without this Deno marker leaves it unavailable to relay
+code. fd2 carries only diagnostics. Missing, malformed, or unavailable event
+descriptors—and fd0 through fd2 even when writable—fail closed with a typed
 `RelayEventChannelError`; the relay never retries an event write on fd2. The
 descriptor is mandatory for every invocation, but preflight and pre-admission
 refusal produce zero frames. An admitted run lazily emits

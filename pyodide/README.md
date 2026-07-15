@@ -209,7 +209,7 @@ ordinary hard timeout.
 `relay.ts` takes the adapter module name as its **second CLI argument**:
 
 ```bash
-DROSTE_RELAY_EVENT_FD=3 \
+DENO_EXTRA_STDIO_FDS=3 DROSTE_RELAY_EVENT_FD=3 \
   deno run --allow-net=api.modelrelay.ai --allow-read --allow-env \
   relay.ts <sources> <adapter_module> 3>events.ndjson
 ```
@@ -219,11 +219,19 @@ fd2 and the event descriptor concurrently while it waits for the unary response
 and process exit.
 
 The host must open the named descriptor before launch; fd3 is the convention.
+An external launcher must also include that descriptor in Deno's
+`DENO_EXTRA_STDIO_FDS` startup marker. Deno consumes the marker before user
+JavaScript starts and registers the inherited number for `node:fs`; merely
+passing fd3 from a shell or Go `exec.Cmd.ExtraFiles` is not sufficient. Deno's
+own `node:child_process` compatibility layer sets the marker automatically,
+but production launchers must set it explicitly.
+
 The relay rejects fd0, fd1, fd2, malformed values, and descriptors it cannot
-write. It never falls back to fd2. A missing or unavailable channel returns one
-unary response with `error.type = "RelayEventChannelError"` when stdout remains
-available, writes only an allowlisted reason code to fd2, and exits before
-Pyodide work begins.
+write. It never falls back to fd2. A missing marker makes the otherwise-open
+descriptor unavailable to the relay and produces the same fail-closed result.
+A missing or unavailable channel returns one unary response with `error.type =
+"RelayEventChannelError"` when stdout remains available, writes only an
+allowlisted reason code to fd2, and exits before Pyodide work begins.
 
 That transport failure body is relay-level and intentionally does not claim a
 runner protocol or operation: descriptor validation occurs before the
@@ -313,6 +321,7 @@ sure your host actually has one.
 
 | Flag | Default | Set it to... | ...to get |
 |------|---------|---------------|-----------|
+| `DENO_EXTRA_STDIO_FDS` | none (required for external launchers) | A comma-separated list that includes the event descriptor (`3` conventionally). | Registers extra inherited numeric stdio with Deno before relay code starts; Deno consumes this marker. |
 | `DROSTE_RELAY_EVENT_FD` | none (required) | A decimal inherited descriptor of 3 or greater; fd3 is conventional. | The sole canonical Trace ABI NDJSON output lane. Missing, malformed, or unwritable descriptors fail closed. |
 | `RLM_BRIDGE` | (unset) | `legacy` | Pre-A′-1 behavior: the ModelRelay credential is a visible global inside the untrusted REPL interpreter, which assembles its own auth header. Kill switch only — the split is one `host_fetch` call site catching a real design mistake, not a feature. |
 | `RLM_STREAM` | on | `0` | Legacy unary ModelRelay call (no SSE), for when NDJSON streaming from `/responses` is suspected of causing an issue. |
