@@ -287,6 +287,25 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - Native arbitrary Python is not a security boundary. Prove non-ambient access
   with a separate trusted provider interpreter/process and the generic bridge,
   never with filesystem-specific sandbox claims or transport code.
+- MCP discovery is a resource-acquisition transaction: initialize and exhaust
+  paginated `tools/list`, purely map the snapshot, and return one owned
+  `BoundSource`. Do not acquire a process while constructing a reusable static
+  registration, pool sessions, reconnect within a run, or add an MCP registry.
+- Keep MCP launch authority explicit and trusted: absolute allowlisted exec,
+  direct argv, explicit working directory/environment, exact tool allowlist, and host-owned
+  effects/budget/policy. Server annotations and instructions are never policy
+  or prompt authority.
+- The MCP stdio actor owns framing, request IDs, stderr drainage, cancellation,
+  and bounded process-group shutdown. Cancellation makes the session terminal;
+  never retry an outcome whose remote completion is unknown. MCP progress is
+  not ledger usage.
+- Drain pipes with readiness-sized reads (`os.read`/`read1`), not
+  `BufferedReader.read(size)`: a live writer may never fill that size. The
+  stdout reader must also hand server-request responses to a bounded responder
+  instead of waiting for or racing the ordinary request writer.
+- Preserve `structuredContent` and declared schemas exactly. Bounded untyped
+  content remains content-block data; do not fetch links, flatten media, infer
+  evidence from URIs/arguments, or put raw MCP payloads in durable traces.
 
 
 ## Login

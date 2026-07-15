@@ -309,6 +309,9 @@ over an explicitly configured directory, with typed evidence and authenticated,
 self-contained cursor continuation. It is strict UTF-8, never follows symlinks, and fails
 closed on platforms without secure componentwise POSIX path primitives. See the
 [local filesystem provider contract](docs/provider-manifests.md#local-filesystemtext-provider).
+Trusted hosts may also acquire a local MCP stdio server as the same provider
+abstraction; generated code still receives only descriptor-generated broker
+bindings. See the [MCP stdio transport contract](docs/mcp-stdio.md).
 
 #### Configuration
 
