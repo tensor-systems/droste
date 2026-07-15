@@ -13,6 +13,10 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.15.0)
 
+No changes yet.
+
+## 0.15.0 (from 0.14.1)
+
 ### Trace ABI v2 and runner protocol v6 add typed lifecycle events
 
 Trace events and terminal `RunRecord` values now carry `version: 2`.
@@ -40,11 +44,6 @@ events remain the accounting and persistence authorities; stream receipt still
 has no billing meaning. A successful `output` remains successful even when its
 stdout begins with `ERROR:`.
 
-This breaking contract belongs in droste 0.15.0. After this change lands, cut a
-dedicated `v0.15.0` release from updated `main`; do not retag or amend 0.14.0.
-
-## 0.15.0 (from 0.14.1)
-
 ### Remote MCP sources use a trusted Streamable HTTP acquisition shell
 
 Hosts may call `open_mcp_http_source(ConfiguredSource(...), McpHttpHost(...))`
@@ -62,8 +61,8 @@ and preflight therefore performs remote discovery while still forbidding
 provider dispatch. Existing callers that omit the hook retain static-catalog,
 connection-free preflight behavior.
 
-There is no runner or provider protocol bump. The APIs are additive and no MCP
-authority is acquired implicitly.
+The MCP APIs do not introduce another runner or provider protocol bump. They
+are additive, and no MCP authority is acquired implicitly.
 
 ## 0.14.1 (from 0.13.1)
 
