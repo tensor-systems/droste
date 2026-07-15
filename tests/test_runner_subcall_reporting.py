@@ -274,6 +274,7 @@ def test_concurrent_batch_counts_each_issued_call() -> None:
 def test_llm_batch_with_errors_bounded_concurrency() -> None:
     client, _ = _client(max_parallel=2)
     lock = threading.Lock()
+    overlap = threading.Event()
     active = 0
     peak = 0
 
@@ -282,8 +283,13 @@ def test_llm_batch_with_errors_bounded_concurrency() -> None:
         with lock:
             active += 1
             peak = max(peak, active)
+            if active == 2:
+                overlap.set()
         try:
-            time.sleep(0.02)
+            # Hold the first call until the deliberately staggered second
+            # worker arrives. A fixed sleep races the 50 ms launch stagger in
+            # the production batch path and can observe only one active call.
+            overlap.wait(timeout=1)
             return "ok"
         finally:
             with lock:
