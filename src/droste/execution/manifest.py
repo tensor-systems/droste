@@ -19,11 +19,13 @@ from ..prompts.pack import (
     PromptPack,
     prompt_pack_content_sha256,
 )
+from ..protocols.subcall_capacity import SubcallInputCapacity
 from .budget import Budget
 from .config import DEFAULT_SUBCALL_CONCURRENCY, SandboxLimits, validate_subcall_concurrency
 from .trace import TRACE_ABI_VERSION
 
-SCAFFOLD_MANIFEST_VERSION = 1
+SCAFFOLD_MANIFEST_VERSION = 2
+_SUPPORTED_SCAFFOLD_MANIFEST_VERSIONS = frozenset({1, SCAFFOLD_MANIFEST_VERSION})
 KERNEL_ABI_VERSION = 1
 CAPABILITY_ABI_VERSION = 1
 TERMINAL_CONTRACT_ID = "answer-ready-v1"
@@ -146,7 +148,7 @@ def _validate_model(value: Any, name: str) -> None:
         raise ValueError(f"{name}.revision requires a model id")
 
 
-def _validate_manifest_body(body: Mapping[str, Any]) -> None:
+def _validate_manifest_body(body: Mapping[str, Any], *, schema_version: int) -> None:
     missing = _MANIFEST_TOP_LEVEL_FIELDS - body.keys()
     unknown = body.keys() - _MANIFEST_TOP_LEVEL_FIELDS
     if missing or unknown:
@@ -226,18 +228,21 @@ def _validate_manifest_body(body: Mapping[str, Any]) -> None:
     for name, value in overrides.items():
         _digest(value, f"contracts.overrides.{name}", nullable=True)
 
+    inference_fields = {
+        "root",
+        "subcall",
+        "root_sampling",
+        "subcall_sampling",
+        "output_limits",
+        "concurrency",
+        "seed",
+    }
+    if schema_version >= 2:
+        inference_fields.add("input_capacity")
     inference = _exact_object(
         body["inference"],
         name="inference",
-        required={
-            "root",
-            "subcall",
-            "root_sampling",
-            "subcall_sampling",
-            "output_limits",
-            "concurrency",
-            "seed",
-        },
+        required=inference_fields,
     )
     _validate_model(inference["root"], "inference.root")
     _validate_model(inference["subcall"], "inference.subcall")
@@ -251,6 +256,13 @@ def _validate_manifest_body(body: Mapping[str, Any]) -> None:
     )
     _integer(limits["root_tokens"], "inference.output_limits.root_tokens", positive=True)
     _integer(limits["subcall_tokens"], "inference.output_limits.subcall_tokens", positive=True)
+    if schema_version >= 2:
+        capacity = _exact_object(
+            inference["input_capacity"],
+            name="inference.input_capacity",
+            required={"subcall"},
+        )
+        SubcallInputCapacity.from_dict(capacity["subcall"])
     _integer(inference["concurrency"], "inference.concurrency", positive=True)
     _integer(inference["seed"], "inference.seed", nullable=True)
 
@@ -323,6 +335,9 @@ class RolloutConfiguration:
     seed: int | None = None
     runner_protocol: int | None = None
     source_revision: str | None = None
+    subcall_input_capacity: SubcallInputCapacity = field(
+        default_factory=SubcallInputCapacity.unknown
+    )
 
     def __post_init__(self) -> None:
         for name in ("root_revision", "subcall_model", "subcall_revision", "source_revision"):
@@ -330,6 +345,8 @@ class RolloutConfiguration:
             if value is not None and (not isinstance(value, str) or not value):
                 raise ValueError(f"rollout {name} must be a non-empty string")
         validate_subcall_concurrency(self.concurrency)
+        if not isinstance(self.subcall_input_capacity, SubcallInputCapacity):
+            raise TypeError("rollout subcall_input_capacity must be SubcallInputCapacity")
         for name in ("seed", "runner_protocol"):
             value = getattr(self, name)
             if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
@@ -350,6 +367,7 @@ class RolloutConfiguration:
             "subcall_revision": self.subcall_revision,
             "root_sampling": _thaw_json(self.root_sampling),
             "subcall_sampling": _thaw_json(self.subcall_sampling),
+            "subcall_input_capacity": self.subcall_input_capacity.as_dict(),
             "concurrency": self.concurrency,
             "seed": self.seed,
             "runner_protocol": self.runner_protocol,
@@ -364,6 +382,7 @@ class RolloutConfiguration:
             "subcall_revision",
             "root_sampling",
             "subcall_sampling",
+            "subcall_input_capacity",
             "concurrency",
             "seed",
             "runner_protocol",
@@ -374,7 +393,12 @@ class RolloutConfiguration:
             raise ValueError(
                 "rollout configuration has unknown fields: " + ", ".join(sorted(unknown))
             )
-        return cls(**{key: value[key] for key in expected if key in value})
+        fields = {key: value[key] for key in expected if key in value}
+        if "subcall_input_capacity" in fields:
+            fields["subcall_input_capacity"] = SubcallInputCapacity.from_dict(
+                fields["subcall_input_capacity"]
+            )
+        return cls(**fields)
 
 
 @dataclass(frozen=True, slots=True)
@@ -385,12 +409,12 @@ class ScaffoldManifest:
     schema_version: int = SCAFFOLD_MANIFEST_VERSION
 
     def __post_init__(self) -> None:
-        if self.schema_version != SCAFFOLD_MANIFEST_VERSION:
+        if self.schema_version not in _SUPPORTED_SCAFFOLD_MANIFEST_VERSIONS:
             raise ValueError(f"unsupported scaffold manifest version: {self.schema_version}")
         frozen = _freeze_json(self.body, path="scaffold_manifest")
         if not isinstance(frozen, Mapping):
             raise TypeError("scaffold manifest body must be an object")
-        _validate_manifest_body(frozen)
+        _validate_manifest_body(frozen, schema_version=self.schema_version)
         object.__setattr__(self, "body", frozen)
 
     @property
@@ -605,6 +629,9 @@ def build_scaffold_manifest(
                 "output_limits": {
                     "root_tokens": budget.root_output_tokens,
                     "subcall_tokens": budget.subcall_output_tokens,
+                },
+                "input_capacity": {
+                    "subcall": rollout.subcall_input_capacity.as_dict(),
                 },
                 "concurrency": rollout.concurrency,
                 "seed": rollout.seed,

@@ -1,4 +1,4 @@
-# Scaffold manifest v1
+# Scaffold manifest v2
 
 A scaffold manifest is the content-addressed identity of everything that can
 materially change a Droste rollout. It lets a trainer reject a checkpoint/run
@@ -21,11 +21,11 @@ inference facts.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "engine": {"version": "0.10.6", "source_revision": null},
   "abis": {
     "kernel": 1, "capability": 1, "trace": 1,
-    "prompt_pack": 1, "provider": 4, "runner": 4
+    "prompt_pack": 1, "provider": 4, "runner": 5
   },
   "prompt_pack": {
     "id": "droste.generic.full", "revision": "1.0.2",
@@ -55,6 +55,9 @@ inference facts.
     "subcall": {"id": "model", "revision": null},
     "root_sampling": {}, "subcall_sampling": {},
     "output_limits": {"root_tokens": 4096, "subcall_tokens": 2048},
+    "input_capacity": {
+      "subcall": {"state": "unknown", "tokens": null}
+    },
     "concurrency": 5, "seed": null
   },
   "budget": {
@@ -82,6 +85,19 @@ batch items. Built-in clients report their configured value, and `run_rlm`
 rejects a mismatch with `RolloutConfiguration.concurrency` before inference.
 The compatibility default is 5. Custom clients that do not expose the optional
 read-only metadata remain source-compatible and must honor the declared value.
+
+`inference.input_capacity.subcall` is planning metadata, separate from both
+the run token budget and `inference.output_limits`. A bounded value has
+`{"state": "bounded", "tokens": <positive integer>}`. Deliberately unbounded
+and unknown values have null tokens and the corresponding `unbounded` or
+`unknown` state. Unknown is never replaced with a guessed model context
+window. A rollout declaration and client report resolve to one value; two
+different known values fail before the first model request.
+
+Version 2 adds this required closed field. `ScaffoldManifest.from_dict()` still
+accepts and verifies version 1 manifests, where the field is absent, so stored
+identities remain readable. New manifests are always version 2; the engine
+does not silently rewrite a version 1 identity.
 
 Runner `root_reasoning_effort` is one host-resolved inference fact: the native
 and Pyodide clients send it on root callbacks, while the scaffold records the

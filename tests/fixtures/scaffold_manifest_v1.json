@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "engine": {"version": "fixture", "source_revision": null},
+  "abis": {
+    "kernel": 1,
+    "capability": 1,
+    "trace": 1,
+    "prompt_pack": 1,
+    "provider": 4,
+    "runner": 4
+  },
+  "prompt_pack": {
+    "id": "fixture.pack",
+    "revision": "1",
+    "profile": "fixture",
+    "content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "capabilities": {
+    "manifest_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "model_visible_globals": []
+  },
+  "contracts": {
+    "terminal": "answer-ready-v1",
+    "subcall_identity": "capability-call-parent-v1",
+    "templates": {
+      "refinement": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "missing_code_repair": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "error_repair": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "extract_system": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "extract_user": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "overrides": {
+      "system_prompt": null,
+      "system_prompt_additions": null,
+      "user_prompt": null,
+      "refinement_prompt": null
+    }
+  },
+  "inference": {
+    "root": {"id": null, "revision": null},
+    "subcall": {"id": null, "revision": null},
+    "root_sampling": {},
+    "subcall_sampling": {},
+    "output_limits": {"root_tokens": 4096, "subcall_tokens": 2048},
+    "concurrency": 5,
+    "seed": null
+  },
+  "budget": {
+    "tokens": 500000,
+    "subcalls": 50,
+    "depth": 1,
+    "wall_ms": 300000,
+    "root_output_tokens": 4096,
+    "subcall_output_tokens": 2048
+  },
+  "sandbox": {
+    "output_chars": 25000,
+    "execution_timeout_ms": 5000,
+    "capture_output_chars": 50000
+  },
+  "parent_child": {
+    "trace_depth": "root-zero-child-increment",
+    "identity": "capability-call-parent-v1"
+  }
+}

@@ -147,6 +147,9 @@ def test_root_authorized_compute_renders_output_limit_states_exactly(
         "tokens=10000; subcalls=7; depth=2; wall_ms=30000; "
         "root_output_tokens_per_call=1024; subcall_output_tokens_per_call=2048\n"
         f"client_reported_subcall_output_limit={rendered_limit}\n"
+        "subcall_input_capacity=unknown (client and rollout did not report)\n"
+        "Input capacity guides prompt/context chunking only; it does not increase "
+        "the per-call subcall output-token limit.\n"
         "Sandbox output_chars_per_iteration=99."
     )
 

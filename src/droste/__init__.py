@@ -115,9 +115,11 @@ from .prompts.pack import (
 )
 from .protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
 from .protocols.llm_client import LLMClient, TokenUsage
+from .protocols.subcall_capacity import SubcallInputCapacity
 from .protocols.subcall_client import (
     SubcallClient,
     SubcallConcurrencyProvider,
+    SubcallInputCapacityProvider,
     SubcallOutputTokenLimitProvider,
 )
 from .providers import (
@@ -197,6 +199,8 @@ __all__ = [
     "TokenUsage",
     "SubcallClient",
     "SubcallConcurrencyProvider",
+    "SubcallInputCapacity",
+    "SubcallInputCapacityProvider",
     "SubcallOutputTokenLimitProvider",
     "SystemPromptBuilder",
     "PromptPack",

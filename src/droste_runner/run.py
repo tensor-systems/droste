@@ -19,6 +19,7 @@ from droste.execution.manifest import (
     ScaffoldRequirements,
 )
 from droste.loop.rlm import RLMConfig, preflight_rlm, run_rlm
+from droste.protocols.subcall_capacity import SubcallInputCapacity
 from droste.providers import ProviderCatalog
 
 from .http_clients import HTTPSubcallClient, RootLLMClient
@@ -43,9 +44,19 @@ from .sources import (
 class _PreflightSubcallClient:
     """A capability-shape placeholder that fails if preflight ever dispatches."""
 
-    def __init__(self, output_token_limit: int, subcall_concurrency: int) -> None:
+    def __init__(
+        self,
+        output_token_limit: int,
+        subcall_concurrency: int,
+        input_capacity: SubcallInputCapacity,
+    ) -> None:
         self.output_token_limit = output_token_limit
         self.subcall_concurrency = subcall_concurrency
+        self._input_capacity = input_capacity
+
+    @property
+    def input_token_capacity(self) -> SubcallInputCapacity:
+        return self._input_capacity
 
     @staticmethod
     def _refuse() -> NoReturn:
@@ -99,6 +110,13 @@ def _optional_object(request: dict[str, Any], name: str) -> dict[str, Any] | Non
     if not isinstance(value, dict):
         raise ValueError(f"request.{name} must be an object")
     return value
+
+
+def _subcall_input_capacity(request: dict[str, Any]) -> SubcallInputCapacity:
+    value = _optional_object(request, "subcall_input_capacity")
+    if value is None:
+        return SubcallInputCapacity.unknown()
+    return SubcallInputCapacity.from_dict(value)
 
 
 def _optional_text(request: dict[str, Any], name: str) -> str | None:
@@ -300,6 +318,7 @@ def _run_selected_request(
     root_sampling = _optional_object(request, "root_sampling")
     subcall_sampling = _optional_object(request, "subcall_sampling")
     checkpoint_requirements = _checkpoint_requirements(request)
+    subcall_input_capacity = _subcall_input_capacity(request)
     subcall_concurrency = _optional_integer(
         request,
         "subcall_concurrency",
@@ -341,6 +360,7 @@ def _run_selected_request(
                 if subcall_sampling is not None
                 else {"reasoning_effort": subcall_reasoning_effort or None}
             ),
+            subcall_input_capacity=subcall_input_capacity,
             concurrency=subcall_concurrency,
             seed=_optional_integer(request, "seed"),
             runner_protocol=RUNNER_PROTOCOL_VERSION,
@@ -360,6 +380,7 @@ def _run_selected_request(
         preflight_subcalls = _PreflightSubcallClient(
             budget.subcall_output_tokens,
             subcall_concurrency,
+            subcall_input_capacity,
         )
         environment = create_environment(
             environment_config,
@@ -404,6 +425,7 @@ def _run_selected_request(
         model=subcall_model,
         reasoning_effort=subcall_reasoning_effort,
         max_parallel=subcall_concurrency,
+        input_capacity=subcall_input_capacity,
     )
     # Bind live provider resources only after all request validation and client
     # construction succeeds. create_environment takes ownership immediately.

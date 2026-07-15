@@ -13,6 +13,7 @@ from droste.clients.errors import http_error_excerpt, redact_secrets
 from droste.clients.useragent import USER_AGENT
 from droste.execution.config import DEFAULT_SUBCALL_CONCURRENCY, validate_subcall_concurrency
 from droste.protocols.llm_client import TokenUsage
+from droste.protocols.subcall_capacity import SubcallInputCapacity
 from droste.protocols.subcall_client import SubcallClient
 
 from .protocol import RootResponseMetadata
@@ -39,6 +40,7 @@ class HTTPSubcallClient(SubcallClient):
         model: str = "",
         reasoning_effort: str = "",
         max_parallel: int = DEFAULT_SUBCALL_CONCURRENCY,
+        input_capacity: SubcallInputCapacity | None = None,
     ) -> None:
         self._endpoint = endpoint
         self._token = token
@@ -54,6 +56,7 @@ class HTTPSubcallClient(SubcallClient):
         self._model = str(model or "")
         self._reasoning_effort = str(reasoning_effort or "")
         self._max_parallel = validate_subcall_concurrency(max_parallel)
+        self._input_capacity = input_capacity or SubcallInputCapacity.unknown()
 
     @property
     def subcall_concurrency(self) -> int:
@@ -66,6 +69,11 @@ class HTTPSubcallClient(SubcallClient):
         if self._max_output_tokens <= 0:
             raise AttributeError("the callback owns the output token default")
         return self._max_output_tokens
+
+    @property
+    def input_token_capacity(self) -> SubcallInputCapacity:
+        """Effective input capacity when the runner request declares it."""
+        return self._input_capacity
 
     def _next_seq(self) -> int:
         with self._seq_lock:

@@ -13,6 +13,34 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.13.1)
 
+### Runner protocol v5 and scaffold manifest v2 add subcall input capacity
+
+`RUNNER_PROTOCOL_VERSION` is now 5. Request writers may supply the closed
+`subcall_input_capacity` value with `state` (`bounded`, `unbounded`, or
+`unknown`) and `tokens`. Bounded requires a positive token count; the other
+states require null tokens. Upgrade request writers and runners atomically. A
+v4 runner refuses the v5 envelope instead of silently ignoring planning
+metadata that may have selected chunking or a checkpoint.
+
+The value is the effective usable caller-payload bound across the complete
+adapter, transport, and model path. Use `unbounded` only when arbitrary caller
+payloads are guaranteed, such as by transparent chunking; a large or unknown
+model context window is not unbounded. The value guides planning and does not
+authorize spend or enlarge output-token ceilings.
+
+In-process clients may implement the optional `SubcallInputCapacityProvider`.
+Its `input_token_capacity` property returns an immutable
+`SubcallInputCapacity`. Protocol absence remains source-compatible and resolves
+to unknown. A conflicting known `RolloutConfiguration` value fails before the
+first model request. Once a client implements the property, it is a correctness
+claim: getter failures and wrong return types fail before inference rather than
+degrading to unknown. This is deliberately stricter than the older
+best-effort output-limit metadata.
+
+New scaffold manifests are version 2 and record the resolved state at
+`inference.input_capacity.subcall`. Stored version 1 manifests remain strictly
+readable and keep their original content identity; they are not rewritten.
+
 ### Local MCP stdio sources use one owned acquisition transaction
 
 Hosts may call `open_mcp_stdio_source(ConfiguredSource(...))` to initialize a

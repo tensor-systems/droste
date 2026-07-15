@@ -142,6 +142,17 @@ explicit positive limit because a callback-owned default is not knowable from
 the runner. The base `SubcallClient` protocol is unchanged, and broker-backed
 and semantic-policy wrappers forward the optional metadata.
 
+Input planning uses the separate optional `SubcallInputCapacityProvider`.
+`input_token_capacity` returns an immutable `SubcallInputCapacity`; protocol
+absence alone maps legacy clients to unknown. The value is the effective
+usable caller-payload bound across the adapter, transport, and model, not a raw
+vendor context-window claim. `unbounded` is truthful only when arbitrary
+payloads are guaranteed, such as by transparent chunking. Client and rollout
+facts resolve once before inference, and conflicting known facts fail closed.
+The exact bounded, unbounded, or unknown state appears in the root prompt and
+scaffold manifest. This capacity guides chunking only and does not authorize
+tokens or enlarge the subcall output ceiling.
+
 ## Providers and configured sources
 
 Provider metadata is immutable, source-agnostic data. `ProviderManifest`
@@ -242,12 +253,12 @@ is intentionally a separate, content-free envelope:
 
 ```json
 {
-  "protocol_version": 4,
+  "protocol_version": 5,
   "operation": "preflight",
   "status": "success",
   "preflight": {
     "schema_version": 1,
-    "scaffold_manifest": {"schema_version": 1, "id": "sha256:..."}
+    "scaffold_manifest": {"schema_version": 2, "id": "sha256:..."}
   },
   "error": null
 }
@@ -294,7 +305,10 @@ through one interception endpoint without moving runtime data into the prompt.
 
 The optional positive `subcall_concurrency` request field resolves once before
 client construction (default 5), controls every HTTP-backed subcall batch, and
-is recorded at `scaffold_manifest.inference.concurrency`. Native CLI rollout
+is recorded at `scaffold_manifest.inference.concurrency`. Optional
+`subcall_input_capacity` is a closed `{state, tokens}` request value recorded
+at `scaffold_manifest.inference.input_capacity.subcall`; absent means unknown.
+Native CLI rollout
 configuration follows the same path. The Pyodide relay forwards the value
 unchanged; it does not choose another concurrency policy.
 
@@ -308,7 +322,7 @@ inference rather than publishing evidence that differs from execution.
 **Versioned boundary**: the request/response schema and provider contract
 are versioned, each by a single integer:
 
-- `RUNNER_PROTOCOL_VERSION` (currently 4) governs the request/response
+- `RUNNER_PROTOCOL_VERSION` (currently 5) governs the request/response
   envelope. Every request **must** carry `protocol_version` — requests are
   self-describing, the same discipline as JSON-RPC's mandatory `"jsonrpc"`
   field. A missing or mismatched version is answered with a structured
@@ -317,13 +331,16 @@ are versioned, each by a single integer:
   failing on a missing field. Responses carry `protocol_version`: the
   engine stamps its own everywhere except an `adapter_module` response
   that already claimed one (adapters own their response shape).
-  Protocol v4 requires one exact six-field `budget` object; missing,
+  Protocol v4 and later require one exact six-field `budget` object; missing,
   unknown, or invalid fields fail before endpoint dispatch.
   Protocol v4 adds the `operation` discriminant and typed preflight response.
   The bump is required for safety: a v3 runner could ignore an unknown
   `operation` field and execute a request that a v4 host intended only to
   inspect. Old runners instead reject v4 at the version gate before endpoints,
   credentials, provider binding, or work.
+  Protocol v5 adds the strategy-relevant `subcall_input_capacity` value. The
+  bump prevents a v4 runner from silently ignoring capacity that a host used
+  to plan chunks or select a checkpoint.
 - `PROVIDER_PROTOCOL_VERSION` (currently 4) governs manifest parsing,
   context-first provider binding, and bridge invocation facts. A mismatched
   manifest fails before a source is live.

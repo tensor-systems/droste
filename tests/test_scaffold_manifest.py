@@ -307,7 +307,7 @@ def test_run_exposes_manifest_but_durable_terminal_keeps_identity_only() -> None
     assert result.run_record is not None
     terminal = dict(result.run_record.terminal)
     assert terminal["scaffold_manifest_id"] == result.scaffold_manifest.manifest_id
-    assert terminal["scaffold_manifest_version"] == 1
+    assert terminal["scaffold_manifest_version"] == 2
     assert marker not in str(result.scaffold_manifest.as_dict())
     assert marker not in str(result.run_record.as_dict())
 
