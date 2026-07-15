@@ -214,6 +214,10 @@ DROSTE_RELAY_EVENT_FD=3 \
   relay.ts <sources> <adapter_module> 3>events.ndjson
 ```
 
+The file redirect is only a shell demonstration. A host using pipes must drain
+fd2 and the event descriptor concurrently while it waits for the unary response
+and process exit.
+
 The host must open the named descriptor before launch; fd3 is the convention.
 The relay rejects fd0, fd1, fd2, malformed values, and descriptors it cannot
 write. It never falls back to fd2. A missing or unavailable channel returns one

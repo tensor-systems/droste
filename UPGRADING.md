@@ -21,8 +21,11 @@ No changes yet.
 
 Hosts that spawn `relay.ts` must open an inherited writable descriptor, set
 `DROSTE_RELAY_EVENT_FD` to its decimal number (fd3 is conventional), and drain
-it concurrently with fd2. stdout remains the single unary HostResponse JSON
-lane; the configured descriptor carries canonical Trace ABI v2 NDJSON only;
+it concurrently with fd2. stdout remains the single unary response JSON lane;
+adapter-owned outcomes use the adapter HostResponse schema, while an event
+channel failure before adapter ownership uses a relay-level
+`RelayEventChannelError` body without runner protocol or operation fields. The
+configured descriptor carries canonical Trace ABI v2 NDJSON only;
 fd2 is diagnostic-only. The relay rejects fd0 through fd2 and fails closed with
 `RelayEventChannelError` when the setting is missing, malformed, or unwritable.
 It never falls back to stderr. Hosts that previously parsed canonical events

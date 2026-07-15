@@ -142,8 +142,9 @@ evidence with that status rather than leaving the model to interpret prefixes.
   text, including successful output beginning with `ERROR:`.
 - Native process-runner NDJSON sinks write to the original host stderr. The
   Deno relay instead requires `DROSTE_RELAY_EVENT_FD` (fd3 by convention),
-  keeps fd2 diagnostic-only, and fails closed without falling back when that
-  descriptor is missing or unwritable. Model code may execute under
+  rejects fd0 through fd2 even when writable, keeps fd2 diagnostic-only, and
+  fails closed without falling back when that descriptor is missing or
+  unwritable. Model code may execute under
   stdout/stderr capture, and events emitted inside a brokered subcall must not
   become sandbox output or disappear from the live lane.
 - Every Deno relay invocation receives the event descriptor, including

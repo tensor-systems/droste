@@ -298,7 +298,7 @@ the same strict envelope and projection. Persistence remains a host I/O
 decision; the engine never opens a trace store.
 
 The Deno/Pyodide relay keeps its three process output concerns physically
-separate. fd1 carries exactly one unary HostResponse JSON line. A required
+separate. fd1 carries exactly one unary response JSON line. A required
 `DROSTE_RELAY_EVENT_FD` names one inherited writable descriptor (fd3 by
 convention) that carries canonical Trace ABI v2 NDJSON only. fd2 carries only
 diagnostics. Missing, malformed, or unavailable event descriptors—and fd0
