@@ -1,7 +1,7 @@
 // The relay's one canonical Trace ABI transport. The host opens a descriptor
 // (fd3 by convention) and names it through DROSTE_RELAY_EVENT_FD. stdout and
 // stderr remain owned by the unary response and diagnostics respectively.
-import { writeSync } from "node:fs";
+import { fstatSync, writeSync } from "node:fs";
 
 export const RELAY_EVENT_FD_ENV = "DROSTE_RELAY_EVENT_FD";
 
@@ -22,6 +22,7 @@ export class RelayEventChannelError extends Error {
 }
 
 type DescriptorWriter = (descriptor: number, bytes: Uint8Array) => number;
+type DescriptorInspector = (descriptor: number) => void;
 
 function parseDescriptor(raw: string | undefined): number {
   if (raw === undefined) {
@@ -105,11 +106,17 @@ export class EventChannel {
 export function eventChannelFromEnvironment(
   readEnvironment: (name: string) => string | undefined = Deno.env.get,
   writer: DescriptorWriter = writeSync,
+  inspect: DescriptorInspector = (descriptor) => {
+    fstatSync(descriptor);
+  },
 ): EventChannel {
-  const channel = new EventChannel(
-    parseDescriptor(readEnvironment(RELAY_EVENT_FD_ENV)),
-    writer,
-  );
+  const descriptor = parseDescriptor(readEnvironment(RELAY_EVENT_FD_ENV));
+  try {
+    inspect(descriptor);
+  } catch {
+    throw new RelayEventChannelError("descriptor_unavailable");
+  }
+  const channel = new EventChannel(descriptor, writer);
   channel.probe();
   return channel;
 }

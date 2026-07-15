@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
+import { closeSync, openSync } from "node:fs";
 import {
   EventChannel,
   eventChannelFromEnvironment,
@@ -37,6 +38,7 @@ Deno.test("event channel probes the descriptor and completes partial writes", ()
       received.push(...bytes.subarray(0, length));
       return length;
     },
+    () => {},
   );
 
   channel.writeFrame('{"type":"progress"}');
@@ -51,9 +53,13 @@ Deno.test("event channel probes the descriptor and completes partial writes", ()
 Deno.test("event channel latches descriptor and frame write failures", () => {
   assertChannelError(
     () =>
-      eventChannelFromEnvironment(() => "3", () => {
-        throw new Error("private descriptor detail");
-      }),
+      eventChannelFromEnvironment(
+        () => "3",
+        () => {
+          throw new Error("private descriptor detail");
+        },
+        () => {},
+      ),
     "descriptor_unavailable",
   );
 
@@ -72,4 +78,32 @@ Deno.test("event channel latches descriptor and frame write failures", () => {
     () => new EventChannel(3, () => 1).writeFrame(""),
     "write_failed",
   );
+
+  const partial: number[] = [];
+  let writes = 0;
+  const partialChannel = new EventChannel(3, (_descriptor, bytes) => {
+    if (writes++ === 0) {
+      partial.push(...bytes.subarray(0, 2));
+      return 2;
+    }
+    throw new Error("peer closed after a partial frame");
+  });
+  assertChannelError(
+    () => partialChannel.writeFrame('{"type":"progress"}'),
+    "write_failed",
+  );
+  assertEquals(new TextDecoder().decode(new Uint8Array(partial)), '{"');
+});
+
+Deno.test("read-only descriptor fails on the first event frame", () => {
+  const descriptor = openSync(new URL(import.meta.url), "r");
+  try {
+    const channel = eventChannelFromEnvironment(() => String(descriptor));
+    assertChannelError(
+      () => channel.writeFrame('{"type":"progress"}'),
+      "write_failed",
+    );
+  } finally {
+    closeSync(descriptor);
+  }
 });

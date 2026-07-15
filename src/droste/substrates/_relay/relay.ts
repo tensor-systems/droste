@@ -337,13 +337,9 @@ _meta_json
 // host event channel; drop other stderr noise. fd2 remains diagnostic-only.
 const py = await loadPyodide({
   stdout: () => {},
-  stderr: (msg: string) => {
-    for (const line of msg.split("\n")) {
-      if (isRlmEvent(line)) {
-        forwardEngineEvent(line.trim());
-      }
-    }
-  },
+  // Install the event forwarder only after startup metadata is ready. Package
+  // and interpreter bootstrap stderr is diagnostic noise, never Trace input.
+  stderr: () => {},
 });
 // The client-side bridge import currently reaches sql_local.py through
 // droste.sources.__init__, so the REPL needs the sqlite3 package to import the
@@ -382,8 +378,9 @@ json.dumps({
     "runner_protocol": _runner_protocol,
     "provider_protocol": _provider_protocol,
 })
-`),
+  `),
 );
+py.setStderr({ batched: forwardPyodideStderr });
 
 // The untrusted interpreter never receives host filesystem paths. For a
 // provider-backed request those paths have already been consumed by the
@@ -415,6 +412,14 @@ function emitStartupIfNeeded(): void {
   }
   writeRelayEvent(startupEvent);
   startupEmitted = true;
+}
+
+function forwardPyodideStderr(message: string): void {
+  for (const line of message.split("\n")) {
+    if (isRlmEvent(line)) {
+      forwardEngineEvent(line.trim());
+    }
+  }
 }
 
 function forwardEngineEvent(frame: string): void {

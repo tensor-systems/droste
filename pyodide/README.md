@@ -221,6 +221,11 @@ unary response with `error.type = "RelayEventChannelError"` when stdout remains
 available, writes only an allowlisted reason code to fd2, and exits before
 Pyodide work begins.
 
+That transport failure body is relay-level and intentionally does not claim a
+runner protocol or operation: descriptor validation occurs before the
+host-selected adapter owns its response schema. Consumers branch on the closed
+`RelayEventChannelError` type/code, not on adapter or runner fields.
+
 The process has three independent output lanes:
 
 | Descriptor | Contract |
@@ -232,7 +237,12 @@ The process has three independent output lanes:
 Drain fd2 and the event descriptor concurrently. A hard cancellation or
 process failure may end fd3 after a valid nonterminal prefix; the transport
 does not invent a `done` event. Reconcile terminal state from the unary response
-when one exists, otherwise report a transport failure.
+when one exists, otherwise report a transport failure. A descriptor can also
+fail after part of a frame was written; treat a final unterminated or invalid
+line as a typed transport failure and never promote it to a Trace event. An
+empty preflight/refusal stream intentionally performs no peer-liveness write;
+peer or access-mode loss is detected fail-closed on the first admitted-run
+frame.
 
 The name is validated against `^[A-Za-z_][A-Za-z0-9_.]*$`, then set as a Pyodide
 Python global and resolved with `importlib.import_module` — never

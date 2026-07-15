@@ -150,6 +150,10 @@ evidence with that status rather than leaving the model to interpret prefixes.
   preflight and refusal. Those pre-admission paths write zero event frames; an
   admitted run lazily emits `startup` immediately before its first canonical
   frame so the relay does not duplicate runner admission logic.
+- Do not add a descriptor probe byte: fd3 is Trace NDJSON-only and
+  preflight/refusal must stay byte-empty. A closed/read-only peer fails on the
+  first admitted-run frame; a partial final frame is a typed host transport
+  error, never a diagnostic or terminal event.
 - A strict published event vocabulary/body change requires a Trace ABI bump and,
   when embedded in runner output, an atomic runner-protocol bump. Do not expand
   an old strict version in place or add a compatibility decoder in the engine.

@@ -307,9 +307,13 @@ fd2. The descriptor is mandatory for every invocation, but preflight and
 pre-admission refusal produce zero frames. An admitted run lazily emits
 `startup` as the prefix to its first canonical event. Hosts must drain fd2 and
 the event descriptor concurrently. Cancellation or process death may leave a
-valid nonterminal event prefix and must not cause the host to fabricate a
-terminal event. The native process runner remains a separate explicit
-integration whose event sink is the original host stderr.
+valid nonterminal event prefix; a failed partial write may additionally leave
+an invalid unterminated final line. Hosts discard that line and surface a typed
+transport failure rather than parsing or promoting it, and must not fabricate a
+terminal event. Empty preflight/refusal streams do not write a liveness marker;
+peer or access-mode loss is detected on the first admitted-run frame. The
+native process runner remains a separate explicit integration whose event sink
+is the original host stderr.
 
 Completed results also expose the full scaffold manifest and aggregate stdout
 facts. Default durable retention stores only the manifest ID/version; trainer
