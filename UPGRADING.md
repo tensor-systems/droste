@@ -11,9 +11,28 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.15.2)
+## Unreleased (post-0.15.3)
 
 No changes yet.
+
+## 0.15.3 (from 0.15.2)
+
+### External Deno launchers must register the inherited event descriptor
+
+Version 0.15.2 documented and enforced the dedicated event descriptor, but its
+relay E2E used Deno's `node:child_process` compatibility path. That path
+silently registers extra numeric stdio for a Deno child. Normal shell and Go
+parents do not: Deno leaves fd3 outside its JavaScript-visible descriptor table
+unless its startup marker names the inherited descriptor.
+
+Hosts must now set both `DROSTE_RELAY_EVENT_FD=3` and
+`DENO_EXTRA_STDIO_FDS=3` when they pass the event writer as child fd3. For Go,
+the first `exec.Cmd.ExtraFiles` entry becomes child fd3. Deno consumes
+`DENO_EXTRA_STDIO_FDS` before relay JavaScript starts; it is runtime launch
+metadata, not an event or runner field. Omitting it fails closed with
+`RelayEventChannelError.code = "descriptor_unavailable"` and never falls back
+to fd2. Trace ABI v2, runner protocol v6, the three physical lanes, and native
+`python -m droste_runner` stderr behavior are unchanged.
 
 ## 0.15.2 (from 0.15.1)
 

@@ -4,7 +4,7 @@
 // Deno holds the only ambient capabilities (narrow net to ModelRelay + trusted
 // provider files); the Pyodide sandbox has none.
 //
-//   echo '<request json>' | DROSTE_RELAY_EVENT_FD=3 \
+//   echo '<request json>' | DENO_EXTRA_STDIO_FDS=3 DROSTE_RELAY_EVENT_FD=3 \
 //       deno run --allow-net=api.modelrelay.ai --allow-read --allow-env \
 //       relay.ts <sources.zip> <adapter_module> 3>events.ndjson
 //

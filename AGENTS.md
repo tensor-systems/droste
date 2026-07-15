@@ -147,6 +147,12 @@ evidence with that status rather than leaving the model to interpret prefixes.
   unwritable. Model code may execute under
   stdout/stderr capture, and events emitted inside a brokered subcall must not
   become sandbox output or disappear from the live lane.
+- External launchers also set Deno's `DENO_EXTRA_STDIO_FDS` startup marker to
+  include the same inherited descriptor (`3` conventionally). Deno consumes
+  the marker before relay JavaScript starts. A shell redirect or Go
+  `exec.Cmd.ExtraFiles` without the marker leaves fd3 unavailable even though
+  the OS child inherited it; do not rely on Deno's `node:child_process` shim to
+  add the marker in production.
 - Every Deno relay invocation receives the event descriptor, including
   preflight and refusal. Those pre-admission paths write zero event frames; an
   admitted run lazily emits `startup` immediately before its first canonical
