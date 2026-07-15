@@ -103,6 +103,5 @@ export function eventChannelFromEnvironment(
   } catch {
     throw new RelayEventChannelError("descriptor_unavailable");
   }
-  const channel = new EventChannel(descriptor, writer);
-  return channel;
+  return new EventChannel(descriptor, writer);
 }

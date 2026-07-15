@@ -61,8 +61,6 @@ if (typeof request.run_id !== "string" || request.run_id.length === 0) {
 // stamping owner, while parent_run_id correlates it with the engine record.
 const relayRunId = crypto.randomUUID();
 let relaySeq = 0;
-let startupEvent: Record<string, unknown> | null = null;
-let startupEmitted = false;
 
 const _enc = new TextEncoder();
 
@@ -356,7 +354,7 @@ await mountSources(py);
 // without teaching the relay a second copy of runner admission semantics.
 // The engine version comes from the staged wheel's dist-info when present
 // ("unknown" for raw source mounts); null protocol values remain a loud signal.
-startupEvent = JSON.parse(
+const startupEvent: Record<string, unknown> = JSON.parse(
   await py.runPythonAsync(`
 import json
 try:
@@ -405,11 +403,10 @@ function writeRelayEvent(obj: Record<string, unknown>): void {
   eventChannel.writeFrame(JSON.stringify(event));
 }
 
+let startupEmitted = false;
+
 function emitStartupIfNeeded(): void {
   if (startupEmitted) return;
-  if (startupEvent === null) {
-    throw new Error("relay startup contract is unavailable");
-  }
   writeRelayEvent(startupEvent);
   startupEmitted = true;
 }
