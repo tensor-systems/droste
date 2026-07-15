@@ -11,7 +11,7 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.14.1)
+## Unreleased (post-0.15.0)
 
 ### Trace ABI v2 and runner protocol v6 add typed lifecycle events
 
@@ -42,6 +42,28 @@ stdout begins with `ERROR:`.
 
 This breaking contract belongs in droste 0.15.0. After this change lands, cut a
 dedicated `v0.15.0` release from updated `main`; do not retag or amend 0.14.0.
+
+## 0.15.0 (from 0.14.1)
+
+### Remote MCP sources use a trusted Streamable HTTP acquisition shell
+
+Hosts may call `open_mcp_http_source(ConfiguredSource(...), McpHttpHost(...))`
+to freeze a remote MCP `tools/list` snapshot into the same lifecycle-owned
+`BoundSource` returned by the stdio transport. Endpoint, OAuth, session, DNS/IP,
+payload, and reconnect state stay in the trusted host shell. Source auth values
+are secret references resolved with the exact tenant and source identity.
+
+Cross-language hosts can implement `McpToolTransport` and use
+`bind_mcp_transport_source()` with `McpBindingPolicy`; this preserves one
+manifest/schema projection without requiring the native Python HTTP transport.
+Trusted runner callers may instead supply `source_opener` to `run()` or
+`run_worker_request()`. Dynamic sources are acquired for both run and preflight,
+and preflight therefore performs remote discovery while still forbidding
+provider dispatch. Existing callers that omit the hook retain static-catalog,
+connection-free preflight behavior.
+
+There is no runner or provider protocol bump. The APIs are additive and no MCP
+authority is acquired implicitly.
 
 ## 0.14.1 (from 0.13.1)
 
@@ -76,26 +98,6 @@ best-effort output-limit metadata.
 New scaffold manifests are version 2 and record the resolved state at
 `inference.input_capacity.subcall`. Stored version 1 manifests remain strictly
 readable and keep their original content identity; they are not rewritten.
-
-### Remote MCP sources use a trusted Streamable HTTP acquisition shell
-
-Hosts may call `open_mcp_http_source(ConfiguredSource(...), McpHttpHost(...))`
-to freeze a remote MCP `tools/list` snapshot into the same lifecycle-owned
-`BoundSource` returned by the stdio transport. Endpoint, OAuth, session, DNS/IP,
-payload, and reconnect state stays in the trusted host shell. Source auth values
-are secret references resolved with the exact tenant and source identity.
-
-Cross-language hosts can implement `McpToolTransport` and use
-`bind_mcp_transport_source()` with `McpBindingPolicy`; this preserves one
-manifest/schema projection without requiring the native Python HTTP transport.
-Trusted runner callers may instead supply `source_opener` to `run()` or
-`run_worker_request()`. Dynamic sources are acquired for both run and preflight,
-and preflight therefore performs remote discovery while still forbidding
-provider dispatch. Existing callers that omit the hook retain static-catalog,
-connection-free preflight behavior.
-
-There is no runner or provider protocol bump. The APIs are additive and no MCP
-authority is acquired implicitly.
 
 ### Local MCP stdio sources use one owned acquisition transaction
 
