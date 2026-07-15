@@ -58,3 +58,27 @@ def test_relay_emits_startup_handshake() -> None:
     assert "RUNNER_PROTOCOL_VERSION" in relay
     assert "PROVIDER_PROTOCOL_VERSION" in relay
     assert '"provider_protocol"' in relay
+
+
+def test_relay_has_no_direct_database_mount_mode() -> None:
+    relay = (relay_dir() / "relay.ts").read_text()
+    assert "RLM_DB_SERVICE" not in relay
+    mount_calls = re.findall(
+        r"\b([A-Za-z_$][\w$]*)\s*\.\s*mountNodeFS\s*\(",
+        relay,
+    )
+    mounts = re.findall(
+        r"\b([A-Za-z_$][\w$]*)\s*\.\s*mountNodeFS\s*\(\s*['\"]([^'\"]+)['\"]",
+        relay,
+    )
+    assert len(mounts) == len(mount_calls), "relay mount points must be reviewable literals"
+    assert mounts == [
+        ("interp", "/app"),
+        ("dbsvc", "/data"),
+        ("dbsvc", "/contacts"),
+    ], "only source files and the trusted provider interpreter may receive mounts"
+    delete_path = relay.find("delete request.db_path")
+    split_credentials = relay.find("splitCredentials(request)")
+    assert delete_path >= 0, "relay must remove db_path before sandbox construction"
+    assert split_credentials >= 0, "relay must broker credentials after path removal"
+    assert delete_path < split_credentials

@@ -60,18 +60,34 @@ class TestPyodideHostAdapter(unittest.TestCase):
         conn.commit()
         conn.close()
 
-    def test_single_interpreter_mode_no_bridge_call(self) -> None:
-        request = {"question": "q", "db_path": self.db_path, "root_model": "test-model"}
-        body: dict = {}
-        resp = run_for_host_pyodide(
+    def _run_bridged(self, request: dict, host_fetch):
+        service, meta = build_db_service(self.db_path)
+
+        def bridge_call(method: str, params_json: str) -> str:
+            return service.handle(method, params_json)
+
+        return run_for_host_pyodide(
             request,
-            _fake_host_fetch_answering("two widgets", captured_body=body),
+            host_fetch,
+            bridge_call=bridge_call,
+            meta=meta,
         )
-        self.assertIsNone(resp["error"])
-        self.assertEqual(resp["answer"], "two widgets")
-        self.assertFalse(resp["extracted"])
-        self.assertIsNone(resp["extract_error"])
-        self.assertNotIn("reasoning_effort", body)
+
+    def test_missing_bridge_is_rejected_for_database_and_providerless_requests(self) -> None:
+        requests = (
+            {"question": "q", "db_path": self.db_path, "root_model": "test-model"},
+            {"question": "q", "root_model": "test-model"},
+        )
+        for request in requests:
+            with self.subTest(request=request):
+                with self.assertRaisesRegex(
+                    TypeError, "cannot serve providerless requests or open request paths"
+                ):
+                    run_for_host_pyodide(
+                        request,
+                        _fake_host_fetch_answering("two widgets"),
+                        bridge_call=None,
+                    )
 
     def test_db_service_bridge_mode(self) -> None:
         """build_db_service + a real bridge_call round-trip, exactly like the
@@ -105,13 +121,12 @@ class TestPyodideHostAdapter(unittest.TestCase):
         headers: dict = {}
         request = {
             "question": "q",
-            "db_path": self.db_path,
             "root_model": "test-model",
             "api_key": "mr_sk_REAL",
             "customer_token": "ct_SHOULD_NOT_BE_USED",
             "auth_type": "api_key",
         }
-        run_for_host_pyodide(request, _fake_host_fetch_answering("ok", headers))
+        self._run_bridged(request, _fake_host_fetch_answering("ok", headers))
         self.assertEqual(headers.get("X-ModelRelay-Api-Key"), "mr_sk_REAL")
         self.assertNotIn("Authorization", headers)
 
@@ -119,13 +134,12 @@ class TestPyodideHostAdapter(unittest.TestCase):
         headers: dict = {}
         request = {
             "question": "q",
-            "db_path": self.db_path,
             "root_model": "test-model",
             "api_key": "mr_sk_UNUSED",
             "customer_token": "ct_REAL",
             "auth_type": "customer_token",
         }
-        run_for_host_pyodide(request, _fake_host_fetch_answering("ok", headers))
+        self._run_bridged(request, _fake_host_fetch_answering("ok", headers))
         self.assertEqual(headers.get("Authorization"), "Bearer ct_REAL")
 
     def test_root_reasoning_effort_reaches_pyodide_callback(self) -> None:
@@ -137,7 +151,7 @@ class TestPyodideHostAdapter(unittest.TestCase):
             "root_reasoning_effort": "none",
         }
 
-        run_for_host_pyodide(
+        self._run_bridged(
             request,
             _fake_host_fetch_answering("ok", captured_body=body),
         )
@@ -153,14 +167,14 @@ class TestPyodideHostAdapter(unittest.TestCase):
         }
 
         with self.assertRaisesRegex(ValueError, "root_reasoning_effort"):
-            run_for_host_pyodide(request, _fake_host_fetch_answering("unused"))
+            self._run_bridged(request, _fake_host_fetch_answering("unused"))
 
     def test_serialize_error_on_root_failure(self) -> None:
         def failing_host_fetch(method: str, url: str, headers_json: str, body: str) -> str:
             raise RuntimeError("boom")
 
-        request = {"question": "q", "db_path": self.db_path, "root_model": "test-model"}
-        resp = run_for_host_pyodide(request, failing_host_fetch)
+        request = {"question": "q", "root_model": "test-model"}
+        resp = self._run_bridged(request, failing_host_fetch)
         # run_rlm surfaces a JsException-shaped RLMError on a root LLM
         # exception; the crux under test is that it's JSON-serializable, not
         # its exact type/message.

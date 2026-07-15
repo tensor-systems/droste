@@ -1,8 +1,8 @@
 // Deno+Pyodide relay — a drop-in for a host's native runner helper:
 // reads a HostRequest JSON from stdin, runs the RLM in Pyodide via a
 // host-supplied Python adapter module, writes a HostResponse JSON to stdout.
-// Deno holds the only ambient capabilities (narrow net to ModelRelay + read of
-// the DB dir); the Pyodide sandbox has none.
+// Deno holds the only ambient capabilities (narrow net to ModelRelay + trusted
+// provider files); the Pyodide sandbox has none.
 //
 //   echo '<request json>' | deno run --allow-net=api.modelrelay.ai \
 //       --allow-read --allow-env relay.ts <sources.zip> <adapter_module>
@@ -69,8 +69,8 @@ function realPathOr(path: string): string {
 }
 
 // Stage the bundled Python sources into a Pyodide interpreter's /app — shared
-// between the REPL interpreter and (in DB-service mode) the second, trusted
-// interpreter, both of which import from droste and the host's adapter package.
+// between the REPL interpreter and the trusted provider interpreter, both of
+// which import from droste and the host's adapter package.
 async function mountSources(
   interp: Awaited<ReturnType<typeof loadPyodide>>,
 ): Promise<void> {
@@ -89,23 +89,13 @@ async function writeHostResponse(resp: unknown): Promise<void> {
   await Deno.stdout.write(_enc.encode(JSON.stringify(resp) + "\n"));
 }
 
-// A'-2 sandbox split: move the DB out of the untrusted REPL
-// interpreter entirely, into a second, trusted "DB service" interpreter that
-// the REPL only ever reaches through a bridged RPC call (droste.sources.bridge).
-// On by default as of 2026-07-08: a live-corpus parity check (byte-identical
-// answers, retrieved_guids, iterations, sub_calls_made, and total_tokens across
-// 3 representative queries against a large benchmark corpus, in both
-// modes) found no behavior difference, so the stronger security posture (the
-// untrusted interpreter never holds the DB) ships as the default.
-// RLM_DB_SERVICE=0 reverts to the single-interpreter, db_path-in-sandbox
-// behavior — mirrors the RLM_BRIDGE=legacy / RLM_STREAM=0 kill-switch shape.
-// Orthogonal to RLM_BRIDGE: that flag governs credential visibility (which
-// payload the sandbox sees, whether host_fetch strips/injects auth); this one
-// governs DB locality. All four combinations of the two flags are coherent and
-// each is a useful debugging bisect.
+// A'-2 sandbox split: keep host data out of the untrusted REPL interpreter.
+// When a request names a database, a second trusted provider interpreter owns
+// it and the REPL can reach it only through the brokered provider bridge.
+// There is intentionally no direct-mount fallback: one egress path means the
+// sandbox never gains ambient access to a database or its sibling files.
 const hasDbPath = typeof request.db_path === "string" &&
   request.db_path.length > 0 && request.db_path !== "nil";
-const DB_SERVICE = hasDbPath && Deno.env.get("RLM_DB_SERVICE") !== "0";
 
 // Resolve symlinks before mounting. Pyodide's NODEFS mounts a host directory
 // into its own VFS; if the DB file is a symlink to an absolute host path
@@ -124,10 +114,10 @@ const realContactsPath = hasContactsField
   ? realPathOr(request.contacts_db_path)
   : null;
 
-// In DB-service mode, build the trusted interpreter FIRST, before the
-// untrusted REPL interpreter even exists — a bad db_path (or any bootstrap
-// failure) then costs one interpreter boot, not two, and can never surface as
-// a confusing bridge-timeout-shaped error from the REPL side.
+// Build the trusted provider interpreter FIRST, before the untrusted REPL
+// interpreter even exists. A bad db_path (or any bootstrap failure) then costs
+// one interpreter boot, not two, and never becomes a bridge-timeout-shaped
+// error from the REPL side.
 let bridgeCall:
   | ((method: string, paramsJson: string) => Promise<string>)
   | null = null;
@@ -153,7 +143,7 @@ if (Deno.build.os !== "windows") {
 // round any integer beyond Number.MAX_SAFE_INTEGER (e.g. a 64-bit record id
 // or timestamp an adapter puts in meta) before the adapter ever sees it.
 let bridgeMetaJson: string | null = null;
-if (DB_SERVICE) {
+if (hasDbPath) {
   try {
     const quiet = { stdout: () => {}, stderr: () => {} };
     const dbsvc = await loadPyodide(quiet);
@@ -292,11 +282,9 @@ const py = await loadPyodide({
     }
   },
 });
-// Needed even in DB-service mode: run_for_host_pyodide's bridge branch imports
-// droste.sources.bridge, and droste.sources.__init__ eagerly imports
-// sql_local.py, which imports the stdlib sqlite3 module — the REPL
-// interpreter never OPENS a database, but it still needs the package loaded
-// just to import the client-side BridgeProvider.
+// The client-side bridge import currently reaches sql_local.py through
+// droste.sources.__init__, so the REPL needs the sqlite3 package to import the
+// module. It never opens or mounts a database in this interpreter.
 await py.loadPackage("sqlite3", {
   messageCallback: () => {},
   errorCallback: () => {},
@@ -336,41 +324,11 @@ json.dumps({
 `),
 ));
 
-if (DB_SERVICE) {
-  // The whole point of the split: the untrusted interpreter never sees the
-  // DB directory at all, mounted or otherwise.
-  delete request.db_path;
-  delete request.contacts_db_path;
-} else if (realDbPath && dbDir) {
-  // DELIBERATE (#7, decided 2026-07-10): legacy mode mounts the DB's whole
-  // parent directory READ-WRITE into the untrusted interpreter — mountNodeFS
-  // has no read-only or per-file option, so any sibling file in that
-  // directory (app config, session state) is readable and writable by
-  // LLM-generated code. The alternatives were rejected: copying the DB into
-  // a scratch dir costs a full corpus copy (GBs) per run, and hardlinking
-  // requires a new --allow-write grant in every host's spawn contract —
-  // both worse than hardening a deliberately-opt-in debugging kill switch.
-  // This mode is for bisecting bridge/DB-service regressions only; never
-  // ship it as a default. The warning below makes every activation loud.
-  emitEvent({
-    type: "progress",
-    status: "WARNING: RLM_DB_SERVICE=0 (legacy mode) mounts the whole DB " +
-      "directory read-write into the untrusted interpreter — debugging " +
-      "kill switch only, do not ship",
-  });
-  py.mountNodeFS("/data", dbDir);
-  request.db_path = "/data/" + basename(realDbPath);
-  if (realContactsPath) {
-    request.contacts_db_path = "/data/" + basename(realContactsPath);
-  } else {
-    delete request.contacts_db_path;
-  }
-} else {
-  // A contacts DB has no coherent meaning without the primary DB/service.
-  // More importantly, never pass an unmapped host filesystem path into the
-  // untrusted interpreter on a context-only hosted request.
-  delete request.contacts_db_path;
-}
+// The untrusted interpreter never receives host filesystem paths. For a
+// provider-backed request those paths have already been consumed by the
+// trusted interpreter; for a context-only request they have no meaning.
+delete request.db_path;
+delete request.contacts_db_path;
 
 // Emit a structured event line to the relay's own stderr — the same one-way
 // channel the host already reads for progress (see the loadPyodide stderr hook).
@@ -404,10 +362,8 @@ const STREAM_ENABLED = Deno.env.get("RLM_STREAM") !== "0";
 // RLM_BRIDGE=legacy restores the pre-A′ behavior (credential visible to the
 // sandbox) as a no-rebuild kill switch, mirroring RLM_STREAM=0.
 const BRIDGE_LEGACY = Deno.env.get("RLM_BRIDGE") === "legacy";
-// splitCredentials reads whatever's left on `request` at this point, so the
-// db_path/contacts_db_path mutation above (deleted in DB-service mode,
-// rewritten to /data/... otherwise) is already reflected in sandboxRequest —
-// no separate strip needed for the legacy payload.
+// splitCredentials runs only after host filesystem paths have been removed,
+// so sandboxRequest cannot carry a database locator into generated code.
 const { creds, sandboxRequest } = splitCredentials(request);
 
 // Host-brokered ModelRelay transport (Pyodide has no network of its own).
@@ -478,15 +434,12 @@ py.globals.set(
   JSON.stringify(BRIDGE_LEGACY ? request : sandboxRequest),
 );
 py.globals.set("adapter_module_name", adapterModule);
-// Always set, never conditionally interpolated — bridge_call,
-// duplex_bridge_call, and bridge_meta_json
-// are None/"null" outside DB-service mode, and the adapter's
-// run_for_host_pyodide(..., bridge_call=None, meta=None) contract handles
-// that uniformly. relay.ts never inspects what's inside meta (see
-// bridgeMetaJson above); it's opaque cargo between the two adapter calls,
-// passed through as the raw JSON string — never parsed into a JS value here.
-py.globals.set("bridge_call", DB_SERVICE ? bridgeCall : null);
-py.globals.set("duplex_bridge_call", DB_SERVICE ? duplexBridgeCall : null);
+// Always set, never conditionally interpolated. They are None/"null" only for
+// a context-only request with no provider. relay.ts never inspects what's
+// inside meta; it is opaque cargo between the two adapter calls and stays a raw
+// JSON string here.
+py.globals.set("bridge_call", bridgeCall);
+py.globals.set("duplex_bridge_call", duplexBridgeCall);
 py.globals.set("bridge_meta_json", bridgeMetaJson ?? "null");
 // A callable, not a value snapshot: lastHttpErrorStatus is still 0 at this
 // point (host_fetch, which sets it, hasn't run yet — it runs synchronously

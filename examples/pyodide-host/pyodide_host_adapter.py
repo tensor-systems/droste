@@ -8,7 +8,7 @@ exactly two functions:
 
     build_db_service(db_path, contacts_db_path=None) -> (service, meta)
     run_for_host_pyodide(
-        request, host_fetch, bridge_call=None, duplex_bridge_call=None, meta=None
+        request, host_fetch, bridge_call, duplex_bridge_call=None, meta=None
     ) -> dict
 
 `meta` is opaque to relay.ts — whatever `build_db_service` returns crosses the
@@ -94,22 +94,28 @@ def build_db_service(
 def run_for_host_pyodide(
     request: dict[str, Any],
     host_fetch: HostFetch,
-    bridge_call: Any = None,
+    bridge_call: Any,
     duplex_bridge_call: Any = None,
     meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The Pyodide equivalent of an in-process `run_rlm` call.
 
-    `bridge_call` is the A'-2 seam: when the host wires a second,
-    trusted Pyodide interpreter running a `ProviderService` built by
-    `build_db_service`, it passes the resulting `bridge_call(method,
-    params_json)` here instead of a raw `db_path`, and the DB never opens
-    inside this (untrusted) interpreter. `bridge_call` is `None` when the
-    host opts out (relay.ts: `RLM_DB_SERVICE=0`) — the single-interpreter,
-    `db_path`-in-sandbox behavior below is unchanged in that case.
+    `bridge_call` is the A'-2 seam: the host wires a second, trusted Pyodide
+    interpreter running a `ProviderService` built by `build_db_service` and
+    passes its `bridge_call(method, params_json)` here. The database never
+    opens inside this untrusted interpreter. This database-backed reference
+    adapter intentionally has no direct-access fallback and is not a
+    context-only adapter; providerless traffic should use a separate adapter
+    module with no database bindings.
     `duplex_bridge_call` is the explicitly selected bridge-v2 message pump;
     omitting it keeps the same bridge provider on unary protocol 4.
     """
+    if not callable(bridge_call):
+        raise TypeError(
+            "bridge_call must be callable; this database-backed adapter cannot "
+            "serve providerless requests or open request paths directly"
+        )
+
     # customer_token only when auth_type says so — BridgedLLMClient._auth_headers
     # prefers a customer token (bearer) over an api_key (X-ModelRelay-Api-Key)
     # whenever one is present, so an unconditional pass-through would pick the
@@ -130,20 +136,17 @@ def run_for_host_pyodide(
         reasoning_effort=root_reasoning_effort or "",
     )
 
-    if bridge_call is not None:
-        bridge = BridgeProvider(bridge_call, duplex_call=duplex_bridge_call)
-        registration = bridge.registration(
-            # Effects are deliberately supplied by this receiving host, not
-            # trusted from transport metadata.
-            effects={"query": SideEffect.READ, "schema": SideEffect.READ},
-            policy_metadata={"query": {"read_only": True}},
-        )
-        registry = ProviderCatalog((registration,)).bind(
-            (ConfiguredSource(bridge.source_id, bridge.manifest.provider_type),),
-            default_source_id=bridge.source_id,
-        )
-    else:
-        registry = _sql_registry(request["db_path"])
+    bridge = BridgeProvider(bridge_call, duplex_call=duplex_bridge_call)
+    registration = bridge.registration(
+        # Effects are deliberately supplied by this receiving host, not
+        # trusted from transport metadata.
+        effects={"query": SideEffect.READ, "schema": SideEffect.READ},
+        policy_metadata={"query": {"read_only": True}},
+    )
+    registry = ProviderCatalog((registration,)).bind(
+        (ConfiguredSource(bridge.source_id, bridge.manifest.provider_type),),
+        default_source_id=bridge.source_id,
+    )
     subcalls = MockSubcallClient()
     raw_budget = request.get("budget")
     budget = Budget.from_dict(raw_budget) if isinstance(raw_budget, dict) else Budget()
