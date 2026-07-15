@@ -341,13 +341,29 @@ function spawnRelayRaw(
   port: number,
   env: Record<string, string>,
   adapterModule = "pyodide_host_adapter",
-  options: {
-    eventStdio?: "pipe" | number;
-    shellParent?: boolean;
-    registerExtraStdio?: boolean;
-  } = {},
+  eventStdio: "pipe" | number = "pipe",
 ) {
-  const denoArgs = [
+  return spawnRelayProcess(
+    "/bin/sh",
+    [
+      "-c",
+      'DENO_EXTRA_STDIO_FDS="$DROSTE_RELAY_EVENT_FD" "$@"',
+      "droste-relay",
+      Deno.execPath(),
+      ...relayDenoArgs(sourcesDir, port, adapterModule),
+    ],
+    request,
+    env,
+    eventStdio,
+  );
+}
+
+function relayDenoArgs(
+  sourcesDir: string,
+  port: number,
+  adapterModule: string,
+): string[] {
+  return [
     "run",
     `--allow-net=127.0.0.1:${port}`,
     // Unscoped read: this dev/CI run uses the ambient Deno cache (Pyodide's
@@ -360,36 +376,61 @@ function spawnRelayRaw(
     sourcesDir,
     adapterModule,
   ];
-  const shellParent = options.shellParent ?? true;
-  const registerExtraStdio = options.registerExtraStdio ?? true;
+}
+
+function spawnRelayWithoutDenoExtraStdio(
+  sourcesDir: string,
+  request: Record<string, unknown>,
+  port: number,
+  env: Record<string, string>,
+) {
   // A native shell, not Deno's child_process shim, is the relay's immediate
-  // parent. Deno only exposes inherited fd3 to node:fs when the parent sets
-  // DENO_EXTRA_STDIO_FDS; the negative mode proves omission fails closed.
-  const command = shellParent ? "/bin/sh" : Deno.execPath();
-  const args = shellParent
-    ? [
+  // parent. Explicitly remove the marker that Deno's outer test shim adds so
+  // this proves an ordinary external launch fails closed when it is omitted.
+  return spawnRelayProcess(
+    "/bin/sh",
+    [
       "-c",
-      registerExtraStdio
-        ? 'DENO_EXTRA_STDIO_FDS="$DROSTE_RELAY_EVENT_FD" "$@"'
-        : 'unset DENO_EXTRA_STDIO_FDS; "$@"',
+      'unset DENO_EXTRA_STDIO_FDS; "$@"',
       "droste-relay",
       Deno.execPath(),
-      ...denoArgs,
-    ]
-    : denoArgs;
+      ...relayDenoArgs(sourcesDir, port, "pyodide_host_adapter"),
+    ],
+    request,
+    env,
+    "pipe",
+  );
+}
+
+function spawnRelayDirectForSignalTest(
+  sourcesDir: string,
+  request: Record<string, unknown>,
+  port: number,
+  env: Record<string, string>,
+) {
+  return spawnRelayProcess(
+    Deno.execPath(),
+    relayDenoArgs(sourcesDir, port, "pyodide_host_adapter"),
+    request,
+    { ...env, DENO_EXTRA_STDIO_FDS: "3" },
+    "pipe",
+  );
+}
+
+function spawnRelayProcess(
+  command: string,
+  args: string[],
+  request: Record<string, unknown>,
+  env: Record<string, string>,
+  eventStdio: "pipe" | number,
+) {
   const child = spawn(command, args, {
     env: {
       ...Deno.env.toObject(),
       ...env,
       DROSTE_RELAY_EVENT_FD: "3",
-      ...(shellParent ? {} : { DENO_EXTRA_STDIO_FDS: "3" }),
     },
-    stdio: [
-      "pipe",
-      "pipe",
-      "pipe",
-      options.eventStdio ?? "pipe",
-    ],
+    stdio: ["pipe", "pipe", "pipe", eventStdio],
   });
   child.stdin!.end(JSON.stringify(request));
   return child;
@@ -513,7 +554,7 @@ Deno.test("relay hard cancellation and process death leave only a nonterminal pr
   const dbPath = await buildTempDb();
   for (const signal of ["SIGTERM", "SIGKILL"] as const) {
     const server = await startGatedMockModelRelay();
-    const child = spawnRelayRaw(
+    const child = spawnRelayDirectForSignalTest(
       sourcesDir,
       {
         question: "wait for hard stop",
@@ -525,8 +566,6 @@ Deno.test("relay hard cancellation and process death leave only a nonterminal pr
       },
       server.port,
       {},
-      "pyodide_host_adapter",
-      { shellParent: false },
     );
     const completion = probeCompletion(child);
     const stdout = collectNodeStream(child.stdout!);
@@ -640,13 +679,11 @@ Deno.test({
 Deno.test({
   name: "external shell parent must register inherited fd3 with Deno",
   fn: async () => {
-    const child = spawnRelayRaw(
+    const child = spawnRelayWithoutDenoExtraStdio(
       "/unused-before-event-channel-validation",
       {},
       1,
       {},
-      "pyodide_host_adapter",
-      { registerExtraStdio: false },
     );
     const [status, stdout, stderr, events] = await Promise.all([
       probeCompletion(child),
@@ -683,7 +720,7 @@ Deno.test({
         1,
         {},
         "_large_event_adapter",
-        { eventStdio: descriptor },
+        descriptor,
       );
       const [status, stdout, stderr] = await Promise.all([
         probeCompletion(child),
