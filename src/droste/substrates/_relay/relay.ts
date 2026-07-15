@@ -99,7 +99,7 @@ function eventChannelFailureResponse(error: RelayEventChannelError): unknown {
   return {
     answer: null,
     error: {
-      type: error.name,
+      type: "RelayEventChannelError",
       code: error.code,
       message: error.message,
     },
@@ -107,7 +107,12 @@ function eventChannelFailureResponse(error: RelayEventChannelError): unknown {
 }
 
 function writeEventChannelDiagnostic(error: RelayEventChannelError): void {
-  console.error(`droste relay: event_channel_error code=${error.code}`);
+  try {
+    console.error(`droste relay: event_channel_error code=${error.code}`);
+  } catch {
+    // fd2 diagnostics are best-effort and never replace the structured stdout
+    // failure when the event channel itself is unavailable.
+  }
 }
 
 async function terminateForEventChannel(
@@ -412,9 +417,15 @@ function emitStartupIfNeeded(): void {
 }
 
 function forwardPyodideStderr(message: string): void {
+  if (eventChannel.failure !== null) return;
   for (const line of message.split("\n")) {
     if (isRlmEvent(line)) {
-      forwardEngineEvent(line.trim());
+      try {
+        forwardEngineEvent(line.trim());
+      } catch (error) {
+        if (error instanceof RelayEventChannelError) return;
+        throw error;
+      }
     }
   }
 }
@@ -453,6 +464,7 @@ let lastHttpErrorStatus = 0;
 py.globals.set(
   "host_fetch",
   async (m: string, u: string, h: string, b: string) => {
+    if (eventChannel.failure !== null) throw eventChannel.failure;
     const headers = JSON.parse(h);
     // A′: host auth is authoritative — drop whatever auth header the sandbox sent
     // and inject the held credential. Scoped to the exact `POST /api/v1/responses`
@@ -532,7 +544,7 @@ py.globals.set("get_last_http_error_status", () => lastHttpErrorStatus);
 // bridge_meta_json passthrough above exists to avoid, for ANY large integer
 // anywhere in the adapter's response (not just meta). `out` is the final
 // stdout payload as-is; nothing here re-parses it in JS.
-let out: string;
+let out: string | null = null;
 try {
   out = await py.runPythonAsync(`
 import importlib, json, io, contextlib, traceback
@@ -576,7 +588,6 @@ json.dumps(resp, ensure_ascii=False, separators=(",", ":"))
   if (eventChannel.failure === null) {
     throw error;
   }
-  out = JSON.stringify(eventChannelFailureResponse(eventChannel.failure));
 } finally {
   const cleanupErrors: unknown[] = [];
   const sessions = [...activeDuplexSessions];
@@ -610,4 +621,7 @@ if (eventChannel.failure !== null) {
   await terminateForEventChannel(eventChannel.failure);
 }
 
+if (out === null) {
+  throw new Error("relay response is unavailable");
+}
 await Deno.stdout.write(new TextEncoder().encode(out + "\n"));

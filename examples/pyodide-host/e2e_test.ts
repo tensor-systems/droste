@@ -16,6 +16,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { copy } from "jsr:@std/fs@1/copy";
 import { spawn } from "node:child_process";
+import { closeSync, openSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Readable } from "node:stream";
 import { isRlmEvent } from "../../src/droste/substrates/_relay/events.ts";
@@ -336,6 +337,7 @@ function spawnRelayRaw(
   port: number,
   env: Record<string, string>,
   adapterModule = "pyodide_host_adapter",
+  eventStdio: "pipe" | number = "pipe",
 ) {
   const child = spawn(
     "deno",
@@ -358,7 +360,7 @@ function spawnRelayRaw(
         ...env,
         DROSTE_RELAY_EVENT_FD: "3",
       },
-      stdio: ["pipe", "pipe", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe", eventStdio],
     },
   );
   child.stdin!.end(JSON.stringify(request));
@@ -605,6 +607,45 @@ Deno.test({
         result.stderr,
         `droste relay: event_channel_error code=${expectedCode}\n`,
       );
+    }
+  },
+});
+
+Deno.test({
+  name: "relay.ts returns one structured failure when fd3 is read-only",
+  fn: async () => {
+    const sourcesDir = await buildTempSources();
+    const descriptor = openSync(new URL(import.meta.url), "r");
+    try {
+      const child = spawnRelayRaw(
+        sourcesDir,
+        {},
+        1,
+        {},
+        "_large_event_adapter",
+        descriptor,
+      );
+      const [status, stdout, stderr] = await Promise.all([
+        probeCompletion(child),
+        collectNodeStream(child.stdout!),
+        collectNodeStream(child.stderr!),
+      ]);
+      assertEquals(status, { code: 0, signal: null });
+      assertEquals(stdout.trimEnd().split("\n").length, 1);
+      assertEquals(JSON.parse(stdout), {
+        answer: null,
+        error: {
+          type: "RelayEventChannelError",
+          code: "write_failed",
+          message: "dedicated relay event channel is unavailable",
+        },
+      });
+      assertEquals(
+        stderr,
+        "droste relay: event_channel_error code=write_failed\n",
+      );
+    } finally {
+      closeSync(descriptor);
     }
   },
 });
