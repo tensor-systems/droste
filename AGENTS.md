@@ -299,6 +299,10 @@ evidence with that status rather than leaving the model to interpret prefixes.
   and bounded process-group shutdown. Cancellation makes the session terminal;
   never retry an outcome whose remote completion is unknown. MCP progress is
   not ledger usage.
+- Drain pipes with readiness-sized reads (`os.read`/`read1`), not
+  `BufferedReader.read(size)`: a live writer may never fill that size. The
+  stdout reader must also hand server-request responses to a bounded responder
+  instead of waiting for or racing the ordinary request writer.
 - Preserve `structuredContent` and declared schemas exactly. Bounded untyped
   content remains content-block data; do not fetch links, flatten media, infer
   evidence from URIs/arguments, or put raw MCP payloads in durable traces.

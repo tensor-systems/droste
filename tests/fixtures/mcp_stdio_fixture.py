@@ -201,6 +201,7 @@ def main() -> None:
         # and BufferedReader chunk sizes; the transport must enforce promptly.
         sys.stderr.write("x" * 2048)
     sys.stderr.flush()
+    pending_server_list: int | None = None
     for line in sys.stdin:
         if MODE == "invalid-json":
             sys.stdout.write("not json\n")
@@ -262,6 +263,17 @@ def main() -> None:
             if MODE == "slow-startup":
                 time.sleep(0.08)
             cursor = params.get("cursor")
+            if (
+                MODE == "server-request"
+                and cursor is None
+                and pending_server_list is None
+                and not (ROOT / "server-response.json").exists()
+            ):
+                # Force discovery to contend with the client response. The
+                # response must not be discarded merely because the ordinary
+                # request writer was active when the server request arrived.
+                pending_server_list = request_id
+                continue
             if MODE == "cursor-loop":
                 result(request_id, {"tools": TOOLS[:1], "nextCursor": "again"})
             elif MODE == "empty-cursor" and cursor is None:
@@ -289,6 +301,12 @@ def main() -> None:
             (ROOT / "server-response.json").write_text(
                 json.dumps(message, separators=(",", ":")), encoding="utf-8"
             )
+            if pending_server_list is not None:
+                result(
+                    pending_server_list,
+                    {"tools": TOOLS[:3], "nextCursor": "page-2"},
+                )
+                pending_server_list = None
         elif request_id is not None:
             send(
                 {

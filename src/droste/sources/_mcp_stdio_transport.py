@@ -13,6 +13,7 @@ import select
 import signal
 import subprocess
 import threading
+from collections import deque
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from time import monotonic, sleep
@@ -109,6 +110,9 @@ class McpStdioSession:
         self._max_tools = max_tools
         self._max_in_flight = max_in_flight
         self._write_lock = threading.Lock()
+        self._server_response_lock = threading.Lock()
+        self._server_responses: deque[Any] = deque()
+        self._server_responder: threading.Thread | None = None
         self._state_lock = threading.Lock()
         self._pending: dict[int, _Pending] = {}
         self._next_id = 1
@@ -368,7 +372,6 @@ class McpStdioSession:
         *,
         execution: CapabilityExecutionContext | None = None,
         expires: float | None = None,
-        wait_for_lock: bool = True,
     ) -> None:
         try:
             encoded = json.dumps(
@@ -378,10 +381,7 @@ class McpStdioSession:
             raise McpProtocolError(f"MCP request is not finite JSON: {exc}") from exc
         if len(encoded) > self._max_frame_bytes:
             raise McpProtocolError("MCP request exceeds the configured frame bound")
-        if wait_for_lock:
-            self._acquire_write_lock(execution, expires)
-        elif not self._write_lock.acquire(blocking=False):
-            raise McpTransportError("MCP standard-input writer is busy")
+        self._acquire_write_lock(execution, expires)
         try:
             with self._state_lock:
                 self._raise_if_unavailable_locked()
@@ -494,19 +494,46 @@ class McpStdioSession:
         self._fail(failure)
 
     def _respond_method_not_found(self, request_id: Any) -> None:
-        try:
-            self._write(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {"code": -32601, "message": "Method not found"},
-                },
-                expires=monotonic() + min(self._close_timeout, 0.01),
-                wait_for_lock=False,
-            )
-        except Exception:
-            # The reader's transport failure path will wake active callers.
-            pass
+        with self._server_response_lock:
+            if len(self._server_responses) >= self._max_in_flight:
+                failure = McpProtocolError("MCP concurrent server request bound exceeded")
+            else:
+                failure = None
+                self._server_responses.append(request_id)
+            if self._server_responder is not None and self._server_responder.is_alive():
+                responder = None
+            elif failure is None:
+                responder = threading.Thread(
+                    target=self._send_method_not_found,
+                    name="droste-mcp-server-response",
+                )
+                self._server_responder = responder
+            else:
+                responder = None
+        if failure is not None:
+            self._fail(failure)
+        elif responder is not None:
+            responder.start()
+
+    def _send_method_not_found(self) -> None:
+        while True:
+            with self._server_response_lock:
+                if not self._server_responses:
+                    self._server_responder = None
+                    return
+                request_id = self._server_responses.popleft()
+            try:
+                self._write(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {"code": -32601, "message": "Method not found"},
+                    },
+                    expires=monotonic() + self._close_timeout,
+                )
+            except Exception:
+                # The reader's transport failure path will wake active callers.
+                return
 
     def _read_stderr(self) -> None:
         assert self._process.stderr is not None
@@ -581,6 +608,10 @@ class McpStdioSession:
             self._reap_process_group_descendants()
             self._reader.join(timeout=self._close_timeout)
             self._stderr_reader.join(timeout=self._close_timeout)
+            with self._server_response_lock:
+                responder = self._server_responder
+            if responder is not None and responder is not threading.current_thread():
+                responder.join(timeout=self._close_timeout)
         except BaseException as exc:
             self._close_failure = exc
             raise
