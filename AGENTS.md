@@ -15,6 +15,8 @@ This project uses **uv** as the default package manager.
 - Keep workflows host-agnostic: do not encode runner names, network addresses,
   credentials, or mutable machine state. Preserve job names because they are
   part of the required-check contract.
+- Pin JavaScript action upgrades to immutable commit SHAs, with the release
+  version beside each pin. `setup-uv` v8 deliberately has no moving major tag.
 
 ## Policy Hints (Contract Enforcement)
 
