@@ -412,7 +412,7 @@ Roughly three tiers of coverage:
 - **Extract-fallback failure rate is unknown.** When `max_iterations` is
   exhausted without `answer["ready"]`, one more LLM call tries to synthesize a
   best-effort answer; a failure there now surfaces as a structured
-  `extract_error` (result field + `extract_error` NDJSON event) instead of
+  `extract_error` (result field + the Trace ABI v2 `extract` failure event) instead of
   silently falling back to raw loop output, but there's no data yet on how
   often that call actually fails or why. No retry has been added — that's a
   decision for once real failure data exists, not before.

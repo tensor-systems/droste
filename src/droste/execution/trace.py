@@ -99,8 +99,6 @@ EVENT_BODY_SCHEMAS: Mapping[str, EventBodySchema] = MappingProxyType(
             {
                 "reservation": Mapping,
                 "checkpoint": Mapping,
-                "batch_id": str,
-                "batch_index": int,
                 "batch_count": int,
                 "error": Mapping,
             },
@@ -175,7 +173,7 @@ def _matches_field_type(value: Any, expected: EventFieldType) -> bool:
 
 
 def validate_event_body(event_type: str, body: Mapping[str, Any]) -> None:
-    """Validate one body against the exhaustive Trace ABI v1 table."""
+    """Validate one body against the exhaustive Trace ABI v2 table."""
     try:
         required, optional = EVENT_BODY_SCHEMAS[event_type]
     except KeyError as exc:
@@ -274,18 +272,8 @@ def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
                 name="subcall.error",
                 fields={"code": str, "type": str},
             )
-        batch_fields = {key for key in ("batch_id", "batch_index", "batch_count") if key in body}
-        if batch_fields and "batch_id" not in batch_fields:
-            raise ValueError("subcall batch metadata requires batch_id")
-        if "batch_id" in body and not body["batch_id"]:
-            raise ValueError("subcall batch_id must not be empty")
-        if "batch_index" in body and body["batch_index"] < 0:
-            raise ValueError("subcall batch_index must be non-negative")
         if "batch_count" in body and body["batch_count"] < 1:
             raise ValueError("subcall batch_count must be positive")
-        if "batch_index" in body and "batch_count" in body:
-            if body["batch_index"] >= body["batch_count"]:
-                raise ValueError("subcall batch_index must be less than batch_count")
     elif event_type == "repair":
         if body["phase"] not in {"start", "completion", "failure"}:
             raise ValueError("repair phase is not recognized by Trace ABI v2")

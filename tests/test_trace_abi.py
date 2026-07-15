@@ -4,7 +4,6 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from threading import Event, Thread
-from pathlib import Path
 
 import pytest
 
@@ -22,7 +21,13 @@ from droste.exceptions import RLMError
 from droste.execution.trace import PersistenceClass, TraceRecorder
 from droste.loop.step import finalize
 from droste.protocols.llm_client import TokenUsage
-from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
+from droste.testing import (
+    MockEnvironment,
+    MockLLMClient,
+    MockResponse,
+    MockSubcallClient,
+    trace_v2_lifecycle_ndjson,
+)
 
 
 def _ready_reply(marker: str = "ok") -> MockResponse:
@@ -208,9 +213,10 @@ def test_concurrent_subcalls_share_broker_identity_and_trace_order() -> None:
     )
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        assert list(pool.map(subcalls.llm_query, [f"prompt-{index}" for index in range(8)])) == [
-            ""
-        ] * 8
+        assert (
+            list(pool.map(subcalls.llm_query, [f"prompt-{index}" for index in range(8)]))
+            == [""] * 8
+        )
 
     lifecycle = [event for event in events if event["type"] == "subcall"]
     assert len(lifecycle) == 16
@@ -219,11 +225,13 @@ def test_concurrent_subcalls_share_broker_identity_and_trace_order() -> None:
     for event in lifecycle:
         by_call.setdefault(str(event["call_id"]), []).append(event)
     assert len(by_call) == 8
-    assert all([event["phase"] for event in pair] == ["start", "completion"] for pair in by_call.values())
+    assert all(
+        [event["phase"] for event in pair] == ["start", "completion"] for pair in by_call.values()
+    )
     assert all(event["iteration"] == 3 and event["depth"] == 0 for event in lifecycle)
 
 
-def test_batch_fanout_uses_one_broker_batch_identity_without_body_sequence() -> None:
+def test_batch_fanout_uses_call_identity_without_body_sequence() -> None:
     events: list[dict[str, object]] = []
     context = create_execution_context(
         budget=Budget(tokens=100_000, subcalls=10),
@@ -241,9 +249,8 @@ def test_batch_fanout_uses_one_broker_batch_identity_without_body_sequence() -> 
     lifecycle = [event for event in events if event["type"] == "subcall"]
     assert [event["phase"] for event in lifecycle] == ["start", "completion"]
     assert lifecycle[0]["call_id"] == lifecycle[1]["call_id"]
-    assert lifecycle[0]["batch_id"] == lifecycle[0]["call_id"]
     assert lifecycle[0]["batch_count"] == lifecycle[1]["batch_count"] == 3
-    assert all("batch_index" not in event for event in lifecycle)
+    assert all("batch_id" not in event and "batch_index" not in event for event in lifecycle)
     assert all(set(event).isdisjoint({"prompt", "context", "result"}) for event in lifecycle)
 
 
@@ -402,6 +409,18 @@ def test_lifecycle_bodies_are_strict_discriminated_values() -> None:
                 "checkpoint": {"tokens": 1, "subcalls": 1},
             }
         )
+    with pytest.raises(ValueError, match="unknown body fields: batch_id"):
+        recorder.append(
+            {
+                "type": "subcall",
+                "phase": "start",
+                "call_id": "call-1",
+                "operation": "llm_batch",
+                "iteration": 1,
+                "reservation": {"tokens": 1, "subcalls": 1, "wall_ms": 1, "depth": 0},
+                "batch_id": "redundant-call-identity",
+            }
+        )
     with pytest.raises(ValueError, match="unknown body fields: detail"):
         recorder.append(
             {
@@ -433,8 +452,10 @@ def test_trace_abi_v1_is_rejected_instead_of_silently_reinterpreted() -> None:
 
 
 def test_trace_v2_lifecycle_golden_ndjson_is_strict_and_ordered() -> None:
-    path = Path(__file__).parent / "fixtures" / "trace-v2-lifecycle.ndjson"
-    events = [parse_event(json.loads(line)) for line in path.read_text().splitlines()]
+    events = [
+        parse_event(json.loads(line))
+        for line in trace_v2_lifecycle_ndjson().decode("utf-8").splitlines()
+    ]
 
     assert [event.seq for event in events] == list(range(1, 11))
     assert [event.type for event in events] == [

@@ -205,9 +205,83 @@ def test_context_is_frozen_and_reports_cumulative_checkpoints() -> None:
     ]
     assert all(event.call.call_id == "call-1" for event in attempt_events)
     assert attempt_events[0].reservation == CapabilityReservation(100, 2, 1_000, 0)
-    assert attempt_events[1].checkpoint == attempt_events[2].checkpoint == CapabilityCheckpoint(
-        10, 1
+    assert (
+        attempt_events[1].checkpoint == attempt_events[2].checkpoint == CapabilityCheckpoint(10, 1)
     )
+
+
+def test_attempt_observer_failure_cannot_change_the_capability_result() -> None:
+    authority = _AttemptAuthority()
+
+    def handler(context: CapabilityExecutionContext) -> str:
+        context.checkpoint(tokens=10, subcalls=1)
+        return "ok"
+
+    def broken_observer(_event) -> None:
+        raise RuntimeError("observer unavailable")
+
+    broker = CapabilityBroker(
+        (CapabilityRegistration(QUERY, handler),),
+        run_id="run-1",
+        attempt_authority=authority,
+        attempt_observer=broken_observer,
+    )
+    with pytest.warns(RuntimeWarning, match="capability attempt observer failed"):
+        result = broker.dispatch(CapabilityCall(QUERY.capability_id, "call-1", "run-1"))
+
+    assert result.ok is True
+    assert thaw_value(result.result) == "ok"
+    assert authority.settlements == [(True, None, CapabilityCheckpoint(10, 1))]
+
+
+def test_progress_observation_precedes_the_terminal_attempt_fact() -> None:
+    authority = _AttemptAuthority()
+    progress_entered = Event()
+    release_progress = Event()
+    phases: list[CapabilityAttemptPhase] = []
+    checkpoint_workers: list[Thread] = []
+
+    def observer(event) -> None:
+        phases.append(event.phase)
+        if event.phase is CapabilityAttemptPhase.PROGRESS:
+            progress_entered.set()
+            release_progress.wait(timeout=2)
+
+    def handler(context: CapabilityExecutionContext) -> str:
+        worker = Thread(target=lambda: context.checkpoint(tokens=10, subcalls=1))
+        checkpoint_workers.append(worker)
+        worker.start()
+        assert progress_entered.wait(timeout=2)
+        return "ok"
+
+    broker = CapabilityBroker(
+        (CapabilityRegistration(QUERY, handler),),
+        run_id="run-1",
+        attempt_authority=authority,
+        attempt_observer=observer,
+    )
+    results = []
+    dispatch_worker = Thread(
+        target=lambda: results.append(
+            broker.dispatch(CapabilityCall(QUERY.capability_id, "call-1", "run-1"))
+        )
+    )
+    dispatch_worker.start()
+    assert progress_entered.wait(timeout=2)
+    assert phases == [CapabilityAttemptPhase.START, CapabilityAttemptPhase.PROGRESS]
+
+    release_progress.set()
+    dispatch_worker.join(timeout=2)
+    checkpoint_workers[0].join(timeout=2)
+
+    assert not dispatch_worker.is_alive()
+    assert not checkpoint_workers[0].is_alive()
+    assert results[0].ok is True
+    assert phases == [
+        CapabilityAttemptPhase.START,
+        CapabilityAttemptPhase.PROGRESS,
+        CapabilityAttemptPhase.COMPLETION,
+    ]
 
 
 def test_deadline_before_handler_is_typed_and_releases_at_admission_boundary() -> None:

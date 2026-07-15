@@ -40,17 +40,44 @@ const BODIES: Record<string, Record<string, unknown>> = {
     total_tokens: 0,
     wall_time_ms: 0,
   },
-  budget: { kind: "snapshot", source: "test", configured: {}, consumed: {}, remaining: {} },
-  policy: { contract_enforced: false, outcome: "not_enforced", violation_type: null },
+  budget: {
+    kind: "snapshot",
+    source: "test",
+    configured: {},
+    consumed: {},
+    remaining: {},
+  },
+  policy: {
+    contract_enforced: false,
+    outcome: "not_enforced",
+    violation_type: null,
+  },
   capability: { outcome: {} },
   done: {
     status: "success",
     ready: true,
     extracted: false,
     iterations: 1,
-    usage: {},
-    budget: {},
-    policy: {},
+    usage: {
+      kind: "resolved",
+      root: {},
+      subcall: {},
+      unattributed: {},
+      total_tokens: 0,
+      wall_time_ms: 0,
+    },
+    budget: {
+      kind: "snapshot",
+      source: "test",
+      configured: {},
+      consumed: {},
+      remaining: {},
+    },
+    policy: {
+      contract_enforced: false,
+      outcome: "not_enforced",
+      violation_type: null,
+    },
     retention: {},
     error: null,
     extract_error: null,
@@ -58,7 +85,11 @@ const BODIES: Record<string, Record<string, unknown>> = {
   },
 };
 
-function wire(type: string, body: Record<string, unknown>, persistence?: string): string {
+function wire(
+  type: string,
+  body: Record<string, unknown>,
+  persistence?: string,
+): string {
   return JSON.stringify({
     type,
     run_id: "run-1",
@@ -78,7 +109,9 @@ Deno.test("forwards every emitted event type (with json.dumps spacing)", () => {
 });
 
 Deno.test("carries the real payload for a code event (live code streaming)", () => {
-  assert(isRlmEvent(wire("code", { iteration: 2, code: "print(get_stats())" })));
+  assert(
+    isRlmEvent(wire("code", { iteration: 2, code: "print(get_stats())" })),
+  );
 });
 
 Deno.test("drops non-events: loader chatter, stray prints, empty lines", () => {
@@ -109,40 +142,48 @@ Deno.test("a type that is not a string is not an event", () => {
 Deno.test("rejects partial and falsely classified envelopes", () => {
   assert(!isRlmEvent(`{"type":"code"}`));
   assert(!isRlmEvent(wire("code", BODIES.code, "durable")));
-  assert(!isRlmEvent(JSON.stringify({
-    type: "code",
-    run_id: "run-1",
-    seq: 1,
-    timestamp: "2026-07-14T00:00:00Z",
-    version: 1,
-    persistence_class: "configurable",
-    depth: 0,
-    ...BODIES.code,
-  })));
+  assert(
+    !isRlmEvent(JSON.stringify({
+      type: "code",
+      run_id: "run-1",
+      seq: 1,
+      timestamp: "2026-07-14T00:00:00Z",
+      version: 1,
+      persistence_class: "configurable",
+      depth: 0,
+      ...BODIES.code,
+    })),
+  );
 });
 
 Deno.test("rejects malformed and unknown discriminated lifecycle bodies", () => {
-  assert(!isRlmEvent(wire("subcall", {
-    phase: "unknown",
-    call_id: "c",
-    operation: "llm_query",
-    iteration: 1,
-  })));
-  assert(!isRlmEvent(wire("subcall", {
-    phase: "failure",
-    call_id: "c",
-    operation: "llm_query",
-    iteration: 1,
-    checkpoint: { tokens: 1, subcalls: 1 },
-  })));
-  assert(!isRlmEvent(wire("subcall", {
-    phase: "completion",
-    call_id: "c",
-    operation: "llm_query",
-    iteration: 1,
-    checkpoint: { tokens: 1, subcalls: 1 },
-    secret: "not in the ABI",
-  })));
+  assert(
+    !isRlmEvent(wire("subcall", {
+      phase: "unknown",
+      call_id: "c",
+      operation: "llm_query",
+      iteration: 1,
+    })),
+  );
+  assert(
+    !isRlmEvent(wire("subcall", {
+      phase: "failure",
+      call_id: "c",
+      operation: "llm_query",
+      iteration: 1,
+      checkpoint: { tokens: 1, subcalls: 1 },
+    })),
+  );
+  assert(
+    !isRlmEvent(wire("subcall", {
+      phase: "completion",
+      call_id: "c",
+      operation: "llm_query",
+      iteration: 1,
+      checkpoint: { tokens: 1, subcalls: 1 },
+      secret: "not in the ABI",
+    })),
+  );
 });
 
 Deno.test("successful output beginning ERROR remains an output event", () => {
@@ -156,7 +197,10 @@ Deno.test("successful output beginning ERROR remains an output event", () => {
 });
 
 Deno.test("Python and relay accept the same lifecycle golden NDJSON", async () => {
-  const fixture = new URL("../tests/fixtures/trace-v2-lifecycle.ndjson", import.meta.url);
+  const fixture = new URL(
+    "../src/droste/testing/fixtures/trace-v2-lifecycle.ndjson",
+    import.meta.url,
+  );
   const lines = (await Deno.readTextFile(fixture)).trim().split("\n");
   assertEquals(lines.length, 10);
   assert(lines.every(isRlmEvent));

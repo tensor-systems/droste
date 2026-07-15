@@ -5,7 +5,9 @@ writes — entry points attach sinks explicitly."""
 
 from __future__ import annotations
 
+import io
 import re
+import sys
 
 import pytest
 
@@ -13,6 +15,7 @@ from droste import RLMConfig, run_rlm
 from droste.execution.context import create_execution_context
 from droste.execution.progress import (
     EVENT_TYPES,
+    emit_event,
     output_event,
     progress_event,
     render_verbose,
@@ -26,6 +29,17 @@ READY_REPLY = MockResponse(
     text="""```python\nprint('hi')\nanswer['content'] = 'ok'\nanswer['ready'] = True\n```""",
     usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
 )
+
+
+def test_emit_event_never_falls_back_to_captured_stderr(monkeypatch) -> None:
+    captured = io.StringIO()
+    monkeypatch.setattr(sys, "__stderr__", None)
+    monkeypatch.setattr(sys, "stderr", captured)
+
+    with pytest.raises(RuntimeError, match="original stderr is unavailable"):
+        emit_event({"type": "progress", "status": "working"})
+
+    assert captured.getvalue() == ""
 
 
 def test_python_vocabulary_matches_relay_events_ts() -> None:

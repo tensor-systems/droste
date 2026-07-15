@@ -6,8 +6,8 @@ from typing import Any
 
 from ..capabilities import (
     CapabilityAnnotator,
-    CapabilityAttemptObserver,
     CapabilityAttemptAuthority,
+    CapabilityAttemptObserver,
     CapabilityGuard,
     CapabilityObserver,
 )

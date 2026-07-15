@@ -17,8 +17,8 @@ from .._lifecycle import CloseOnce
 from ..capabilities import (
     BrokeredSubcallClient,
     CapabilityAnnotator,
-    CapabilityAttemptObserver,
     CapabilityAttemptAuthority,
+    CapabilityAttemptObserver,
     CapabilityBroker,
     CapabilityGuard,
     CapabilityObserver,

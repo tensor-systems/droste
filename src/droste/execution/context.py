@@ -136,7 +136,7 @@ class ExecutionContext:
     def observe_capability_attempt(self, event: CapabilityAttemptEvent) -> None:
         """Project one broker attempt fact into the canonical subcall event."""
 
-        from ..capabilities import CapabilityAttemptPhase, CapabilityKind, thaw_value
+        from ..capabilities import CapabilityKind, FrozenList, FrozenTuple
 
         capability_id = event.call.capability_id
         if (
@@ -159,14 +159,11 @@ class ExecutionContext:
         if event.error is not None:
             value["error"] = {"code": event.error.code, "type": event.error.type}
         if capability_id.operation in {"llm_batch", "llm_batch_with_errors"}:
-            value["batch_id"] = event.call.call_id
-            raw_prompts = thaw_value(
-                event.call.args[0]
-                if event.call.args
-                else event.call.kwargs.get("prompts", ())
+            prompts = (
+                event.call.args[0] if event.call.args else event.call.kwargs.get("prompts", ())
             )
-            if isinstance(raw_prompts, (list, tuple)) and raw_prompts:
-                value["batch_count"] = len(raw_prompts)
+            if isinstance(prompts, (FrozenList, FrozenTuple)) and prompts.items:
+                value["batch_count"] = len(prompts.items)
         self.emit_event(value)
 
     @property

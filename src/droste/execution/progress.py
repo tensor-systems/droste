@@ -156,7 +156,13 @@ def emit_event(event: dict[str, Any]) -> None:
     uses the same event objects. Attached EXPLICITLY by entry points; the core
     loop emits nothing when no sink is configured (#35).
     """
-    print(json.dumps(event, ensure_ascii=True), file=sys.stderr, flush=True)
+    # Model-authored code executes under a sandbox stderr redirect. Lifecycle
+    # events may be emitted from inside that execution, so the host event lane
+    # must use the process's original stderr rather than becoming sandbox
+    # output. Embedders that need another destination inject another sink.
+    if sys.__stderr__ is None:
+        raise RuntimeError("original stderr is unavailable for the host event lane")
+    print(json.dumps(event, ensure_ascii=True), file=sys.__stderr__, flush=True)
 
 
 def emit_progress(status: str) -> None:

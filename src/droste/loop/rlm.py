@@ -1044,9 +1044,7 @@ def run_rlm(
                 if outcome.error is None:
                     code = repaired_code
                     has_successful_step = True
-                    context.emit_event(
-                        repair_event(iterations, "execution_error", "completion")
-                    )
+                    context.emit_event(repair_event(iterations, "execution_error", "completion"))
                 else:
                     context.emit_event(
                         repair_event(

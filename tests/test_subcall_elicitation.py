@@ -722,9 +722,7 @@ answer['ready'] = True
     assert result.error.details is not None
     assert result.error.details["reason"] == "semantic_exact_retry_budget_exhausted"
     terminal_repair = [
-        event
-        for event in events
-        if event["type"] == "repair" and event["kind"] == "terminal"
+        event for event in events if event["type"] == "repair" and event["kind"] == "terminal"
     ]
     assert [event["phase"] for event in terminal_repair] == ["start", "failure"]
     assert terminal_repair[-1]["error"] == {

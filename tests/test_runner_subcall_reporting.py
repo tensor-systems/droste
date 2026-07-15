@@ -71,7 +71,7 @@ class _StubHandler(BaseHTTPRequestHandler):
         pass
 
 
-def test_run_reports_actual_subcall_count(monkeypatch, capsys) -> None:
+def test_run_reports_actual_subcall_count(monkeypatch, capfd) -> None:
     from importlib import import_module
 
     run_module = import_module("droste_runner.run")
@@ -119,7 +119,7 @@ def test_run_reports_actual_subcall_count(monkeypatch, capsys) -> None:
         server.shutdown()
         thread.join(timeout=5)
 
-    live_events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    live_events = [json.loads(line) for line in capfd.readouterr().err.splitlines()]
 
     assert response["error"] is None
     assert response["ready"] is True
@@ -179,7 +179,7 @@ def test_run_reports_actual_subcall_count(monkeypatch, capsys) -> None:
     assert "result" not in capability["outcome"]
     assert response["run_record"]["retention"] == {
         "policy_id": "local-training-v1",
-        "retain": [],
+        "retain": ["subcall"],
         "expires_at": "2026-10-14T00:00:00Z",
         "host_managed_expiry": True,
     }

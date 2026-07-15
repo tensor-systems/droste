@@ -13,7 +13,35 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.14.1)
 
-No changes yet.
+### Trace ABI v2 and runner protocol v6 add typed lifecycle events
+
+Trace events and terminal `RunRecord` values now carry `version: 2`.
+`RUNNER_PROTOCOL_VERSION` is now 6 because a successful runner response embeds
+that v2 run record and its live NDJSON stream uses the same vocabulary. Upgrade
+runner request writers, event decoders, relay assets, and stored-record readers
+atomically. Trace ABI v1 and runner protocol v5 fail loudly; Droste does not
+reinterpret either old strict contract as v2.
+
+The new configurable `subcall` event is a phase-discriminated live/run-record
+view over the broker's existing `call_id`, reservation, and cumulative
+checkpoint. Atomic batches add `batch_count`; their existing `call_id` is the
+batch identity, and they do not invent per-item identities or a second
+sequence. Event-envelope `seq` remains the sole
+delivery order. `repair` now carries `phase` (`start`, `completion`, or
+`failure`) and `kind` (`missing_code`, `execution_error`, or `terminal`). The
+new `extract` event uses the same phases, with a typed `extract_error` only on
+failure. The former standalone `finalization_error` and `extract_error` event
+types and the old start-only `repair.reason` shape are removed.
+
+All lifecycle events are configurable retention content. They never include
+subcall prompts, contexts, results, or provider error messages. The existing
+durable `capability`, `usage`, `budget`, `policy`, and content-free `done`
+events remain the accounting and persistence authorities; stream receipt still
+has no billing meaning. A successful `output` remains successful even when its
+stdout begins with `ERROR:`.
+
+This breaking contract belongs in droste 0.15.0. After this change lands, cut a
+dedicated `v0.15.0` release from updated `main`; do not retag or amend 0.14.0.
 
 ## 0.14.1 (from 0.13.1)
 

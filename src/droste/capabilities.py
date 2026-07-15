@@ -1120,7 +1120,7 @@ class _CapabilityAttemptController:
         admission: CapabilityAdmission,
         authority: CapabilityAttemptAuthority | None,
         *,
-        on_checkpoint: Callable[[CapabilityAttemptEvent], None] | None = None,
+        on_checkpoint: Callable[[CapabilityCall, CapabilityCheckpoint], None] | None = None,
         clock: Callable[[], float] = monotonic,
     ) -> None:
         self.call = call
@@ -1212,14 +1212,10 @@ class _CapabilityAttemptController:
                 if error.code == CapabilityErrorCode.CANCELLED:
                     raise CapabilityCancelled(error.message)
                 raise CapabilityDeadlineExceeded(error.message)
-        if self._on_checkpoint is not None:
-            self._on_checkpoint(
-                CapabilityAttemptEvent(
-                    CapabilityAttemptPhase.PROGRESS,
-                    self.call,
-                    checkpoint=cumulative,
-                )
-            )
+            # Serialize observation with begin_finish so a delayed progress
+            # callback cannot appear after the terminal attempt fact.
+            if self._on_checkpoint is not None:
+                self._on_checkpoint(self.call, cumulative)
         return cumulative
 
     @property
@@ -1430,7 +1426,11 @@ class CapabilityBroker:
                 call,
                 admission,
                 self._attempt_authority,
-                on_checkpoint=self.emit_attempt,
+                on_checkpoint=lambda observed_call, checkpoint: self.emit_attempt(
+                    CapabilityAttemptPhase.PROGRESS,
+                    observed_call,
+                    checkpoint=checkpoint,
+                ),
                 clock=self._clock,
             )
             with self._active_lock:
@@ -1451,11 +1451,9 @@ class CapabilityBroker:
                     attempted=False,
                 )
             self.emit_attempt(
-                CapabilityAttemptEvent(
-                    CapabilityAttemptPhase.START,
-                    call,
-                    reservation=admission.reservation,
-                )
+                CapabilityAttemptPhase.START,
+                call,
+                reservation=admission.reservation,
             )
 
             try:
@@ -1702,16 +1700,14 @@ class CapabilityBroker:
         )
         if attempt is not None:
             self.emit_attempt(
-                CapabilityAttemptEvent(
-                    (
-                        CapabilityAttemptPhase.COMPLETION
-                        if envelope.ok
-                        else CapabilityAttemptPhase.FAILURE
-                    ),
-                    call,
-                    checkpoint=attempt.checkpoint_value,
-                    error=envelope.error,
-                )
+                (
+                    CapabilityAttemptPhase.COMPLETION
+                    if envelope.ok
+                    else CapabilityAttemptPhase.FAILURE
+                ),
+                call,
+                checkpoint=attempt.checkpoint_value,
+                error=envelope.error,
             )
         self.emit(envelope)
         if annotation_control is not None:
@@ -1732,13 +1728,29 @@ class CapabilityBroker:
                 stacklevel=2,
             )
 
-    def emit_attempt(self, event: CapabilityAttemptEvent) -> None:
+    def emit_attempt(
+        self,
+        phase: CapabilityAttemptPhase,
+        call: CapabilityCall,
+        *,
+        reservation: CapabilityReservation | None = None,
+        checkpoint: CapabilityCheckpoint | None = None,
+        error: CapabilityError | None = None,
+    ) -> None:
         """Notify the optional attempt sink without making it an authority path."""
 
         if self._attempt_observer is None:
             return
         try:
-            self._attempt_observer(event)
+            self._attempt_observer(
+                CapabilityAttemptEvent(
+                    phase,
+                    call,
+                    reservation=reservation,
+                    checkpoint=checkpoint,
+                    error=error,
+                )
+            )
         except Exception as exc:
             warnings.warn(
                 f"capability attempt observer failed: {type(exc).__name__}: {exc}",
