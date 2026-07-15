@@ -93,7 +93,7 @@ jobs:
         # missing the package-data .ts files would only fail at a host's
         # build time. deps.ts is the single Pyodide pin site.
         run: |
-          for f in relay.ts provider_duplex.ts stream.ts broker.ts events.ts offline-probe.ts deps.ts; do
+          for f in relay.ts event_channel.ts provider_duplex.ts stream.ts broker.ts events.ts offline-probe.ts deps.ts; do
             unzip -l dist/*.whl | grep -q "droste/substrates/_relay/$f" || {
               echo "wheel is missing droste/substrates/_relay/$f"; exit 1;
             }

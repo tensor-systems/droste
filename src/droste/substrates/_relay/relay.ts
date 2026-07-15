@@ -4,8 +4,9 @@
 // Deno holds the only ambient capabilities (narrow net to ModelRelay + trusted
 // provider files); the Pyodide sandbox has none.
 //
-//   echo '<request json>' | deno run --allow-net=api.modelrelay.ai \
-//       --allow-read --allow-env relay.ts <sources.zip> <adapter_module>
+//   echo '<request json>' | DROSTE_RELAY_EVENT_FD=3 \
+//       deno run --allow-net=api.modelrelay.ai --allow-read --allow-env \
+//       relay.ts <sources.zip> <adapter_module> 3>events.ndjson
 //
 // (.zip path is a dev convenience; production bundles sources as a directory.)
 // <adapter_module> is a Python module path, staged into <sources> alongside
@@ -30,6 +31,11 @@ import {
   stripAndInjectBearer,
 } from "./broker.ts";
 import { isRlmEvent } from "./events.ts";
+import {
+  type EventChannel,
+  eventChannelFromEnvironment,
+  RelayEventChannelError,
+} from "./event_channel.ts";
 
 const sources = Deno.args[0]; // bundled Python sources DIR (prod) or a .zip (dev)
 const adapterModule = Deno.args[1]; // Python module implementing the host-adapter contract
@@ -55,6 +61,8 @@ if (typeof request.run_id !== "string" || request.run_id.length === 0) {
 // stamping owner, while parent_run_id correlates it with the engine record.
 const relayRunId = crypto.randomUUID();
 let relaySeq = 0;
+let startupEvent: Record<string, unknown> | null = null;
+let startupEmitted = false;
 
 const _enc = new TextEncoder();
 
@@ -87,6 +95,39 @@ async function mountSources(
 // The ONLY thing ever written to stdout — the HostResponse JSON.
 async function writeHostResponse(resp: unknown): Promise<void> {
   await Deno.stdout.write(_enc.encode(JSON.stringify(resp) + "\n"));
+}
+
+function eventChannelFailureResponse(error: RelayEventChannelError): unknown {
+  return {
+    answer: null,
+    error: {
+      type: error.name,
+      code: error.code,
+      message: error.message,
+    },
+  };
+}
+
+function writeEventChannelDiagnostic(error: RelayEventChannelError): void {
+  console.error(`droste relay: event_channel_error code=${error.code}`);
+}
+
+async function terminateForEventChannel(
+  error: RelayEventChannelError,
+): Promise<never> {
+  await writeHostResponse(eventChannelFailureResponse(error));
+  writeEventChannelDiagnostic(error);
+  Deno.exit(0);
+}
+
+let eventChannel: EventChannel;
+try {
+  eventChannel = eventChannelFromEnvironment();
+} catch (error) {
+  if (error instanceof RelayEventChannelError) {
+    await terminateForEventChannel(error);
+  }
+  throw error;
 }
 
 // A'-2 sandbox split: keep host data out of the untrusted REPL interpreter.
@@ -288,18 +329,14 @@ _meta_json
 // Route Python stdout off the relay's stdout (which carries only the response
 // JSON); silence the package loader's "Loading sqlite3" chatter too. Forward the
 // RLM's structured events (NDJSON lines on Python's stderr — progress plus the
-// loop events from #1: iteration_start/code/output/subcall) to the relay's own
-// stderr so the host can render real-time progress; drop other stderr noise.
+// loop events from #1: iteration_start/code/output/subcall) to the dedicated
+// host event channel; drop other stderr noise. fd2 remains diagnostic-only.
 const py = await loadPyodide({
   stdout: () => {},
   stderr: (msg: string) => {
     for (const line of msg.split("\n")) {
       if (isRlmEvent(line)) {
-        try {
-          Deno.stderr.writeSync(_enc.encode(line.trim() + "\n"));
-        } catch {
-          // best-effort event forwarding; never let it break the run
-        }
+        forwardEngineEvent(line.trim());
       }
     }
   },
@@ -313,15 +350,13 @@ await py.loadPackage("sqlite3", {
 });
 await mountSources(py);
 
-// Contract handshake (#33): announce engine + protocol versions as the first
-// event, so "did I adopt the new contract?" is a structured startup signal a
-// host can assert on instead of a changelog audit. The engine version comes
-// from the staged wheel's dist-info when present ("unknown" for raw source
-// mounts); the protocol versions are the actual compatibility contract, and a
-// missing one (null) means the staged sources don't even ship that package —
-// itself a loud signal. The guarded imports keep a handshake hiccup from ever
-// failing the run.
-emitEvent(JSON.parse(
+// Prepare the contract handshake (#33), but do not emit it yet. The first
+// canonical RUN event emits startup immediately before itself. Preflight and
+// pre-admission refusal have no Trace event surface, so their fd3 stays empty
+// without teaching the relay a second copy of runner admission semantics.
+// The engine version comes from the staged wheel's dist-info when present
+// ("unknown" for raw source mounts); null protocol values remain a loud signal.
+startupEvent = JSON.parse(
   await py.runPythonAsync(`
 import json
 try:
@@ -344,7 +379,7 @@ json.dumps({
     "provider_protocol": _provider_protocol,
 })
 `),
-));
+);
 
 // The untrusted interpreter never receives host filesystem paths. For a
 // provider-backed request those paths have already been consumed by the
@@ -352,26 +387,41 @@ json.dumps({
 delete request.db_path;
 delete request.contacts_db_path;
 
-// Emit a structured event line to the relay's own stderr — the same one-way
-// channel the host already reads for progress (see the loadPyodide stderr hook).
-// Best-effort; a failed write must never break the run.
-function emitEvent(obj: unknown): void {
-  try {
-    if (obj === null || typeof obj !== "object" || Array.isArray(obj)) return;
-    const event = {
-      ...obj,
-      run_id: relayRunId,
-      parent_run_id: request.run_id,
-      depth: 1,
-      seq: ++relaySeq,
-      timestamp: new Date().toISOString(),
-      version: 2,
-      persistence_class: "transient",
-    };
-    Deno.stderr.writeSync(_enc.encode(JSON.stringify(event) + "\n"));
-  } catch {
-    // ignore
+// Relay-owned events and forwarded Pyodide events share one physical writer.
+// A channel failure is terminal: falling back to stderr would make event and
+// diagnostic bytes ambiguous to the host.
+function writeRelayEvent(obj: Record<string, unknown>): void {
+  const event = {
+    ...obj,
+    run_id: relayRunId,
+    parent_run_id: request.run_id,
+    depth: 1,
+    seq: ++relaySeq,
+    timestamp: new Date().toISOString(),
+    version: 2,
+    persistence_class: "transient",
+  };
+  eventChannel.writeFrame(JSON.stringify(event));
+}
+
+function emitStartupIfNeeded(): void {
+  if (startupEmitted) return;
+  if (startupEvent === null) {
+    throw new Error("relay startup contract is unavailable");
   }
+  writeRelayEvent(startupEvent);
+  startupEmitted = true;
+}
+
+function forwardEngineEvent(frame: string): void {
+  emitStartupIfNeeded();
+  eventChannel.writeFrame(frame);
+}
+
+function emitEvent(obj: unknown): void {
+  if (obj === null || typeof obj !== "object" || Array.isArray(obj)) return;
+  emitStartupIfNeeded();
+  writeRelayEvent(obj as Record<string, unknown>);
 }
 
 // Streaming is on by default; RLM_STREAM=0 forces the legacy unary path (a
@@ -513,6 +563,11 @@ if _status and isinstance(resp.get("error"), dict):
     resp["error"]["status"] = _status
 json.dumps(resp)
 `);
+} catch (error) {
+  if (eventChannel.failure === null) {
+    throw error;
+  }
+  out = JSON.stringify(eventChannelFailureResponse(eventChannel.failure));
 } finally {
   const cleanupErrors: unknown[] = [];
   const sessions = [...activeDuplexSessions];
@@ -540,6 +595,11 @@ json.dumps(resp)
       `droste relay: provider cleanup failed (${cleanupErrors.length}): ${detail}`,
     );
   }
+}
+
+if (eventChannel.failure !== null) {
+  out = JSON.stringify(eventChannelFailureResponse(eventChannel.failure));
+  writeEventChannelDiagnostic(eventChannel.failure);
 }
 
 await Deno.stdout.write(new TextEncoder().encode(out + "\n"));

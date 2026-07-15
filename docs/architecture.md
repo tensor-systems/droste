@@ -297,6 +297,20 @@ Completed responses also carry the policy-resolved
 the same strict envelope and projection. Persistence remains a host I/O
 decision; the engine never opens a trace store.
 
+The Deno/Pyodide relay keeps its three process output concerns physically
+separate. fd1 carries exactly one unary HostResponse JSON line. A required
+`DROSTE_RELAY_EVENT_FD` names one inherited writable descriptor (fd3 by
+convention) that carries canonical Trace ABI v2 NDJSON only. fd2 carries only
+diagnostics. Missing, malformed, or unavailable event descriptors fail closed
+with a typed `RelayEventChannelError`; the relay never retries an event write on
+fd2. The descriptor is mandatory for every invocation, but preflight and
+pre-admission refusal produce zero frames. An admitted run lazily emits
+`startup` as the prefix to its first canonical event. Hosts must drain fd2 and
+the event descriptor concurrently. Cancellation or process death may leave a
+valid nonterminal event prefix and must not cause the host to fabricate a
+terminal event. The native process runner remains a separate explicit
+integration whose event sink is the original host stderr.
+
 Completed results also expose the full scaffold manifest and aggregate stdout
 facts. Default durable retention stores only the manifest ID/version; trainer
 outcomes join externally by run ID and manifest ID. The optional

@@ -57,8 +57,9 @@ class ExecutionConfig:
     verbose: bool = False
     on_progress: ProgressCallback | None = None
     # Structured loop events (#1). None means NO emission (#35): entry points
-    # attach a sink explicitly (droste_runner/relay: the stderr NDJSON sink
-    # droste.execution.progress.emit_event). Independent of on_progress.
+    # attach droste.execution.progress.emit_event explicitly. Native runners
+    # expose that stderr directly; the Deno relay validates and forwards it to
+    # its dedicated host descriptor. Independent of on_progress.
     on_event: EventCallback | None = None
     # Optional host I/O shell. Droste supplies the policy-resolved immutable
     # value; the callback decides whether and where to persist it.

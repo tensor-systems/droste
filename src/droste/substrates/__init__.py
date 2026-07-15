@@ -19,7 +19,16 @@ from importlib import resources
 from pathlib import Path
 
 # The Deno relay sources bundled as package data.
-_RELAY_FILES = ("relay.ts", "stream.ts", "broker.ts", "events.ts", "offline-probe.ts", "deps.ts")
+_RELAY_FILES = (
+    "relay.ts",
+    "event_channel.ts",
+    "provider_duplex.ts",
+    "stream.ts",
+    "broker.ts",
+    "events.ts",
+    "offline-probe.ts",
+    "deps.ts",
+)
 
 
 def relay_dir() -> Path:

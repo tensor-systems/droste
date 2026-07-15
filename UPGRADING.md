@@ -13,7 +13,20 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.15.1)
 
-No changes yet.
+### The Deno relay requires a dedicated event descriptor
+
+Hosts that spawn `relay.ts` must open an inherited writable descriptor, set
+`DROSTE_RELAY_EVENT_FD` to its decimal number (fd3 is conventional), and drain
+it concurrently with fd2. stdout remains the single unary HostResponse JSON
+lane; the configured descriptor carries canonical Trace ABI v2 NDJSON only;
+fd2 is diagnostic-only. The relay rejects fd0 through fd2 and fails closed with
+`RelayEventChannelError` when the setting is missing, malformed, or unwritable.
+It never falls back to stderr. Preflight and pre-admission refusal still require
+the descriptor but write zero event frames; an admitted run emits `startup`
+only when its first canonical event is ready. Event bodies, Trace ABI version
+2, and runner protocol version 6 are unchanged. Native
+`python -m droste_runner` event sinks remain explicitly attached to the
+original host stderr.
 
 ## 0.15.1 (from 0.15.0)
 

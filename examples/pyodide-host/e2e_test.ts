@@ -15,13 +15,17 @@
 // Run: deno test --allow-run --allow-read --allow-write --allow-net=127.0.0.1 --allow-env examples/pyodide-host/e2e_test.ts
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { copy } from "jsr:@std/fs@1/copy";
+import { spawn } from "node:child_process";
 import { dirname } from "node:path";
+import { isRlmEvent } from "../../src/droste/substrates/_relay/events.ts";
 
 const HERE = new URL(".", import.meta.url).pathname;
 const DROSTE_SRC = new URL("../../src", import.meta.url).pathname;
 const RELAY_TS =
   new URL("../../src/droste/substrates/_relay/relay.ts", import.meta.url)
     .pathname;
+const EVENT_CHANNEL_PROBE =
+  new URL("../../pyodide/event_channel_probe.ts", import.meta.url).pathname;
 const TEST_BUDGET = {
   tokens: 500_000,
   subcalls: 50,
@@ -38,6 +42,17 @@ const QUERY_CODE = [
   'answer["ready"] = True',
   "```",
 ].join("\n");
+
+async function collectNodeStream(
+  stream: AsyncIterable<Uint8Array>,
+): Promise<string> {
+  const decoder = new TextDecoder();
+  let text = "";
+  for await (const chunk of stream) {
+    text += decoder.decode(chunk, { stream: true });
+  }
+  return text + decoder.decode();
+}
 
 // A minimal ModelRelay stand-in: any POST to /responses gets one scripted
 // reply. The default proves the answer came from a real query() round-trip
@@ -135,6 +150,11 @@ async function buildTempSources(): Promise<string> {
     `${dir}/_close_failing_adapter.py`,
     { overwrite: true },
   );
+  await copy(
+    `${HERE}_runner_protocol_adapter.py`,
+    `${dir}/_runner_protocol_adapter.py`,
+    { overwrite: true },
+  );
   return dir;
 }
 
@@ -164,9 +184,10 @@ async function runRelayRaw(
   port: number,
   env: Record<string, string>,
   adapterModule = "pyodide_host_adapter",
-): Promise<{ lastLine: string; stderrText: string }> {
-  const cmd = new Deno.Command("deno", {
-    args: [
+): Promise<{ lastLine: string; stderrText: string; eventText: string }> {
+  const child = spawn(
+    "deno",
+    [
       "run",
       `--allow-net=127.0.0.1:${port}`,
       // Unscoped read: this dev/CI run uses the ambient Deno cache (Pyodide's
@@ -179,29 +200,51 @@ async function runRelayRaw(
       sourcesDir,
       adapterModule,
     ],
-    env: { ...Deno.env.toObject(), ...env },
-    stdin: "piped",
-    stdout: "piped",
-    stderr: "piped",
-  });
-  const child = cmd.spawn();
-  const writer = child.stdin.getWriter();
-  await writer.write(new TextEncoder().encode(JSON.stringify(request)));
-  await writer.close();
-  const { code, stdout, stderr } = await child.output();
-
-  const stdoutText = new TextDecoder().decode(stdout);
-  const stderrText = new TextDecoder().decode(stderr);
+    {
+      env: {
+        ...Deno.env.toObject(),
+        ...env,
+        DROSTE_RELAY_EVENT_FD: "3",
+      },
+      stdio: ["pipe", "pipe", "pipe", "pipe"],
+    },
+  );
+  const completion = new Promise<
+    { code: number | null; signal: string | null }
+  >(
+    (resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    },
+  );
+  const stdoutPromise = collectNodeStream(child.stdout!);
+  const stderrPromise = collectNodeStream(child.stderr!);
+  const eventPromise = collectNodeStream(
+    child.stdio[3] as AsyncIterable<Uint8Array>,
+  );
+  child.stdin!.end(JSON.stringify(request));
+  const [{ code, signal }, stdoutText, stderrText, eventText] = await Promise
+    .all([
+      completion,
+      stdoutPromise,
+      stderrPromise,
+      eventPromise,
+    ]);
   if (code !== 0) {
     throw new Error(
-      `relay.ts exited ${code}\nstdout: ${stdoutText}\nstderr: ${stderrText}`,
+      `relay.ts exited ${
+        code ?? signal
+      }\nstdout: ${stdoutText}\nstderr: ${stderrText}`,
     );
   }
-  const lines = stdoutText.trim().split("\n").filter((l) =>
-    l.trim().startsWith("{")
+  const lines = stdoutText.trimEnd().split("\n");
+  assertEquals(
+    lines.length,
+    1,
+    `stdout must contain one HostResponse:\n${stdoutText}`,
   );
-  assert(lines.length > 0, `no JSON on stdout:\n${stdoutText}`);
-  return { lastLine: lines[lines.length - 1], stderrText };
+  JSON.parse(lines[0]);
+  return { lastLine: lines[0], stderrText, eventText };
 }
 
 async function runRelay(
@@ -209,15 +252,184 @@ async function runRelay(
   request: Record<string, unknown>,
   port: number,
   env: Record<string, string>,
-): Promise<{ resp: Record<string, unknown>; stderrText: string }> {
-  const { lastLine, stderrText } = await runRelayRaw(
+): Promise<{
+  resp: Record<string, unknown>;
+  stderrText: string;
+  eventText: string;
+}> {
+  const { lastLine, stderrText, eventText } = await runRelayRaw(
     sourcesDir,
     request,
     port,
     env,
   );
-  return { resp: JSON.parse(lastLine), stderrText };
+  return { resp: JSON.parse(lastLine), stderrText, eventText };
 }
+
+type ProbeResult = {
+  code: number | null;
+  signal: string | null;
+  stdout: string;
+  stderr: string;
+  events: string;
+};
+
+function spawnEventChannelProbe(mode: "large" | "fail" | "cancel") {
+  return spawn(
+    Deno.execPath(),
+    ["run", "--allow-env", EVENT_CHANNEL_PROBE, mode],
+    {
+      env: { ...Deno.env.toObject(), DROSTE_RELAY_EVENT_FD: "3" },
+      stdio: ["ignore", "pipe", "pipe", "pipe"],
+    },
+  );
+}
+
+function probeCompletion(child: ReturnType<typeof spawn>): Promise<{
+  code: number | null;
+  signal: string | null;
+}> {
+  return new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => resolve({ code, signal }));
+  });
+}
+
+async function runEventChannelProbe(
+  mode: "large" | "fail",
+): Promise<ProbeResult> {
+  const child = spawnEventChannelProbe(mode);
+  const [stdout, stderr, events, status] = await Promise.all([
+    collectNodeStream(child.stdout!),
+    collectNodeStream(child.stderr!),
+    collectNodeStream(child.stdio[3] as AsyncIterable<Uint8Array>),
+    probeCompletion(child),
+  ]);
+  return { ...status, stdout, stderr, events };
+}
+
+Deno.test("large response, diagnostic, and event lanes drain independently", async () => {
+  const result = await runEventChannelProbe("large");
+  assertEquals(result.code, 0);
+  assertEquals(result.signal, null);
+  assertEquals(result.stdout, '{"answer":"ok","error":null}\n');
+  assert(!result.stderr.includes('"type":'));
+  assert(!result.events.includes("diagnostic-"));
+  const frames = result.events.trimEnd().split("\n");
+  assertEquals(frames.length, 65);
+  assert(frames.every(isRlmEvent));
+  assert(result.stderr.length > 4_000_000);
+  assert(result.events.length > 4_000_000);
+});
+
+Deno.test("process failure leaves a valid nonterminal event prefix", async () => {
+  const result = await runEventChannelProbe("fail");
+  assertEquals(result.code, 17);
+  assertEquals(result.signal, null);
+  assertEquals(result.stdout, "");
+  assertEquals(result.stderr, "event-channel-probe-process-failure\n");
+  const frames = result.events.trimEnd().split("\n");
+  assertEquals(frames.length, 1);
+  assert(isRlmEvent(frames[0]));
+  assertEquals(JSON.parse(frames[0]).type, "startup");
+});
+
+Deno.test("cancellation leaves a valid nonterminal event prefix", async () => {
+  const child = spawnEventChannelProbe("cancel");
+  const stdout = collectNodeStream(child.stdout!);
+  const events = collectNodeStream(
+    child.stdio[3] as AsyncIterable<Uint8Array>,
+  );
+  const completion = probeCompletion(child);
+  await new Promise<void>((resolve, reject) => {
+    child.stderr!.once("data", (chunk) => {
+      assertEquals(
+        new TextDecoder().decode(chunk),
+        "event-channel-probe-ready\n",
+      );
+      resolve();
+    });
+    child.once("error", reject);
+  });
+  assert(child.kill("SIGTERM"));
+  const status = await completion;
+  assertEquals(status.code, null);
+  assertEquals(status.signal, "SIGTERM");
+  assertEquals(await stdout, "");
+  const frames = (await events).trimEnd().split("\n");
+  assertEquals(frames.length, 1);
+  assert(isRlmEvent(frames[0]));
+  assertEquals(JSON.parse(frames[0]).type, "startup");
+});
+
+async function runRelayEventChannelFailure(
+  eventDescriptor: string | undefined,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const env = Deno.env.toObject();
+  if (eventDescriptor === undefined) {
+    delete env.DROSTE_RELAY_EVENT_FD;
+  } else {
+    env.DROSTE_RELAY_EVENT_FD = eventDescriptor;
+  }
+  const cmd = new Deno.Command("sh", {
+    args: [
+      "-c",
+      'exec 3>&-; exec "$@"',
+      "droste-relay",
+      "deno",
+      "run",
+      "--allow-read",
+      "--allow-env",
+      RELAY_TS,
+      "/unused-before-event-channel-validation",
+      "pyodide_host_adapter",
+    ],
+    env,
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const child = cmd.spawn();
+  const writer = child.stdin.getWriter();
+  await writer.write(new TextEncoder().encode("{}"));
+  await writer.close();
+  const result = await child.output();
+  return {
+    code: result.code,
+    stdout: new TextDecoder().decode(result.stdout),
+    stderr: new TextDecoder().decode(result.stderr),
+  };
+}
+
+Deno.test({
+  name:
+    "relay.ts fails closed when its event descriptor is missing or unavailable",
+  fn: async () => {
+    for (
+      const [descriptor, expectedCode] of [
+        [undefined, "missing_descriptor"],
+        ["3", "descriptor_unavailable"],
+      ] as const
+    ) {
+      const result = await runRelayEventChannelFailure(descriptor);
+      assertEquals(result.code, 0);
+      const lines = result.stdout.trimEnd().split("\n");
+      assertEquals(lines.length, 1);
+      assertEquals(JSON.parse(lines[0]), {
+        answer: null,
+        error: {
+          type: "RelayEventChannelError",
+          code: expectedCode,
+          message: "dedicated relay event channel is unavailable",
+        },
+      });
+      assertEquals(
+        result.stderr,
+        `droste relay: event_channel_error code=${expectedCode}\n`,
+      );
+    }
+  },
+});
 
 Deno.test({
   name:
@@ -238,7 +450,7 @@ Deno.test({
       };
       // Exercises build_db_service + the opaque meta blob + bridge_call, the
       // parts the adapter-agnostic split changed.
-      const { resp, stderrText } = await runRelay(
+      const { resp, stderrText, eventText } = await runRelay(
         sourcesDir,
         request,
         port,
@@ -249,12 +461,16 @@ Deno.test({
       assertEquals(rootPayloads.length, 1);
       assertEquals(rootPayloads[0].reasoning_effort, "none");
       // Contract handshake (#33): the relay announces engine + protocol
-      // versions as a structured stderr event before doing any work.
-      const startup = stderrText.split("\n")
+      // versions on the dedicated event descriptor before doing any work.
+      const startup = eventText.split("\n")
         .filter((l) => l.trim().startsWith("{"))
         .map((l) => JSON.parse(l))
         .find((e) => e.type === "startup");
-      assert(startup, `no startup handshake event on stderr:\n${stderrText}`);
+      assert(startup, `no startup handshake event on fd3:\n${eventText}`);
+      assert(
+        !stderrText.split("\n").some((line) => line.trim().startsWith("{")),
+        `fd2 must remain diagnostic-only:\n${stderrText}`,
+      );
       assertEquals(startup.runner_protocol, 6);
       assertEquals(startup.provider_protocol, 4);
       assert(
@@ -274,7 +490,7 @@ Deno.test({
     try {
       const sourcesDir = await buildTempSources();
       const dbPath = await buildTempDb();
-      const { lastLine, stderrText } = await runRelayRaw(
+      const { lastLine, stderrText, eventText } = await runRelayRaw(
         sourcesDir,
         {
           question: "how many widgets are there",
@@ -306,6 +522,14 @@ Deno.test({
       assert(
         diagnostic.length <= 1_100,
         "cleanup diagnostic must stay bounded",
+      );
+      assert(
+        stderrText.trimEnd().split("\n").every((line) => !isRlmEvent(line)),
+        "fd2 diagnostics must never validate as Trace events",
+      );
+      assert(
+        eventText.trimEnd().split("\n").every(isRlmEvent),
+        "fd3 must contain only canonical Trace events",
       );
     } finally {
       await shutdown();
@@ -405,7 +629,7 @@ Deno.test({
     try {
       const sourcesDir = await buildTempSources();
       for (const operation of ["run", "preflight"] as const) {
-        const { lastLine } = await runRelayRaw(
+        const { lastLine, eventText } = await runRelayRaw(
           sourcesDir,
           { protocol_version: 6, operation },
           port,
@@ -420,6 +644,7 @@ Deno.test({
         assertEquals(response.error.message, "adapter boom");
         assert(typeof response.error.traceback === "string");
         if (operation === "preflight") {
+          assertEquals(eventText, "");
           assertEquals(Object.keys(response).sort(), [
             "error",
             "operation",
@@ -433,6 +658,57 @@ Deno.test({
           assert("answer" in response);
         }
       }
+    } finally {
+      await shutdown();
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "relay.ts: canonical preflight and pre-admission refusal leave fd3 empty",
+  fn: async () => {
+    const { port, shutdown } = await startMockModelRelay();
+    try {
+      const sourcesDir = await buildTempSources();
+      const { lastLine, stderrText, eventText } = await runRelayRaw(
+        sourcesDir,
+        {
+          protocol_version: 5,
+          question: "must refuse before inference",
+          root_model: "test-model",
+          base_url: `http://127.0.0.1:${port}/api/v1`,
+          api_key: "test-key",
+          budget: TEST_BUDGET,
+        },
+        port,
+        {},
+        "_runner_protocol_adapter",
+      );
+      const response = JSON.parse(lastLine);
+      assertEquals(response.status, "refusal");
+      assertEquals(response.operation, null);
+      assertEquals(response.error.code, "protocol_version_mismatch");
+      assertEquals(eventText, "");
+      assertEquals(stderrText, "");
+
+      const preflight = await runRelayRaw(
+        sourcesDir,
+        {
+          protocol_version: 6,
+          operation: "preflight",
+          model: "test-model",
+          budget: TEST_BUDGET,
+        },
+        port,
+        {},
+        "_runner_protocol_adapter",
+      );
+      const preflightResponse = JSON.parse(preflight.lastLine);
+      assertEquals(preflightResponse.status, "success");
+      assertEquals(preflightResponse.operation, "preflight");
+      assertEquals(preflight.eventText, "");
+      assertEquals(preflight.stderrText, "");
     } finally {
       await shutdown();
     }

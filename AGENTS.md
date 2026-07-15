@@ -140,9 +140,16 @@ evidence with that status rather than leaving the model to interpret prefixes.
   once entered. Keep their messages configurable; durable `done` and
   `capability` projections remain content-free. Never infer failure from stdout
   text, including successful output beginning with `ERROR:`.
-- Process-runner NDJSON sinks write to the original host stderr. Model code may
-  execute under stdout/stderr capture, and events emitted inside a brokered
-  subcall must not become sandbox output or disappear from the live lane.
+- Native process-runner NDJSON sinks write to the original host stderr. The
+  Deno relay instead requires `DROSTE_RELAY_EVENT_FD` (fd3 by convention),
+  keeps fd2 diagnostic-only, and fails closed without falling back when that
+  descriptor is missing or unwritable. Model code may execute under
+  stdout/stderr capture, and events emitted inside a brokered subcall must not
+  become sandbox output or disappear from the live lane.
+- Every Deno relay invocation receives the event descriptor, including
+  preflight and refusal. Those pre-admission paths write zero event frames; an
+  admitted run lazily emits `startup` immediately before its first canonical
+  frame so the relay does not duplicate runner admission logic.
 - A strict published event vocabulary/body change requires a Trace ABI bump and,
   when embedded in runner output, an atomic runner-protocol bump. Do not expand
   an old strict version in place or add a compatibility decoder in the engine.
