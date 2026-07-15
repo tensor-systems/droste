@@ -301,10 +301,11 @@ The Deno/Pyodide relay keeps its three process output concerns physically
 separate. fd1 carries exactly one unary HostResponse JSON line. A required
 `DROSTE_RELAY_EVENT_FD` names one inherited writable descriptor (fd3 by
 convention) that carries canonical Trace ABI v2 NDJSON only. fd2 carries only
-diagnostics. Missing, malformed, or unavailable event descriptors fail closed
-with a typed `RelayEventChannelError`; the relay never retries an event write on
-fd2. The descriptor is mandatory for every invocation, but preflight and
-pre-admission refusal produce zero frames. An admitted run lazily emits
+diagnostics. Missing, malformed, or unavailable event descriptors—and fd0
+through fd2 even when writable—fail closed with a typed
+`RelayEventChannelError`; the relay never retries an event write on fd2. The
+descriptor is mandatory for every invocation, but preflight and pre-admission
+refusal produce zero frames. An admitted run lazily emits
 `startup` as the prefix to its first canonical event. Hosts must drain fd2 and
 the event descriptor concurrently. Cancellation or process death may leave a
 valid nonterminal event prefix; a failed partial write may additionally leave

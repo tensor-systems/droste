@@ -150,6 +150,8 @@ evidence with that status rather than leaving the model to interpret prefixes.
   preflight and refusal. Those pre-admission paths write zero event frames; an
   admitted run lazily emits `startup` immediately before its first canonical
   frame so the relay does not duplicate runner admission logic.
+- Hosts drain fd2 and the event descriptor concurrently. Large writes on
+  either independent pipe must not block the other lane or the unary response.
 - Do not add a descriptor probe byte: fd3 is Trace NDJSON-only and
   preflight/refusal must stay byte-empty. A closed/read-only peer fails on the
   first admitted-run frame; a partial final frame is a typed host transport

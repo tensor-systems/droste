@@ -230,7 +230,7 @@ The process has three independent output lanes:
 
 | Descriptor | Contract |
 |------------|----------|
-| fd1 | Exactly one unary HostResponse JSON line. |
+| fd1 | Exactly one unary response JSON line. Adapter-owned responses use its HostResponse schema; pre-adapter event-channel failures use the relay-level error above. |
 | configured event descriptor (fd3 by convention) | Canonical Trace ABI v2 NDJSON only. |
 | fd2 | Diagnostics only; never parse or promote these bytes as events. |
 

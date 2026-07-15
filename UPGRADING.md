@@ -25,9 +25,15 @@ it concurrently with fd2. stdout remains the single unary HostResponse JSON
 lane; the configured descriptor carries canonical Trace ABI v2 NDJSON only;
 fd2 is diagnostic-only. The relay rejects fd0 through fd2 and fails closed with
 `RelayEventChannelError` when the setting is missing, malformed, or unwritable.
-It never falls back to stderr. Preflight and pre-admission refusal still require
-the descriptor but write zero event frames; an admitted run emits `startup`
-only when its first canonical event is ready. Event bodies, Trace ABI version
+It never falls back to stderr. Hosts that previously parsed canonical events
+from the Deno relay's fd2 must stop; fd2 now contains diagnostics only.
+
+Preflight and pre-admission refusal still require the descriptor but write zero
+event frames. Do not send or expect a probe/liveness byte. An admitted run emits
+`startup` only when its first canonical event is ready. A hard cancellation,
+process death, or descriptor failure may leave a valid nonterminal prefix;
+never fabricate `done`, and treat a final unterminated or invalid line as a
+typed transport failure rather than an event. Event bodies, Trace ABI version
 2, and runner protocol version 6 are unchanged. Native
 `python -m droste_runner` event sinks remain explicitly attached to the
 original host stderr.
