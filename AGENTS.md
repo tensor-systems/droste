@@ -103,6 +103,10 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - Every structured event is a strict Trace ABI v2 value. Stamp it exactly once
   through `ExecutionContext`; do not emit raw or partially enveloped event
   dictionaries at host boundaries.
+- Treat every envelope/body, classification, and ordering change as an ABI
+  break because strict consumers reject unknown values. Bump the Trace ABI and
+  update the one packaged conformance corpus atomically; Python and Deno tests
+  must read those exact bytes, and distribution checks must compare them.
 - `execution.trace` owns immutable values, parsing, classification, retention
   selection, and terminal-record invariants. Keep persistence I/O in an
   injected host callback; core code must not choose files, databases, or cloud
@@ -125,6 +129,9 @@ evidence with that status rather than leaving the model to interpret prefixes.
   participate in dispatch or authorization.
 - Serialize trace append and live callback delivery per execution context so
   concurrent emitters observe the same monotonic order that is recorded.
+- Runner refusals happen before a run is admitted and therefore are not trace
+  events. Keep their packaged fixture beside the event corpus, but require the
+  relay filter to reject it rather than adding a second event vocabulary.
 - `subcall` is one configurable phase-discriminated view of the broker attempt,
   never a second dispatch/accounting schema. Reuse its `call_id`, reservation,
   and cumulative checkpoint; envelope `seq` is the sole event order. Atomic

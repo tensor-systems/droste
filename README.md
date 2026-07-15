@@ -139,7 +139,9 @@ terminal record for host-owned local persistence. A trajectory-free canonical
 result is always delivered live before the content-free terminal event; full
 trajectory replay is emitted only under explicit retention. Retaining replay
 content and authorizing training use are separate, default-denied decisions;
-training also requires an auditable authorization reference and purpose.
+training also requires an auditable authorization reference and purpose. The
+wheel includes the exact cross-runtime conformance corpus for embedders; see
+the Trace ABI guide instead of reproducing its schema.
 
 Three worked starting points live in [docs/recipes.md](docs/recipes.md)
 (logs, chat archives, SQLite).

@@ -12,6 +12,12 @@ def trace_v2_lifecycle_ndjson() -> bytes:
     return files(__package__).joinpath("fixtures/trace-v2-lifecycle.ndjson").read_bytes()
 
 
+def runner_v6_refusal_ndjson() -> bytes:
+    """Return the pre-admission runner-v6 refusal fixture."""
+
+    return files(__package__).joinpath("fixtures/runner-v6-refusal.ndjson").read_bytes()
+
+
 __all__ = [
     "MockEnvironment",
     "FAKE_RECORDS_MANIFEST",
@@ -19,5 +25,6 @@ __all__ = [
     "MockResponse",
     "MockSubcallClient",
     "fake_records_provider",
+    "runner_v6_refusal_ndjson",
     "trace_v2_lifecycle_ndjson",
 ]

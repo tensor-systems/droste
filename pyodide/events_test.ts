@@ -231,8 +231,172 @@ Deno.test("Python and relay accept the same lifecycle golden NDJSON", async () =
     import.meta.url,
   );
   const lines = (await Deno.readTextFile(fixture)).trim().split("\n");
-  assertEquals(lines.length, 10);
+  assertEquals(lines.length, 58);
   assert(lines.every(isRlmEvent));
+
+  const runs = new Map<string, Record<string, unknown>[]>();
+  const closed = new Set<string>();
+  let previousRunId: string | undefined;
+  for (const line of lines) {
+    const event = JSON.parse(line) as Record<string, unknown>;
+    const runId = String(event.run_id);
+    if (runId !== previousRunId) {
+      assert(!closed.has(runId), `non-contiguous golden run ${runId}`);
+      if (previousRunId !== undefined) closed.add(previousRunId);
+      previousRunId = runId;
+    }
+    const events = runs.get(runId) ?? [];
+    events.push(event);
+    runs.set(runId, events);
+  }
+  assertEquals([...runs.keys()], [
+    "golden-success",
+    "golden-recovered",
+    "golden-output-limit",
+    "golden-extract-failed",
+    "golden-cancelled",
+  ]);
+
+  const errorType = (value: unknown): unknown =>
+    value !== null && typeof value === "object"
+      ? (value as Record<string, unknown>).type
+      : undefined;
+  for (const events of runs.values()) {
+    assertEquals(
+      events.map((event) => event.seq),
+      Array.from({ length: events.length }, (_, index) => index + 1),
+    );
+    assertEquals(events.at(-1)?.type, "done");
+    assertEquals(events.filter((event) => event.type === "done").length, 1);
+
+    const result = (events.find((event) =>
+      event.type === "result"
+    )?.result ?? {}) as Record<string, unknown>;
+    const done = events.at(-1) ?? {};
+    const usage = done.usage as Record<string, unknown>;
+    const subcallUsage = usage.subcall as Record<string, unknown>;
+    assertEquals(result.ready, done.ready);
+    assertEquals(result.extracted, done.extracted);
+    assertEquals(result.iterations, done.iterations);
+    assertEquals(result.tokens_used, usage.total_tokens);
+    assertEquals(result.subcalls, subcallUsage.requests);
+    assertEquals(result.successful_subcalls, subcallUsage.successes);
+    assertEquals(result.stdout_chars, done.stdout_chars);
+    const scaffoldManifest = result.scaffold_manifest as Record<
+      string,
+      unknown
+    >;
+    assertEquals(scaffoldManifest.id, done.scaffold_manifest_id);
+    assertEquals(
+      scaffoldManifest.schema_version,
+      done.scaffold_manifest_version,
+    );
+    for (const key of ["error", "extract_error", "recovered_error"]) {
+      assertEquals(errorType(result[key]), errorType(done[key]));
+    }
+    for (const type of ["usage", "budget", "policy"]) {
+      const emitted = events.find((event) =>
+        event.type === type
+      );
+      assertEquals(
+        Object.fromEntries(
+          Object.entries(emitted ?? {}).filter(([key]) =>
+            ![
+              "run_id",
+              "seq",
+              "timestamp",
+              "type",
+              "version",
+              "persistence_class",
+              "parent_run_id",
+              "depth",
+            ].includes(key)
+          ),
+        ),
+        done[type],
+      );
+    }
+  }
+
+  const lifecycle = lines.map((line) =>
+    JSON.parse(line) as Record<string, unknown>
+  );
+  assert(lifecycle.some((event) => event.type === "execution_error"));
+  assert(
+    lifecycle.some((event) =>
+      event.type === "subcall" && event.operation === "llm_batch" &&
+      event.phase === "failure" && event.call_id === "batch-failed"
+    ),
+  );
+  assert(
+    lifecycle.some((event) => {
+      if (event.type !== "subcall" || event.phase !== "failure") return false;
+      const error = event.error as Record<string, unknown> | undefined;
+      return error?.code === "cancelled" &&
+        error.type === "CapabilityCancelled";
+    }),
+  );
+  assertEquals(
+    new Set(
+      lifecycle.filter((event) => event.type === "repair").map((event) =>
+        event.phase
+      ),
+    ),
+    new Set(["start", "completion", "failure"]),
+  );
+  assertEquals(
+    new Set(
+      lifecycle.filter((event) => event.type === "extract").map((event) =>
+        event.phase
+      ),
+    ),
+    new Set(["start", "completion", "failure"]),
+  );
+  assertEquals(
+    runs.get("golden-output-limit")?.some((event) => event.type === "output"),
+    false,
+  );
+  assertEquals(runs.get("golden-cancelled")?.at(-1)?.status, "error");
+  assertEquals(
+    errorType(runs.get("golden-cancelled")?.at(-1)?.error),
+    "RuntimeError",
+  );
+  assert(
+    runs.get("golden-cancelled")?.some((event) =>
+      event.type === "execution_error" &&
+      event.error_type === "CapabilityCallError"
+    ),
+  );
+  const startup = runs.get("golden-success")?.find((event) =>
+    event.type === "startup"
+  );
+  const successfulDone = runs.get("golden-success")?.at(-1);
+  assertEquals(
+    startup?.scaffold_manifest_id,
+    successfulDone?.scaffold_manifest_id,
+  );
+  assertEquals(
+    startup?.scaffold_manifest_version,
+    successfulDone?.scaffold_manifest_version,
+  );
+});
+
+Deno.test("runner refusal fixture remains outside the event stream", async () => {
+  const fixture = new URL(
+    "../src/droste/testing/fixtures/runner-v6-refusal.ndjson",
+    import.meta.url,
+  );
+  const bytes = await Deno.readTextFile(fixture);
+  const refusal = JSON.parse(bytes) as Record<string, unknown>;
+  assertEquals(refusal.status, "refusal");
+  assertEquals(refusal.protocol_version, 6);
+  assertEquals(refusal.run_id, null);
+  assertEquals(refusal.run_record, null);
+  assertEquals(
+    (refusal.error as Record<string, unknown>).type,
+    "protocol_version_missing",
+  );
+  assert(!isRlmEvent(bytes));
 });
 
 Deno.test("vocabulary matches the engine's emitters", () => {
