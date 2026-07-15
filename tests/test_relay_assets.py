@@ -51,8 +51,8 @@ def test_cli_relay_path_rejects_arguments(capsys) -> None:
 
 
 def test_relay_emits_startup_handshake() -> None:
-    # The relay's startup handshake must report both protocol constants; pin
-    # the source-level contract (the e2e deno test asserts the runtime event).
+    # An admitted relay run's first event is the startup handshake with both
+    # protocol constants; the e2e Deno test asserts its lazy runtime prefix.
     relay = (relay_dir() / "relay.ts").read_text()
     assert '"type": "startup"' in relay
     assert "RUNNER_PROTOCOL_VERSION" in relay

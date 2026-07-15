@@ -42,8 +42,9 @@ class ExecutionContext:
         """Deliver a progress line to the attached sink; silent when none.
 
         No default emitter (#35): a bare engine call performs no I/O. Entry
-        points attach sinks explicitly (droste_runner and the relay: the
-        stderr NDJSON sinks; the CLI: its --verbose echo)."""
+        points attach sinks explicitly (native runner: original stderr;
+        Pyodide relay: Python stderr forwarded to its dedicated host event
+        descriptor; CLI: its --verbose echo)."""
         if self.config.on_progress is not None:
             self.config.on_progress(status)
         self.emit_event(progress_event(status))

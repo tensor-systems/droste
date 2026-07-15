@@ -7,9 +7,10 @@ lockstep by a parity test — an event type added on either side without the
 other fails a test instead of being silently dropped by the filter.
 
 Emission is opt-in: the core loop performs no I/O of its own. Entry points
-attach sinks explicitly — ``droste_runner`` and the relay attach the stderr
-NDJSON sinks (``emit_event``/``emit_progress``); the CLI's ``--trace``
-renders events through the pure ``render_verbose`` projection.
+attach sinks explicitly — ``droste_runner`` writes NDJSON to its original
+stderr, while Pyodide writes to its original stderr for the Deno relay to
+validate and forward onto the dedicated host event descriptor. The CLI's
+``--trace`` renders events through the pure ``render_verbose`` projection.
 """
 
 from __future__ import annotations
@@ -151,10 +152,11 @@ def extract_event(
 def emit_event(event: dict[str, Any]) -> None:
     """The stderr NDJSON sink: one structured event per line.
 
-    stderr is the event lane on the Pyodide substrate — stdout is reserved for
-    the final HostResponse JSON (see the relay). The native subprocess runner
-    uses the same event objects. Attached EXPLICITLY by entry points; the core
-    loop emits nothing when no sink is configured (#35).
+    Original Python stderr is the ingress on the Pyodide substrate; the Deno
+    relay validates these frames and forwards them to its dedicated host event
+    descriptor. The native subprocess runner uses original stderr directly.
+    Attached EXPLICITLY by entry points; the core loop emits nothing when no
+    sink is configured (#35).
     """
     # Model-authored code executes under a sandbox stderr redirect. Lifecycle
     # events may be emitted from inside that execution, so the host event lane

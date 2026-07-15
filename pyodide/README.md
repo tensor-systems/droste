@@ -10,7 +10,8 @@ This substrate has two layers, and the split matters if you're adopting droste
 for your own host:
 
 - **The substrate itself** — droste-general, reusable, ModelRelay-shaped but
-  host-agnostic: `relay.ts`, `broker.ts`, `events.ts`, `stream.ts`, and the
+  host-agnostic: `relay.ts`, `event_channel.ts`, `broker.ts`, `events.ts`,
+  `stream.ts`, and the
   Python adapters in `droste.substrates.pyodide` (which ship inside `pip install
   droste`). Plus the A′-1 / A′-2 security machinery, whose droste-side half
   (`droste.sources.bridge`) is also part of the installable package. **None of
@@ -38,9 +39,10 @@ is yours to reuse as-is; write one adapter module of your own and point
 `relay.ts` at it.
 
 **Getting the Deno half:** the relay ships **inside the droste wheel** (#33)
-as package data under `droste/substrates/_relay/` — `relay.ts`, `stream.ts`,
-`broker.ts`, `events.ts`, `offline-probe.ts`, and `deps.ts` (the single
-Pyodide version pin). Stage it in your build from the installed package:
+as package data under `droste/substrates/_relay/` — `relay.ts`,
+`event_channel.ts`, `stream.ts`, `broker.ts`, `events.ts`, `offline-probe.ts`,
+and `deps.ts` (the single Pyodide version pin). Stage it in your build from the
+installed package:
 
     relay_dir="$(droste relay-path)"
     cp "$relay_dir"/*.ts <your-build-staging>/
@@ -48,9 +50,11 @@ Pyodide version pin). Stage it in your build from the installed package:
 (Or `python -c 'from droste.substrates import relay_dir; print(relay_dir())'`.)
 The wheel is already the one pinned, hash-verified artifact in your lockfile,
 so relay and engine are version-locked by construction — no separate tarball
-download, no sha pin to keep in sync. At startup the relay emits a `startup`
-event (`{engine_version, runner_protocol, provider_protocol}`) so contract
-adoption is a structured signal, not a changelog audit. (Tagged releases
+download, no sha pin to keep in sync. On an admitted run, the relay prefixes
+the first canonical event with a `startup` event
+(`{engine_version, runner_protocol, provider_protocol}`) so contract adoption
+is a structured signal, not a changelog audit. Preflight and pre-admission
+refusal leave the event descriptor empty. (Tagged releases
 still attach `droste-relay-vX.Y.Z.tar.gz` as a convenience for non-Python
 consumers; it is no longer the embedder path.)
 
@@ -63,12 +67,16 @@ Deno-side modules, all ModelRelay-aware but host-data-layer-agnostic:
 
 - `relay.ts` — the Deno process a host spawns. Reads a request JSON on stdin,
   runs the RLM in Pyodide via a **host-supplied adapter module** (named on the
-  command line), writes a response JSON on stdout. Deno holds the only ambient
+  command line), writes a response JSON on stdout, and requires a dedicated
+  host-provided descriptor for Trace ABI NDJSON. Deno holds the only ambient
   capabilities (narrow net to ModelRelay plus trusted provider files); the
   Pyodide sandbox has none. Knows nothing about any host's data layer — see
   "Writing a host adapter".
+- `event_channel.ts` — the single fail-closed writer for that host event
+  descriptor. It does not define or transform event bodies.
 - `broker.ts` — the A′-1 credential broker (see Security model).
-- `events.ts` — the structured NDJSON event vocabulary + stderr forwarding filter.
+- `events.ts` — the structured NDJSON event vocabulary + Pyodide-stderr
+  forwarding filter.
 - `stream.ts` — reconstructs a complete `/responses` reply from a ModelRelay SSE stream.
 
 Python-side adapters, in **`droste.substrates.pyodide`** (part of the droste
@@ -200,10 +208,45 @@ ordinary hard timeout.
 
 `relay.ts` takes the adapter module name as its **second CLI argument**:
 
+```bash
+DROSTE_RELAY_EVENT_FD=3 \
+  deno run --allow-net=api.modelrelay.ai --allow-read --allow-env \
+  relay.ts <sources> <adapter_module> 3>events.ndjson
 ```
-deno run --allow-net=api.modelrelay.ai --allow-read --allow-env \
-    relay.ts <sources> <adapter_module>
-```
+
+The file redirect is only a shell demonstration. A host using pipes must drain
+fd2 and the event descriptor concurrently while it waits for the unary response
+and process exit.
+
+The host must open the named descriptor before launch; fd3 is the convention.
+The relay rejects fd0, fd1, fd2, malformed values, and descriptors it cannot
+write. It never falls back to fd2. A missing or unavailable channel returns one
+unary response with `error.type = "RelayEventChannelError"` when stdout remains
+available, writes only an allowlisted reason code to fd2, and exits before
+Pyodide work begins.
+
+That transport failure body is relay-level and intentionally does not claim a
+runner protocol or operation: descriptor validation occurs before the
+host-selected adapter owns its response schema. Consumers branch on the closed
+`RelayEventChannelError` type/code, not on adapter or runner fields.
+
+The process has three independent output lanes:
+
+| Descriptor | Contract |
+|------------|----------|
+| fd1 | Exactly one unary response JSON line. Adapter-owned responses use its HostResponse schema; pre-adapter event-channel failures use the relay-level error above. |
+| configured event descriptor (fd3 by convention) | Canonical Trace ABI v2 NDJSON only. |
+| fd2 | Diagnostics only; never parse or promote these bytes as events. |
+
+Drain fd2 and the event descriptor concurrently. A hard cancellation or
+process failure may end fd3 after a valid nonterminal prefix; the transport
+does not invent a `done` event. Reconcile terminal state from the unary response
+when one exists, otherwise report a transport failure. A descriptor can also
+fail after part of a frame was written; treat a final unterminated or invalid
+line as a typed transport failure and never promote it to a Trace event. An
+empty preflight/refusal stream intentionally performs no peer-liveness write;
+peer or access-mode loss is detected fail-closed on the first admitted-run
+frame.
 
 The name is validated against `^[A-Za-z_][A-Za-z0-9_.]*$`, then set as a Pyodide
 Python global and resolved with `importlib.import_module` — never
@@ -265,11 +308,12 @@ sure your host actually has one.
 
 ## Configuration flags
 
-`relay.ts` reads two independent Deno environment variables at process start.
+`relay.ts` reads three independent Deno environment variables at process start.
 (These are `relay.ts`'s flags; a different host would define its own.)
 
 | Flag | Default | Set it to... | ...to get |
 |------|---------|---------------|-----------|
+| `DROSTE_RELAY_EVENT_FD` | none (required) | A decimal inherited descriptor of 3 or greater; fd3 is conventional. | The sole canonical Trace ABI NDJSON output lane. Missing, malformed, or unwritable descriptors fail closed. |
 | `RLM_BRIDGE` | (unset) | `legacy` | Pre-A′-1 behavior: the ModelRelay credential is a visible global inside the untrusted REPL interpreter, which assembles its own auth header. Kill switch only — the split is one `host_fetch` call site catching a real design mistake, not a feature. |
 | `RLM_STREAM` | on | `0` | Legacy unary ModelRelay call (no SSE), for when NDJSON streaming from `/responses` is suspected of causing an issue. |
 
@@ -352,7 +396,8 @@ uv run pytest
 Roughly three tiers of coverage:
 
 - **Pure / unit** (no Pyodide, no network): `broker_test.ts`, `events_test.ts`,
-  `stream_test.ts` (Deno); `tests/test_pyodide_error_serialization.py` and
+  `event_channel_test.ts`, `stream_test.ts` (Deno);
+  `tests/test_pyodide_error_serialization.py` and
   `tests/test_sql_local.py` (Python) — the latter includes the #8
   regressions proving an explicit `timeout_ms: 0` survives (isn't defaulted back
   to 5000) and that a query then runs under it. `examples/pyodide-host/`
