@@ -60,7 +60,7 @@ export class EventChannel {
       throw this.#failure;
     }
     if (frame.length === 0 || frame.includes("\n") || frame.includes("\r")) {
-      this.#fail("write_failed");
+      throw new TypeError("event frame must be one non-empty line");
     }
 
     const bytes = new TextEncoder().encode(frame + "\n");
@@ -76,10 +76,7 @@ export class EventChannel {
         }
         offset += written;
       }
-    } catch (error) {
-      if (error instanceof RelayEventChannelError) {
-        throw error;
-      }
+    } catch {
       this.#fail("write_failed");
     }
   }

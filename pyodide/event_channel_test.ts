@@ -95,14 +95,25 @@ Deno.test("event channel latches descriptor and frame write failures", () => {
   const firstFailure = channel.failure;
   assertChannelError(() => channel.writeFrame("{}"), "write_failed");
   assert(channel.failure === firstFailure);
+  for (const frame of ["{}\n{}", "{}\r{}", ""]) {
+    const invalidChannel = new EventChannel(3, () => 1);
+    assertThrows(
+      () => invalidChannel.writeFrame(frame),
+      TypeError,
+      "event frame must be one non-empty line",
+    );
+    assertEquals(invalidChannel.failure, null);
+  }
+
+  const writerError = new RelayEventChannelError("descriptor_unavailable");
+  const typedFailureChannel = new EventChannel(3, () => {
+    throw writerError;
+  });
   assertChannelError(
-    () => new EventChannel(3, () => 1).writeFrame("{}\n{}"),
+    () => typedFailureChannel.writeFrame("{}"),
     "write_failed",
   );
-  assertChannelError(
-    () => new EventChannel(3, () => 1).writeFrame(""),
-    "write_failed",
-  );
+  assert(typedFailureChannel.failure !== writerError);
 
   const partial: number[] = [];
   let writes = 0;
