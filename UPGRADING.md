@@ -61,6 +61,23 @@ derive this field from their immutable run specification. A conflicting
 The bundled Deno/Pyodide relay applies the same operation-specific exception
 projection when an adapter raises.
 
+### Pyodide database access is broker-only (breaking)
+
+The bundled Deno relay no longer reads `RLM_DB_SERVICE` and no longer mounts a
+database directory into the untrusted REPL interpreter. A request with
+`db_path` always boots the trusted provider interpreter, consumes database
+paths there, removes them from the sandbox request, and exposes only the
+brokered `BridgeProvider` capability surface. The database-backed reference
+adapter now requires a callable `bridge_call`; it has no `request["db_path"]`
+fallback.
+
+Remove `RLM_DB_SERVICE` from host configuration and upgrade the staged relay
+and any database-backed adapter atomically. Context-only adapters may still
+receive `bridge_call=None` when no provider path is present, but must not treat
+that as authority to open a request path inside the sandbox. The runner,
+provider, and bridge protocol versions do not change: their envelopes and wire
+schemas are unchanged; this removes an unversioned relay topology escape hatch.
+
 ## 0.13.0 (from 0.12.1)
 
 ### Runner protocol v4 adds safe, content-free scaffold preflight
