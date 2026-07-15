@@ -78,8 +78,11 @@ jobs:
         # tarball that isn't an sdist.
         run: |
           staging="droste-relay-$GITHUB_REF_NAME"
-          mkdir -p "$staging" relay-dist
+          mkdir -p "$staging/conformance" relay-dist
           cp src/droste/substrates/_relay/*.ts pyodide/README.md "$staging/"
+          cp src/droste/testing/fixtures/trace-v2-lifecycle.ndjson \
+            src/droste/testing/fixtures/runner-v6-refusal.ndjson \
+            "$staging/conformance/"
           printf '%s %s\n' "$GITHUB_REF_NAME" "$GITHUB_SHA" > "$staging/DROSTE_VERSION"
           tar czf "relay-dist/$staging.tar.gz" "$staging"
       - name: GitHub release with artifacts

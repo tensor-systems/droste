@@ -11,9 +11,30 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.15.0)
+## Unreleased (post-0.15.1)
 
 No changes yet.
+
+## 0.15.1 (from 0.15.0)
+
+### The released Trace ABI contract includes executable cross-runtime fixtures
+
+Trace ABI v2 and runner protocol v6 are unchanged. This patch publishes their
+previously missing conformance corpus: one deterministic NDJSON stream covering
+ordinary success, unary and atomic-batch subcalls with failure attribution,
+structured execution failure, repair and extract success/failure, loud output
+limit failure, cancellation, and terminal reconciliation. A separate exact
+runner-v6 refusal value records the pre-admission case; it is intentionally not
+a Trace ABI event and relays must reject it as one.
+
+Python consumers read the shipped bytes with
+`droste.testing.trace_v2_lifecycle_ndjson()` and
+`droste.testing.runner_v6_refusal_ndjson()`. Non-Python consumers use the same
+files under `conformance/` in the versioned GitHub relay artifact. Wheel and
+sdist checks compare the source bytes, and the release bundle copies those same
+source files rather than maintaining copied schemas. Embedders should pin
+0.15.1 or newer for conformance; 0.15.0 contains the ABI implementation but not
+this complete released fixture contract.
 
 ## 0.15.0 (from 0.14.1)
 

@@ -138,6 +138,32 @@ jobs:
                   wheel_packs[source.pack_id]
               )
           PY
+      - name: Distributions bundle the exact event ABI corpus (#144)
+        run: |
+          for f in trace-v2-lifecycle.ndjson runner-v6-refusal.ndjson; do
+            unzip -l dist/*.whl | grep -q "droste/testing/fixtures/$f" || {
+              echo "wheel is missing droste/testing/fixtures/$f"; exit 1;
+            }
+          done
+          tmp="$(mktemp -d)"
+          uv venv "$tmp/venv"
+          uv pip install --python "$tmp/venv/bin/python" dist/*.whl
+          "$tmp/venv/bin/python" - "$PWD/src/droste/testing/fixtures" <<'PY'
+          import sys
+          from pathlib import Path
+
+          from droste.testing import runner_v6_refusal_ndjson, trace_v2_lifecycle_ndjson
+
+          source = Path(sys.argv[1])
+          assert trace_v2_lifecycle_ndjson() == (source / "trace-v2-lifecycle.ndjson").read_bytes()
+          assert runner_v6_refusal_ndjson() == (source / "runner-v6-refusal.ndjson").read_bytes()
+          PY
+          sdist_root="$(tar tzf dist/droste-*.tar.gz | sed -n '1s#/.*##p')"
+          tar xzf dist/droste-*.tar.gz -C "$tmp"
+          cmp src/droste/testing/fixtures/trace-v2-lifecycle.ndjson \
+            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v2-lifecycle.ndjson"
+          cmp src/droste/testing/fixtures/runner-v6-refusal.ndjson \
+            "$tmp/$sdist_root/src/droste/testing/fixtures/runner-v6-refusal.ndjson"
 
   deno:
     name: deno (pyodide substrate)

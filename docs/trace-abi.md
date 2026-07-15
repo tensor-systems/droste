@@ -5,6 +5,14 @@ Droste exposes one append-only event stream and one policy-resolved terminal
 files. Hosts attach `on_event` for live delivery and optionally
 `on_run_record` as their persistence I/O shell.
 
+The integer `version` names the complete strict contract: envelope, event
+bodies, persistence classification, and ordering/terminal invariants. Changing
+any of those requires a new Trace ABI version and an atomic consumer migration;
+even adding an optional field is breaking because current strict readers reject
+unknown fields. The runner protocol changes only when its own request/response
+or negotiation contract changes, including an embedded run-record version. It
+does not change merely because a released fixture is added.
+
 ## Event envelope
 
 Every event is a strict v2 value with these fields:
@@ -173,3 +181,34 @@ snapshot when replay retention is selected; then emits durable `done`.
 renumbering it, so gaps truthfully show discarded transient or configurable
 values. Its terminal projection must equal the body of its final `done` event,
 and its usage totals reconcile with `RLMResult`.
+
+## Released conformance corpus
+
+Droste 0.15.1 and later ship the authoritative fixture bytes inside the wheel
+and sdist. Python consumers load them through package resources:
+
+```python
+from droste.testing import runner_v6_refusal_ndjson, trace_v2_lifecycle_ndjson
+
+event_lines = trace_v2_lifecycle_ndjson().splitlines()
+pre_admission_refusal = runner_v6_refusal_ndjson()
+```
+
+The NDJSON contains five contiguous runs whose per-run sequences restart at
+one: ordinary success, successful and failed extract fallback, loud
+output-limit failure, and cancellation. Together they cover unary and
+atomic-batch subcall outcomes with stable call attribution, structured
+execution error, repair and extract completion/failure, and exact
+`result`/`usage`/`budget`/`policy`/`done` reconciliation. An output-limit
+failure has no shortened `output` event:
+Droste rejects oversized stdout rather than presenting clipped content as a
+successful value. `stdout_chars` preserves the rejected size in the terminal
+result.
+
+A runner protocol refusal occurs before admission, so it has no `run_id`, no
+`RunRecord`, and no Trace ABI event sequence. Its fixture lives beside the
+corpus so hosts test the boundary explicitly; an event relay must reject those
+bytes. The GitHub release's `droste-relay-vX.Y.Z.tar.gz` exposes these same
+files under `conformance/` for non-Python consumers. Consumers should pin the
+release, read the fixture bytes, and use the released Python parser or Deno
+filter rather than copying either schema.
