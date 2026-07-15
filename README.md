@@ -245,7 +245,7 @@ flowchart LR
 ```
 
 **Runner Inputs**
-- `protocol_version`: **required** on every request (currently `4`) — a
+- `protocol_version`: **required** on every request (currently `6`) — a
   missing or mismatched version gets a structured refusal, so hosts detect
   incompatibility instead of failing on a missing field. See
   [docs/architecture.md](docs/architecture.md) for the compatibility rules and
