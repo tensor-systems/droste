@@ -258,6 +258,19 @@ evidence with that status rather than leaving the model to interpret prefixes.
   cumulative checkpoint. The unary bridge cannot stream checkpoints or observe
   a new cancellation request while a synchronous remote handler is running;
   Pyodide hosts still own hard timeout and process termination.
+- `filesystem_text` has one path authority: a pinned trusted root directory
+  descriptor plus componentwise descriptor-relative opens. Do not add
+  `resolve()`/prefix checks, `os.walk`, symlink-following fallbacks, or pass the
+  configured root into descriptors, prompts, results, evidence, or errors.
+- Filesystem paths and globs are POSIX data, not host path strings. Exclusion
+  always wins. Cursors carry no authority and must revalidate source, request,
+  policy, inventory, and file revisions before continuing.
+- Keep base filesystem operations dependency-free and bounded. Markdown is an
+  optional removable enrichment; literal grep and index-free search must not
+  grow an unsafe regex engine or mandatory ingestion/index subsystem.
+- Native arbitrary Python is not a security boundary. Prove non-ambient access
+  with a separate trusted provider interpreter/process and the generic bridge,
+  never with filesystem-specific sandbox claims or transport code.
 
 
 ## Login

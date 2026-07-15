@@ -9,6 +9,11 @@ from .bridge import (
     DuplexBridgeSession,
     ProviderService,
 )
+from .filesystem_text import (
+    FILESYSTEM_TEXT_PROVIDER_MANIFEST,
+    FilesystemTextConfig,
+    filesystem_text_provider,
+)
 from .sql_local import (
     DEFAULT_LOCAL_SQL_POLICY,
     SQLITE_PROVIDER_MANIFEST,
@@ -27,6 +32,9 @@ __all__ = [
     "DuplexBridgeCall",
     "DuplexBridgeSession",
     "ProviderService",
+    "FILESYSTEM_TEXT_PROVIDER_MANIFEST",
+    "FilesystemTextConfig",
+    "filesystem_text_provider",
     "DEFAULT_LOCAL_SQL_POLICY",
     "SQLITE_PROVIDER_MANIFEST",
     "LocalSqlRuntime",

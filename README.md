@@ -303,6 +303,13 @@ authoritative effects or policy, which the receiving host must supply.
 See [Provider manifests](docs/provider-manifests.md) for the value model,
 ownership boundaries, bridge contract, and migration example.
 
+The bundled local providers are SQLite and `filesystem_text`. The latter offers
+bounded `list_files`, `read`, literal `grep`, index-free `search`, and `stat`
+over an explicitly configured directory, with typed evidence and authenticated,
+self-contained cursor continuation. It is strict UTF-8, never follows symlinks, and fails
+closed on platforms without secure componentwise POSIX path primitives. See the
+[local filesystem provider contract](docs/provider-manifests.md#local-filesystemtext-provider).
+
 #### Configuration
 
 ```python
