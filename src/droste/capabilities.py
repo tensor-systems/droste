@@ -31,7 +31,7 @@ _ERROR_TYPE_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-
 _MEDIA_TYPE_PATTERN = re.compile(
     r"[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*\Z", re.ASCII
 )
-_OPERATION_ID_PATTERN = re.compile(r"[a-z][a-z0-9_.:/-]*\Z", re.ASCII)
+_OPERATION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]*\Z", re.ASCII)
 
 
 def _exception_type_name(exc: BaseException) -> str:
@@ -180,7 +180,7 @@ class ProviderOperation:
         if not isinstance(self.operation_id, str) or not _OPERATION_ID_PATTERN.fullmatch(
             self.operation_id
         ):
-            raise ValueError("provider operation_id must be a stable lowercase ASCII ID")
+            raise ValueError("provider operation_id must be a stable ASCII ID")
         if (
             not isinstance(self.binding_name, str)
             or not self.binding_name.isidentifier()

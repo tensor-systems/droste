@@ -238,3 +238,12 @@ Filesystem byte ranges are zero-based and half-open. Line coordinates are
 one-based and inclusive. Evidence paths are source-relative POSIX paths and
 revisions are opaque stat-derived digests; neither exposes the configured host
 root.
+
+## MCP stdio transport
+
+`open_mcp_stdio_source()` acquires one host-configured local MCP process and
+maps its complete paginated `tools/list` snapshot into the same immutable
+provider values. It returns a lifecycle-owned `BoundSource`, which may be
+combined directly with in-process bound sources in `ProviderRegistry`. MCP is
+not a provider type, prompt vocabulary, binding namespace, policy authority, or
+trace path. See the [local MCP stdio contract and spike report](mcp-stdio.md).

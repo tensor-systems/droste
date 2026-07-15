@@ -40,6 +40,13 @@ jobs:
             uv run python -c \
               'import importlib.util; assert importlib.util.find_spec("verifiers") is None'
           fi
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.0.0
+        if: matrix.python == '3.11'
+        with:
+          node-version: 22.16.0
+      - name: Install pinned MCP reference server
+        if: matrix.python == '3.11'
+        run: npm ci --prefix tests/reference_mcp --ignore-scripts --no-audit --no-fund
       - name: Tests
         run: uv run pytest -q
 

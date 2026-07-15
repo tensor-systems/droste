@@ -13,6 +13,24 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.13.1)
 
+### Local MCP stdio sources use one owned acquisition transaction
+
+Hosts may call `open_mcp_stdio_source(ConfiguredSource(...))` to initialize a
+host-allowlisted local MCP process and freeze its complete `tools/list` snapshot
+into a bound provider. The function returns `BoundSource`, not a reusable
+`ProviderRegistration`, because MCP discovery must perform I/O before a
+manifest exists. Combine it with other already-bound sources through
+`ProviderRegistry`, and transfer or close that registry under the existing
+runtime ownership rules.
+
+The configuration requires an absolute executable, an exact executable and
+tool allowlist, an explicit working directory and environment, separate raw-tool/Python-binding
+names, host read classification, and budget classes. MCP annotations never
+supply policy; this spike rejects effectful tools.
+Only protocol `2025-11-25` over local stdio is supported. Streamable HTTP and
+tasks remain separate work. There is no provider or runner protocol bump;
+existing sources and hosts do not acquire MCP authority implicitly.
+
 ### Bound provider runtimes have explicit ownership
 
 `ProviderRuntime` accepts an optional `close_callback`, and

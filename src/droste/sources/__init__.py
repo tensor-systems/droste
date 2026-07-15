@@ -14,6 +14,15 @@ from .filesystem_text import (
     FilesystemTextConfig,
     filesystem_text_provider,
 )
+from .mcp_stdio import (
+    MCP_PROTOCOL_VERSION,
+    McpConfigurationError,
+    McpDescriptorError,
+    McpManifestPolicy,
+    mcp_tools_to_manifest,
+    normalize_mcp_tool_result,
+    open_mcp_stdio_source,
+)
 from .sql_local import (
     DEFAULT_LOCAL_SQL_POLICY,
     SQLITE_PROVIDER_MANIFEST,
@@ -35,6 +44,13 @@ __all__ = [
     "FILESYSTEM_TEXT_PROVIDER_MANIFEST",
     "FilesystemTextConfig",
     "filesystem_text_provider",
+    "MCP_PROTOCOL_VERSION",
+    "McpConfigurationError",
+    "McpDescriptorError",
+    "McpManifestPolicy",
+    "mcp_tools_to_manifest",
+    "normalize_mcp_tool_result",
+    "open_mcp_stdio_source",
     "DEFAULT_LOCAL_SQL_POLICY",
     "SQLITE_PROVIDER_MANIFEST",
     "LocalSqlRuntime",
