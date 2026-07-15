@@ -11,11 +11,15 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.14.0)
+## Unreleased (post-0.14.1)
 
 No changes yet.
 
-## 0.14.0 (from 0.13.1)
+## 0.14.1 (from 0.13.1)
+
+The immutable `v0.14.0` tag failed in release CI before any PyPI or GitHub
+release was published. Version 0.14.1 supersedes that unpublished tag and is
+the first available release containing the changes below.
 
 ### Runner protocol v5 and scaffold manifest v2 add subcall input capacity
 

@@ -1,6 +1,6 @@
 [project]
 name = "droste"
-version = "0.14.0"
+version = "0.14.1"
 description = "Recursive analysis engine for data too large for a context window, built with Recursive Language Models (RLMs)"
 readme = "README.md"
 requires-python = ">=3.11"
