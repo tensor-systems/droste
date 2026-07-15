@@ -17,7 +17,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
-TRACE_ABI_VERSION = 1
+TRACE_ABI_VERSION = 2
 
 
 class PersistenceClass(str, Enum):
@@ -36,8 +36,8 @@ CONFIGURABLE_EVENT_TYPES = frozenset(
         "code",
         "output",
         "execution_error",
-        "finalization_error",
-        "extract_error",
+        "subcall",
+        "extract",
         "repair",
         "result",
         "replay",
@@ -57,7 +57,7 @@ _NONE_TYPE = type(None)
 EventFieldType = type | tuple[type, ...]
 EventBodySchema = tuple[Mapping[str, EventFieldType], Mapping[str, EventFieldType]]
 
-# One exhaustive v1 table. The first mapping is required fields; the second is
+# One exhaustive v2 table. The first mapping is required fields; the second is
 # optional fields. Nested broker/result values keep their own schema authority.
 EVENT_BODY_SCHEMAS: Mapping[str, EventBodySchema] = MappingProxyType(
     {
@@ -89,11 +89,29 @@ EVENT_BODY_SCHEMAS: Mapping[str, EventBodySchema] = MappingProxyType(
             {},
         ),
         "reasoning_delta": ({"text": str}, {}),
-        "finalization_error": ({"error_type": str, "message": str}, {}),
-        "extract_error": ({"error_type": str, "message": str}, {}),
+        "subcall": (
+            {
+                "phase": str,
+                "call_id": str,
+                "operation": str,
+                "iteration": int,
+            },
+            {
+                "reservation": Mapping,
+                "checkpoint": Mapping,
+                "batch_id": str,
+                "batch_index": int,
+                "batch_count": int,
+                "error": Mapping,
+            },
+        ),
         "repair": (
-            {"iteration": int, "reason": str},
-            {"error_type": str},
+            {"phase": str, "kind": str, "iteration": int},
+            {"error": Mapping},
+        ),
+        "extract": (
+            {"phase": str, "iteration": int},
+            {"extract_error": Mapping},
         ),
         "result": ({"result": Mapping}, {}),
         "replay": ({"result": Mapping}, {}),
@@ -201,7 +219,108 @@ def _require_exact_mapping(
 
 
 def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
-    if event_type == "usage":
+    if event_type == "subcall":
+        phase = body["phase"]
+        if phase not in {"start", "progress", "completion", "failure"}:
+            raise ValueError("subcall phase is not recognized by Trace ABI v2")
+        if body["operation"] not in {"llm_query", "llm_batch", "llm_batch_with_errors"}:
+            raise ValueError("subcall operation is not recognized by Trace ABI v2")
+        if not body["call_id"]:
+            raise ValueError("subcall call_id must not be empty")
+        if body["iteration"] < 1:
+            raise ValueError("subcall iteration must be positive")
+        reservation = body.get("reservation")
+        checkpoint = body.get("checkpoint")
+        error = body.get("error")
+        if phase == "start":
+            if reservation is None:
+                raise ValueError("subcall start requires reservation")
+            if checkpoint is not None or error is not None:
+                raise ValueError("subcall start cannot carry checkpoint or error")
+        elif phase == "progress":
+            if checkpoint is None:
+                raise ValueError("subcall progress requires checkpoint")
+            if reservation is not None or error is not None:
+                raise ValueError("subcall progress cannot carry reservation or error")
+        elif phase == "completion":
+            if checkpoint is None:
+                raise ValueError("subcall completion requires checkpoint")
+            if reservation is not None or error is not None:
+                raise ValueError("subcall completion cannot carry reservation or error")
+        else:
+            if checkpoint is None or error is None:
+                raise ValueError("subcall failure requires checkpoint and error")
+            if reservation is not None:
+                raise ValueError("subcall failure cannot carry reservation")
+        if reservation is not None:
+            values = _require_exact_mapping(
+                reservation,
+                name="subcall.reservation",
+                fields={"tokens": int, "subcalls": int, "wall_ms": int, "depth": int},
+            )
+            if any(isinstance(value, bool) or value < 0 for value in values.values()):
+                raise ValueError("subcall reservation values must be non-negative integers")
+        if checkpoint is not None:
+            values = _require_exact_mapping(
+                checkpoint,
+                name="subcall.checkpoint",
+                fields={"tokens": int, "subcalls": int},
+            )
+            if any(isinstance(value, bool) or value < 0 for value in values.values()):
+                raise ValueError("subcall checkpoint values must be non-negative integers")
+        if error is not None:
+            _require_exact_mapping(
+                error,
+                name="subcall.error",
+                fields={"code": str, "type": str},
+            )
+        batch_fields = {key for key in ("batch_id", "batch_index", "batch_count") if key in body}
+        if batch_fields and "batch_id" not in batch_fields:
+            raise ValueError("subcall batch metadata requires batch_id")
+        if "batch_id" in body and not body["batch_id"]:
+            raise ValueError("subcall batch_id must not be empty")
+        if "batch_index" in body and body["batch_index"] < 0:
+            raise ValueError("subcall batch_index must be non-negative")
+        if "batch_count" in body and body["batch_count"] < 1:
+            raise ValueError("subcall batch_count must be positive")
+        if "batch_index" in body and "batch_count" in body:
+            if body["batch_index"] >= body["batch_count"]:
+                raise ValueError("subcall batch_index must be less than batch_count")
+    elif event_type == "repair":
+        if body["phase"] not in {"start", "completion", "failure"}:
+            raise ValueError("repair phase is not recognized by Trace ABI v2")
+        if body["kind"] not in {"missing_code", "execution_error", "terminal"}:
+            raise ValueError("repair kind is not recognized by Trace ABI v2")
+        if body["iteration"] < 1:
+            raise ValueError("repair iteration must be positive")
+        error = body.get("error")
+        if body["phase"] == "failure":
+            if error is None:
+                raise ValueError("repair failure requires error")
+            _require_exact_mapping(
+                error,
+                name="repair.error",
+                fields={"type": str, "message": str},
+            )
+        elif error is not None:
+            raise ValueError("repair start/completion cannot carry error")
+    elif event_type == "extract":
+        if body["phase"] not in {"start", "completion", "failure"}:
+            raise ValueError("extract phase is not recognized by Trace ABI v2")
+        if body["iteration"] < 1:
+            raise ValueError("extract iteration must be positive")
+        extract_error = body.get("extract_error")
+        if body["phase"] == "failure":
+            if extract_error is None:
+                raise ValueError("extract failure requires extract_error")
+            _require_exact_mapping(
+                extract_error,
+                name="extract.extract_error",
+                fields={"type": str, "message": str},
+            )
+        elif extract_error is not None:
+            raise ValueError("extract start/completion cannot carry extract_error")
+    elif event_type == "usage":
         if body["kind"] != "resolved":
             raise ValueError("usage kind must be 'resolved'")
         breakdown_fields: Mapping[str, EventFieldType] = {
@@ -249,7 +368,7 @@ def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
             if not required <= body.keys():
                 raise ValueError("budget mutation requires action, resource, and amount")
             if body["action"] not in {"reserve", "commit", "refund", "exhaust"}:
-                raise ValueError("budget mutation action is not recognized by Trace ABI v1")
+                raise ValueError("budget mutation action is not recognized by Trace ABI v2")
             if body["amount"] < 0:
                 raise ValueError("budget mutation amount must be non-negative")
         else:
@@ -306,10 +425,10 @@ def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
             ScaffoldManifest.from_dict(scaffold_manifest)
     elif event_type == "policy":
         if body["outcome"] not in {"passed", "violated", "not_evaluated", "not_enforced"}:
-            raise ValueError("policy outcome is not recognized by Trace ABI v1")
+            raise ValueError("policy outcome is not recognized by Trace ABI v2")
     elif event_type == "done":
         if body["status"] not in {"success", "error", "cancelled"}:
-            raise ValueError("done status is not recognized by Trace ABI v1")
+            raise ValueError("done status is not recognized by Trace ABI v2")
         if body["iterations"] < 0:
             raise ValueError("done iterations must be non-negative")
         stdout_chars = body.get("stdout_chars")
@@ -460,7 +579,7 @@ _ENVELOPE_KEYS = frozenset(
 
 
 def parse_event(value: RunEvent | Mapping[str, Any]) -> RunEvent:
-    """The one strict parser for Trace ABI v1 event values."""
+    """The one strict parser for Trace ABI v2 event values."""
     if isinstance(value, RunEvent):
         return value
     required = {

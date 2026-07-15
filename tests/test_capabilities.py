@@ -12,6 +12,7 @@ from droste import RLMConfig, run_rlm
 from droste.capabilities import (
     JSON_SCHEMA_2020_12,
     CapabilityAdmission,
+    CapabilityAttemptPhase,
     CapabilityBroker,
     CapabilityCall,
     CapabilityCallError,
@@ -174,6 +175,7 @@ def test_manifest_and_envelopes_are_immutable_values() -> None:
 def test_context_is_frozen_and_reports_cumulative_checkpoints() -> None:
     authority = _AttemptAuthority()
     observed: list[CapabilityExecutionContext] = []
+    attempt_events = []
 
     def handler(context: CapabilityExecutionContext) -> str:
         observed.append(context)
@@ -188,6 +190,7 @@ def test_context_is_frozen_and_reports_cumulative_checkpoints() -> None:
         run_id="run-1",
         parent_run_id="parent-1",
         attempt_authority=authority,
+        attempt_observer=attempt_events.append,
     ).dispatch(CapabilityCall(QUERY.capability_id, "call-1", "run-1", parent_run_id="parent-1"))
 
     assert result.ok is True
@@ -195,11 +198,22 @@ def test_context_is_frozen_and_reports_cumulative_checkpoints() -> None:
     assert observed[0].reservation == CapabilityReservation(100, 2, 1_000, 0)
     assert authority.checkpoints == [CapabilityCheckpoint(10, 1)]
     assert authority.settlements == [(True, None, CapabilityCheckpoint(10, 1))]
+    assert [event.phase for event in attempt_events] == [
+        CapabilityAttemptPhase.START,
+        CapabilityAttemptPhase.PROGRESS,
+        CapabilityAttemptPhase.COMPLETION,
+    ]
+    assert all(event.call.call_id == "call-1" for event in attempt_events)
+    assert attempt_events[0].reservation == CapabilityReservation(100, 2, 1_000, 0)
+    assert attempt_events[1].checkpoint == attempt_events[2].checkpoint == CapabilityCheckpoint(
+        10, 1
+    )
 
 
 def test_deadline_before_handler_is_typed_and_releases_at_admission_boundary() -> None:
     authority = _AttemptAuthority(deadline=10.0)
     invoked = False
+    attempt_events = []
 
     def handler(_context):
         nonlocal invoked
@@ -209,6 +223,7 @@ def test_deadline_before_handler_is_typed_and_releases_at_admission_boundary() -
         (CapabilityRegistration(QUERY, handler),),
         run_id="run-1",
         attempt_authority=authority,
+        attempt_observer=attempt_events.append,
         clock=lambda: 10.0,
     ).dispatch(CapabilityCall(QUERY.capability_id, "call-1", "run-1"))
 
@@ -219,6 +234,12 @@ def test_deadline_before_handler_is_typed_and_releases_at_admission_boundary() -
     assert authority.settlements == [
         (False, CapabilityErrorCode.DEADLINE_EXCEEDED, CapabilityCheckpoint())
     ]
+    assert [event.phase for event in attempt_events] == [
+        CapabilityAttemptPhase.START,
+        CapabilityAttemptPhase.FAILURE,
+    ]
+    assert attempt_events[-1].error is not None
+    assert attempt_events[-1].error.code == CapabilityErrorCode.DEADLINE_EXCEEDED
 
 
 def test_call_identity_is_claimed_before_admission() -> None:

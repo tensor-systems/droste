@@ -365,7 +365,7 @@ function emitEvent(obj: unknown): void {
       depth: 1,
       seq: ++relaySeq,
       timestamp: new Date().toISOString(),
-      version: 1,
+      version: 2,
       persistence_class: "transient",
     };
     Deno.stderr.writeSync(_enc.encode(JSON.stringify(event) + "\n"));

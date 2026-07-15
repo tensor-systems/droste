@@ -5,7 +5,7 @@ from threading import RLock
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..capabilities import CapabilityResult
+    from ..capabilities import CapabilityAttemptEvent, CapabilityResult
 
 from ..protocols.llm_client import TokenUsage
 from .budget import Budget, BudgetLedger
@@ -32,6 +32,7 @@ class ExecutionContext:
     trace: TraceRecorder = field(default_factory=TraceRecorder)
     ledger: BudgetLedger = field(default_factory=lambda: BudgetLedger(Budget()))
     _emission_lock: RLock = field(default_factory=RLock, init=False, repr=False)
+    _iteration: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.ledger.budget != self.config.budget:
@@ -124,6 +125,49 @@ class ExecutionContext:
     def observe_capability(self, result: CapabilityResult) -> None:
         """Append the broker-owned content-free capability projection."""
         self.emit_event({"type": "capability", "outcome": result.to_trace_dict()})
+
+    def begin_iteration(self, iteration: int) -> None:
+        """Publish the current loop iteration before model-authored code may run."""
+
+        if isinstance(iteration, bool) or not isinstance(iteration, int) or iteration < 1:
+            raise ValueError("execution iteration must be positive")
+        self._iteration = iteration
+
+    def observe_capability_attempt(self, event: CapabilityAttemptEvent) -> None:
+        """Project one broker attempt fact into the canonical subcall event."""
+
+        from ..capabilities import CapabilityAttemptPhase, CapabilityKind, thaw_value
+
+        capability_id = event.call.capability_id
+        if (
+            capability_id.kind is not CapabilityKind.INFERENCE
+            or capability_id.provider_type != "subcall"
+            or self._iteration == 0
+        ):
+            return
+        value: dict[str, Any] = {
+            "type": "subcall",
+            "phase": event.phase.value,
+            "call_id": event.call.call_id,
+            "operation": capability_id.operation,
+            "iteration": self._iteration,
+        }
+        if event.reservation is not None:
+            value["reservation"] = event.reservation.to_dict()
+        if event.checkpoint is not None:
+            value["checkpoint"] = event.checkpoint.to_dict()
+        if event.error is not None:
+            value["error"] = {"code": event.error.code, "type": event.error.type}
+        if capability_id.operation in {"llm_batch", "llm_batch_with_errors"}:
+            value["batch_id"] = event.call.call_id
+            raw_prompts = thaw_value(
+                event.call.args[0]
+                if event.call.args
+                else event.call.kwargs.get("prompts", ())
+            )
+            if isinstance(raw_prompts, (list, tuple)) and raw_prompts:
+                value["batch_count"] = len(raw_prompts)
+        self.emit_event(value)
 
     @property
     def depth(self) -> int:

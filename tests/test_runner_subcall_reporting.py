@@ -71,7 +71,7 @@ class _StubHandler(BaseHTTPRequestHandler):
         pass
 
 
-def test_run_reports_actual_subcall_count(monkeypatch) -> None:
+def test_run_reports_actual_subcall_count(monkeypatch, capsys) -> None:
     from importlib import import_module
 
     run_module = import_module("droste_runner.run")
@@ -91,7 +91,7 @@ def test_run_reports_actual_subcall_count(monkeypatch) -> None:
     try:
         response = run(
             {
-                "protocol_version": 5,
+                "protocol_version": 6,
                 "model": "test-model",
                 "question": "is it spam?",
                 "budget": _budget(subcalls=10, depth=2),
@@ -99,6 +99,7 @@ def test_run_reports_actual_subcall_count(monkeypatch) -> None:
                 "root_endpoint": f"{base}/root",
                 "subcall_endpoint": f"{base}/subcall",
                 "trace_policy_id": "local-training-v1",
+                "retain_trace": ["subcall"],
                 "trace_expires_at": "2026-10-14T00:00:00Z",
                 "trace_host_managed_expiry": True,
                 "training_allowed": True,
@@ -117,6 +118,8 @@ def test_run_reports_actual_subcall_count(monkeypatch) -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+    live_events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
 
     assert response["error"] is None
     assert response["ready"] is True
@@ -138,7 +141,8 @@ def test_run_reports_actual_subcall_count(monkeypatch) -> None:
         "concurrency": 2,
         "seed": 17,
     }
-    assert manifest["abis"]["runner"] == 5
+    assert manifest["abis"]["runner"] == 6
+    assert manifest["abis"]["trace"] == 2
     assert manifest["engine"]["source_revision"] == "commit-a"
     assert manifest["id"].startswith("sha256:")
     assert "trajectory" not in response
@@ -162,6 +166,14 @@ def test_run_reports_actual_subcall_count(monkeypatch) -> None:
         event for event in response["run_record"]["events"] if event["type"] == "capability"
     )
     assert capability["outcome"]["run_id"] == response["run_id"]
+    live_subcalls = [event for event in live_events if event["type"] == "subcall"]
+    retained_subcalls = [
+        event for event in response["run_record"]["events"] if event["type"] == "subcall"
+    ]
+    assert live_subcalls == retained_subcalls
+    assert [event["phase"] for event in live_subcalls] == ["start", "completion"]
+    assert live_subcalls[0]["call_id"] == live_subcalls[1]["call_id"]
+    assert all(event["iteration"] == 1 and event["version"] == 2 for event in live_subcalls)
     assert capability["outcome"]["capability_id"]["operation"] == "llm_query"
     assert "params" not in capability["outcome"]
     assert "result" not in capability["outcome"]
@@ -211,7 +223,7 @@ def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> 
     monkeypatch.setattr(import_module("droste_runner.run"), "run_rlm", fake_run_rlm)
     response = runner_module.run(
         {
-            "protocol_version": 5,
+            "protocol_version": 6,
             "model": "test-model",
             "question": "q",
             "budget": _budget(),
@@ -390,7 +402,7 @@ def _run_with_capture(request_extra: dict[str, Any]) -> list[dict[str, Any]]:
     base = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         request: dict[str, Any] = {
-            "protocol_version": 5,
+            "protocol_version": 6,
             "model": "test-model",
             "question": "is it spam?",
             "budget": _budget(subcalls=10, depth=2),
@@ -450,7 +462,7 @@ def test_zero_subcall_output_budget_is_rejected() -> None:
         budget["subcall_output_tokens"] = 0
         run(
             {
-                "protocol_version": 5,
+                "protocol_version": 6,
                 "model": "m",
                 "question": "q",
                 "budget": budget,

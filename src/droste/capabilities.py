@@ -75,6 +75,13 @@ class CapabilityStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class CapabilityAttemptPhase(StrEnum):
+    START = "start"
+    PROGRESS = "progress"
+    COMPLETION = "completion"
+    FAILURE = "failure"
+
+
 class CapabilityErrorCode(StrEnum):
     INVALID_CALL = "invalid_call"
     NOT_ALLOWED = "not_allowed"
@@ -631,6 +638,34 @@ class CapabilityCheckpoint:
         return cls(tokens=value["tokens"], subcalls=value["subcalls"])
 
 
+@dataclass(frozen=True, slots=True)
+class CapabilityAttemptEvent:
+    """One immutable observational fact from the broker-owned attempt lifecycle."""
+
+    phase: CapabilityAttemptPhase
+    call: CapabilityCall
+    reservation: CapabilityReservation | None = None
+    checkpoint: CapabilityCheckpoint | None = None
+    error: CapabilityError | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.phase, CapabilityAttemptPhase):
+            raise TypeError("capability attempt event requires a phase")
+        if not isinstance(self.call, CapabilityCall):
+            raise TypeError("capability attempt event requires a call")
+        if self.phase is CapabilityAttemptPhase.START:
+            if self.reservation is None or self.checkpoint is not None or self.error is not None:
+                raise ValueError("capability attempt start requires only a reservation")
+        elif self.phase is CapabilityAttemptPhase.PROGRESS:
+            if self.checkpoint is None or self.reservation is not None or self.error is not None:
+                raise ValueError("capability attempt progress requires only a checkpoint")
+        elif self.phase is CapabilityAttemptPhase.COMPLETION:
+            if self.checkpoint is None or self.reservation is not None or self.error is not None:
+                raise ValueError("capability attempt completion requires only a checkpoint")
+        elif self.checkpoint is None or self.error is None or self.reservation is not None:
+            raise ValueError("capability attempt failure requires checkpoint and error")
+
+
 class CapabilityCancelled(RuntimeError):
     """Cooperative cancellation observed by a trusted handler."""
 
@@ -1026,6 +1061,12 @@ class CapabilityObserver(Protocol):
     def __call__(self, result: CapabilityResult) -> None: ...
 
 
+class CapabilityAttemptObserver(Protocol):
+    """Observes admitted attempt phases without participating in execution."""
+
+    def __call__(self, event: CapabilityAttemptEvent) -> None: ...
+
+
 def validate_call(
     manifest: CapabilityManifest, call: CapabilityCall
 ) -> CapabilityDescriptor | CapabilityError:
@@ -1079,11 +1120,13 @@ class _CapabilityAttemptController:
         admission: CapabilityAdmission,
         authority: CapabilityAttemptAuthority | None,
         *,
+        on_checkpoint: Callable[[CapabilityAttemptEvent], None] | None = None,
         clock: Callable[[], float] = monotonic,
     ) -> None:
         self.call = call
         self._authority = authority
         self._clock = clock
+        self._on_checkpoint = on_checkpoint
         self._cancelled = Event()
         self._lock = Lock()
         self._transition_lock = Lock()
@@ -1169,7 +1212,20 @@ class _CapabilityAttemptController:
                 if error.code == CapabilityErrorCode.CANCELLED:
                     raise CapabilityCancelled(error.message)
                 raise CapabilityDeadlineExceeded(error.message)
-            return cumulative
+        if self._on_checkpoint is not None:
+            self._on_checkpoint(
+                CapabilityAttemptEvent(
+                    CapabilityAttemptPhase.PROGRESS,
+                    self.call,
+                    checkpoint=cumulative,
+                )
+            )
+        return cumulative
+
+    @property
+    def checkpoint_value(self) -> CapabilityCheckpoint:
+        with self._lock:
+            return self._checkpoint_value
 
     def begin_finish(self) -> CapabilityError | None:
         """Close the cancellation race and return its authoritative terminal fact."""
@@ -1232,6 +1288,7 @@ class CapabilityBroker:
         guard: CapabilityGuard | None = None,
         annotator: CapabilityAnnotator | None = None,
         observer: CapabilityObserver | None = None,
+        attempt_observer: CapabilityAttemptObserver | None = None,
         attempt_authority: CapabilityAttemptAuthority | None = None,
         clock: Callable[[], float] = monotonic,
     ) -> None:
@@ -1244,6 +1301,7 @@ class CapabilityBroker:
         self._guard = guard
         self._annotator = annotator
         self._observer = observer
+        self._attempt_observer = attempt_observer
         self._attempt_authority = attempt_authority
         self._clock = clock
         self._active_attempts: dict[str, _CapabilityAttemptSlot] = {}
@@ -1369,7 +1427,11 @@ class CapabilityBroker:
                     annotate=False,
                 )
             attempt = _CapabilityAttemptController(
-                call, admission, self._attempt_authority, clock=self._clock
+                call,
+                admission,
+                self._attempt_authority,
+                on_checkpoint=self.emit_attempt,
+                clock=self._clock,
             )
             with self._active_lock:
                 claim_lost = self._active_attempts.get(call.call_id) is not slot
@@ -1388,6 +1450,13 @@ class CapabilityBroker:
                     attempt=attempt,
                     attempted=False,
                 )
+            self.emit_attempt(
+                CapabilityAttemptEvent(
+                    CapabilityAttemptPhase.START,
+                    call,
+                    reservation=admission.reservation,
+                )
+            )
 
             try:
                 attempt.check()
@@ -1631,6 +1700,19 @@ class CapabilityBroker:
             result_handle=metadata.result_handle,
             child_run_id=metadata.child_run_id,
         )
+        if attempt is not None:
+            self.emit_attempt(
+                CapabilityAttemptEvent(
+                    (
+                        CapabilityAttemptPhase.COMPLETION
+                        if envelope.ok
+                        else CapabilityAttemptPhase.FAILURE
+                    ),
+                    call,
+                    checkpoint=attempt.checkpoint_value,
+                    error=envelope.error,
+                )
+            )
         self.emit(envelope)
         if annotation_control is not None:
             raise annotation_control
@@ -1646,6 +1728,20 @@ class CapabilityBroker:
         except Exception as exc:
             warnings.warn(
                 f"capability observer failed: {type(exc).__name__}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    def emit_attempt(self, event: CapabilityAttemptEvent) -> None:
+        """Notify the optional attempt sink without making it an authority path."""
+
+        if self._attempt_observer is None:
+            return
+        try:
+            self._attempt_observer(event)
+        except Exception as exc:
+            warnings.warn(
+                f"capability attempt observer failed: {type(exc).__name__}: {exc}",
                 RuntimeWarning,
                 stacklevel=2,
             )
@@ -1858,7 +1954,12 @@ class BrokeredSubcallClient:
         return self._input_capacity
 
 
-def broker_subcalls(subcalls: SubcallClient, ledger: Any) -> BrokeredSubcallClient:
+def broker_subcalls(
+    subcalls: SubcallClient,
+    ledger: Any,
+    *,
+    attempt_observer: CapabilityAttemptObserver | None = None,
+) -> BrokeredSubcallClient:
     """Create the mandatory standalone broker path for a custom environment."""
 
     from .execution.broker_budget import BrokerBudget
@@ -1871,6 +1972,7 @@ def broker_subcalls(subcalls: SubcallClient, ledger: Any) -> BrokeredSubcallClie
         CapabilityBroker(
             subcall_registrations(subcalls),
             attempt_authority=accounting,
+            attempt_observer=attempt_observer,
         ),
         metadata_source=subcalls,
     )
@@ -1878,6 +1980,9 @@ def broker_subcalls(subcalls: SubcallClient, ledger: Any) -> BrokeredSubcallClie
 
 __all__ = [
     "CapabilityAdmission",
+    "CapabilityAttemptEvent",
+    "CapabilityAttemptObserver",
+    "CapabilityAttemptPhase",
     "CapabilityAnnotator",
     "CapabilityAttemptAuthority",
     "CapabilityBroker",

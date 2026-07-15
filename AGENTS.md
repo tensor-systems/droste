@@ -100,7 +100,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
 
 ## Trace ABI
 
-- Every structured event is a strict Trace ABI v1 value. Stamp it exactly once
+- Every structured event is a strict Trace ABI v2 value. Stamp it exactly once
   through `ExecutionContext`; do not emit raw or partially enveloped event
   dictionaries at host boundaries.
 - `execution.trace` owns immutable values, parsing, classification, retention
@@ -150,7 +150,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
   They are assertions that the Deno/WASM host supplies those boundaries, not
   Python-side enforcement. Never weaken them or silently accept a native
   signal timeout for Pyodide.
-- Every request MUST carry `"protocol_version": 5` and one complete `budget`
+- Every request MUST carry `"protocol_version": 6` and one complete `budget`
   object. Missing/mismatched versions or incomplete budgets fail before work.
   See docs/architecture.md, "The runner protocol".
 - Version refusal precedes operation resolution and carries `operation: null`.

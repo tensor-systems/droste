@@ -39,9 +39,9 @@ EVENT_TYPES = frozenset(
         "output",  # {iteration, stdout, calls_made, answer_ready, answer_content_chars}
         "execution_error",  # {iteration, error_type, message} — a step failed; repair may follow
         "reasoning_delta",  # relay-side {text}, from streamed /responses
-        "finalization_error",  # {error_type, message} — terminal root finalization failed
-        "extract_error",  # {error_type, message} — post-exhaustion extract pass failed
-        "repair",  # configurable repair attempt details
+        "subcall",  # broker-correlated subcall lifecycle facts
+        "repair",  # discriminated repair lifecycle facts
+        "extract",  # discriminated terminal extraction lifecycle facts
         "result",  # canonical unary-equivalent final result (without trajectory)
         "replay",  # configurable replay input/output details
         "usage",  # durable resolved token/call accounting
@@ -105,18 +105,43 @@ def execution_error_event(iteration: int, error_type: str, message: str) -> dict
     }
 
 
-def finalization_error_event(error_type: str, message: str) -> dict[str, Any]:
-    return {"type": "finalization_error", "error_type": error_type, "message": message}
+def repair_event(
+    iteration: int,
+    kind: str,
+    phase: str,
+    *,
+    error_type: str | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    value: dict[str, Any] = {
+        "type": "repair",
+        "phase": phase,
+        "kind": kind,
+        "iteration": iteration,
+    }
+    if error_type is not None or message is not None:
+        if error_type is None or message is None:
+            raise ValueError("repair errors require both error_type and message")
+        value["error"] = {"type": error_type, "message": message}
+    return value
 
 
-def extract_error_event(error_type: str, message: str) -> dict[str, Any]:
-    return {"type": "extract_error", "error_type": error_type, "message": message}
-
-
-def repair_event(iteration: int, reason: str, *, error_type: str | None = None) -> dict[str, Any]:
-    value: dict[str, Any] = {"type": "repair", "iteration": iteration, "reason": reason}
-    if error_type is not None:
-        value["error_type"] = error_type
+def extract_event(
+    iteration: int,
+    phase: str,
+    *,
+    error_type: str | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    value: dict[str, Any] = {
+        "type": "extract",
+        "phase": phase,
+        "iteration": iteration,
+    }
+    if error_type is not None or message is not None:
+        if error_type is None or message is None:
+            raise ValueError("extract errors require both error_type and message")
+        value["extract_error"] = {"type": error_type, "message": message}
     return value
 
 
@@ -172,8 +197,10 @@ def render_verbose(event: dict[str, Any]) -> str | None:
         return "\n".join(parts)
     if etype == "execution_error":
         return f"\nExecution error: {event.get('message', '')}"
-    if etype == "finalization_error":
-        return f"\nTerminal finalization failed: {event.get('error_type')}: {event.get('message')}"
-    if etype == "extract_error":
-        return f"\nExtract fallback failed: {event.get('error_type')}: {event.get('message')}"
+    if etype == "repair" and event.get("phase") == "failure":
+        error = event.get("error") or {}
+        return f"\n{event.get('kind')} repair failed: {error.get('type')}: {error.get('message')}"
+    if etype == "extract" and event.get("phase") == "failure":
+        error = event.get("extract_error") or {}
+        return f"\nExtract fallback failed: {error.get('type')}: {error.get('message')}"
     return None

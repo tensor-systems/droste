@@ -136,6 +136,7 @@ def create_environment(
             capability_guard=capability_guard,
             capability_annotator=capability_annotator,
             capability_observer=capability_observer,
+            capability_attempt_observer=execution_context.observe_capability_attempt,
             capability_attempt_authority=accounting,
         )
     except BaseException as exc:

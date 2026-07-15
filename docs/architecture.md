@@ -253,7 +253,7 @@ is intentionally a separate, content-free envelope:
 
 ```json
 {
-  "protocol_version": 5,
+  "protocol_version": 6,
   "operation": "preflight",
   "status": "success",
   "preflight": {
@@ -322,7 +322,7 @@ inference rather than publishing evidence that differs from execution.
 **Versioned boundary**: the request/response schema and provider contract
 are versioned, each by a single integer:
 
-- `RUNNER_PROTOCOL_VERSION` (currently 5) governs the request/response
+- `RUNNER_PROTOCOL_VERSION` (currently 6) governs the request/response
   envelope. Every request **must** carry `protocol_version` — requests are
   self-describing, the same discipline as JSON-RPC's mandatory `"jsonrpc"`
   field. A missing or mismatched version is answered with a structured

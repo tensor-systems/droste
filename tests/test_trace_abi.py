@@ -4,10 +4,12 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from threading import Event, Thread
+from pathlib import Path
 
 import pytest
 
 from droste import (
+    Budget,
     DataUseAuthorization,
     RLMConfig,
     TraceRetentionPolicy,
@@ -15,6 +17,7 @@ from droste import (
     parse_event,
     run_rlm,
 )
+from droste.capabilities import broker_subcalls
 from droste.exceptions import RLMError
 from droste.execution.trace import PersistenceClass, TraceRecorder
 from droste.loop.step import finalize
@@ -191,6 +194,59 @@ def test_live_delivery_preserves_recorded_order_across_concurrent_emitters() -> 
     assert [event.seq for event in context.trace.events] == [1, 2]
 
 
+def test_concurrent_subcalls_share_broker_identity_and_trace_order() -> None:
+    events: list[dict[str, object]] = []
+    context = create_execution_context(
+        budget=Budget(tokens=100_000, subcalls=20),
+        on_event=events.append,
+    )
+    context.begin_iteration(3)
+    subcalls = broker_subcalls(
+        MockSubcallClient(context=context),
+        context.ledger,
+        attempt_observer=context.observe_capability_attempt,
+    )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        assert list(pool.map(subcalls.llm_query, [f"prompt-{index}" for index in range(8)])) == [
+            ""
+        ] * 8
+
+    lifecycle = [event for event in events if event["type"] == "subcall"]
+    assert len(lifecycle) == 16
+    assert [event["seq"] for event in events] == list(range(1, len(events) + 1))
+    by_call: dict[str, list[dict[str, object]]] = {}
+    for event in lifecycle:
+        by_call.setdefault(str(event["call_id"]), []).append(event)
+    assert len(by_call) == 8
+    assert all([event["phase"] for event in pair] == ["start", "completion"] for pair in by_call.values())
+    assert all(event["iteration"] == 3 and event["depth"] == 0 for event in lifecycle)
+
+
+def test_batch_fanout_uses_one_broker_batch_identity_without_body_sequence() -> None:
+    events: list[dict[str, object]] = []
+    context = create_execution_context(
+        budget=Budget(tokens=100_000, subcalls=10),
+        on_event=events.append,
+    )
+    context.begin_iteration(2)
+    subcalls = broker_subcalls(
+        MockSubcallClient(context=context),
+        context.ledger,
+        attempt_observer=context.observe_capability_attempt,
+    )
+
+    assert subcalls.llm_batch(["a", "b", "c"]) == ["", "", ""]
+
+    lifecycle = [event for event in events if event["type"] == "subcall"]
+    assert [event["phase"] for event in lifecycle] == ["start", "completion"]
+    assert lifecycle[0]["call_id"] == lifecycle[1]["call_id"]
+    assert lifecycle[0]["batch_id"] == lifecycle[0]["call_id"]
+    assert lifecycle[0]["batch_count"] == lifecycle[1]["batch_count"] == 3
+    assert all("batch_index" not in event for event in lifecycle)
+    assert all(set(event).isdisjoint({"prompt", "context", "result"}) for event in lifecycle)
+
+
 def test_run_record_allows_repeated_durable_budget_mutations() -> None:
     recorder = TraceRecorder(run_id="budget-ledger")
     recorder.append(
@@ -232,7 +288,7 @@ def test_run_record_allows_repeated_durable_budget_mutations() -> None:
     ]
 
 
-def test_parser_requires_v1_envelope_and_rejects_false_classification() -> None:
+def test_parser_requires_v2_envelope_and_rejects_false_classification() -> None:
     with pytest.raises(ValueError, match="missing envelope fields"):
         parse_event({"type": "code", "iteration": 1, "code": "print(1)"})
 
@@ -242,7 +298,7 @@ def test_parser_requires_v1_envelope_and_rejects_false_classification() -> None:
             "run_id": "run",
             "seq": 1,
             "timestamp": "2026-07-14T00:00:00Z",
-            "version": 1,
+            "version": 2,
             "persistence_class": "configurable",
             "depth": 0,
             "iteration": 1,
@@ -257,7 +313,7 @@ def test_parser_requires_v1_envelope_and_rejects_false_classification() -> None:
             "run_id": "run",
             "seq": 2,
             "timestamp": "2026-07-14T00:00:00Z",
-            "version": 1,
+            "version": 2,
             "persistence_class": "transient",
             "depth": 0,
             "engine_version": "0.10.6",
@@ -274,7 +330,7 @@ def test_parser_requires_v1_envelope_and_rejects_false_classification() -> None:
                 "run_id": "run",
                 "seq": 1,
                 "timestamp": "2026-07-14T00:00:00Z",
-                "version": 1,
+                "version": 2,
                 "persistence_class": "durable",
                 "depth": 0,
                 "code": "print(1)",
@@ -288,7 +344,7 @@ def test_parser_requires_v1_envelope_and_rejects_false_classification() -> None:
                 "run_id": "run",
                 "seq": 1,
                 "timestamp": "2026-07-14T01:00:00+01:00",
-                "version": 1,
+                "version": 2,
                 "persistence_class": "transient",
                 "depth": 0,
                 "status": "working",
@@ -321,6 +377,80 @@ def test_event_bodies_reject_missing_unknown_and_wrong_primitive_fields() -> Non
     terminal["error"] = {"type": "ProviderError", "message": "private provider detail"}
     with pytest.raises(ValueError, match="done.error has unknown message"):
         recorder.finish(terminal)
+
+
+def test_lifecycle_bodies_are_strict_discriminated_values() -> None:
+    recorder = TraceRecorder(run_id="lifecycle")
+    with pytest.raises(ValueError, match="subcall start requires reservation"):
+        recorder.append(
+            {
+                "type": "subcall",
+                "phase": "start",
+                "call_id": "call-1",
+                "operation": "llm_query",
+                "iteration": 1,
+            }
+        )
+    with pytest.raises(ValueError, match="subcall failure requires checkpoint and error"):
+        recorder.append(
+            {
+                "type": "subcall",
+                "phase": "failure",
+                "call_id": "call-1",
+                "operation": "llm_query",
+                "iteration": 1,
+                "checkpoint": {"tokens": 1, "subcalls": 1},
+            }
+        )
+    with pytest.raises(ValueError, match="unknown body fields: detail"):
+        recorder.append(
+            {
+                "type": "repair",
+                "phase": "start",
+                "kind": "execution_error",
+                "iteration": 1,
+                "detail": "private",
+            }
+        )
+    with pytest.raises(ValueError, match="extract failure requires extract_error"):
+        recorder.append({"type": "extract", "phase": "failure", "iteration": 1})
+
+
+def test_trace_abi_v1_is_rejected_instead_of_silently_reinterpreted() -> None:
+    with pytest.raises(ValueError, match="unsupported trace event version: 1"):
+        parse_event(
+            {
+                "type": "progress",
+                "run_id": "old",
+                "seq": 1,
+                "timestamp": "2026-07-14T00:00:00Z",
+                "version": 1,
+                "persistence_class": "transient",
+                "depth": 0,
+                "status": "legacy",
+            }
+        )
+
+
+def test_trace_v2_lifecycle_golden_ndjson_is_strict_and_ordered() -> None:
+    path = Path(__file__).parent / "fixtures" / "trace-v2-lifecycle.ndjson"
+    events = [parse_event(json.loads(line)) for line in path.read_text().splitlines()]
+
+    assert [event.seq for event in events] == list(range(1, 11))
+    assert [event.type for event in events] == [
+        "subcall",
+        "subcall",
+        "subcall",
+        "subcall",
+        "subcall",
+        "repair",
+        "repair",
+        "extract",
+        "extract",
+        "output",
+    ]
+    assert events[-1].body["stdout"].startswith("ERROR:")
+    assert events[-1].body["answer_ready"] is False
 
 
 def test_trace_values_reject_non_string_object_keys() -> None:
@@ -399,7 +529,11 @@ def test_repair_attempts_are_first_class_configurable_events() -> None:
 
     assert result.run_record is not None
     repair = next(event for event in result.run_record.events if event.type == "repair")
-    assert repair.body["reason"] == "missing_code"
+    assert repair.body == {
+        "phase": "start",
+        "kind": "missing_code",
+        "iteration": 1,
+    }
     assert repair.persistence_class is PersistenceClass.CONFIGURABLE
 
 
