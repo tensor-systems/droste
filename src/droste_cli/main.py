@@ -413,9 +413,12 @@ def run_ask(args: argparse.Namespace) -> int:
     if not args.quiet:
         print(f"droste: {loaded.report}", file=sys.stderr, flush=True)
 
-    registry = None
+    # Preserve local-input error precedence without retaining a live provider
+    # while credentials and clients are resolved. The run binds its own fresh
+    # runtime only after those steps succeed.
     if loaded.db_path:
-        registry = _load_sql_registry(loaded.db_path)
+        validation_registry = _load_sql_registry(loaded.db_path)
+        validation_registry.close()
 
     provider, creds = resolve_run_target(args)
 
@@ -543,17 +546,6 @@ def run_ask(args: argparse.Namespace) -> int:
             max_parallel=rollout.concurrency,
         )
 
-    environment = create_environment(
-        environment_config,
-        context=loaded.context,
-        registry=registry,
-        subcalls=subcalls,
-        execution_context=exec_context,
-        capability_run_id=exec_context.trace.run_id,
-        capability_parent_run_id=exec_context.trace.parent_run_id,
-        capability_observer=exec_context.observe_capability,
-    )
-
     config = RLMConfig(
         budget=budget,
         sandbox=environment_config.sandbox,
@@ -563,6 +555,21 @@ def run_ask(args: argparse.Namespace) -> int:
         # The full loop dump (code, outputs, responses) is --trace, rendered
         # by the _trace_sink above from structured events; the core no longer
         # reads config.verbose (#35).
+    )
+
+    # Delay live source binding until all validation and client/configuration
+    # construction has succeeded. create_environment takes ownership of the
+    # resulting registry immediately.
+    registry = _load_sql_registry(loaded.db_path) if loaded.db_path else None
+    environment = create_environment(
+        environment_config,
+        context=loaded.context,
+        registry=registry,
+        subcalls=subcalls,
+        execution_context=exec_context,
+        capability_run_id=exec_context.trace.run_id,
+        capability_parent_run_id=exec_context.trace.parent_run_id,
+        capability_observer=exec_context.observe_capability,
     )
 
     result = run_rlm(

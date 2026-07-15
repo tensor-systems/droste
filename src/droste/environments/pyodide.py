@@ -74,5 +74,8 @@ class PyodideEnvironment(RunnerEnvironment):
             files_written=[],
         )
 
-    def close(self) -> None:
-        self._executor.close()
+    def _close_resources(self) -> None:
+        try:
+            self._executor.close()
+        finally:
+            super()._close_resources()

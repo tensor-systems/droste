@@ -54,6 +54,11 @@ class ProviderService:
             raise TypeError("provider service requires a BoundSource")
         self._source = source
 
+    def close(self) -> None:
+        """Release the bound runtime owned by this trusted service."""
+
+        self._source.close()
+
     def describe(self) -> dict[str, Any]:
         return {
             "source_id": self._source.source.source_id,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, replace
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Mapping
@@ -103,6 +104,31 @@ _EXTRACT_EMPTY_OUTPUT = "<empty stdout>"
 _EXTRACT_UNABLE = "unable to determine from the work so far"
 _UNKNOWN_OUTPUT_TOKEN_LIMIT = object()
 _UNKNOWN_SUBCALL_CONCURRENCY = object()
+
+
+def _raise_with_environment_cleanup(
+    environment: RLMEnvironment,
+    primary: BaseException,
+    message: str,
+) -> None:
+    """Close after a failed operation without replacing its primary error."""
+
+    try:
+        environment.close()
+    except BaseException as cleanup_error:
+        raise BaseExceptionGroup(message, [primary, cleanup_error]) from None
+
+
+def _warn_environment_cleanup(cleanup_error: BaseException) -> None:
+    """Surface post-result cleanup failure without discarding the result."""
+
+    detail = " ".join(str(cleanup_error).split())[:1_000]
+    warnings.warn(
+        "RLM result preserved after environment cleanup failed: "
+        f"{type(cleanup_error).__name__}: {detail}",
+        RuntimeWarning,
+        stacklevel=3,
+    )
 
 
 ProgressCallback = Any
@@ -597,149 +623,156 @@ def run_rlm(
             prompt_pack=prompt_pack,
             consumer_prompt_catalog=consumer_prompt_catalog,
         )
-    except Exception:
-        environment.close()
-        raise
-    cfg = resolved_scaffold.config
-    resolved_prompt_pack = resolved_scaffold.prompt_pack
-    prompt_pack_record = resolved_scaffold.prompt_pack_record
-    if context is None:
-        context = create_execution_context(
-            budget=cfg.budget,
-            sandbox=cfg.sandbox,
-            verbose=cfg.verbose,
-            on_progress=on_progress or cfg.on_progress,
-            # None -> NO emission (#35). Embedders that want the NDJSON
-            # stderr stream attach droste.execution.progress.emit_event.
-            on_event=on_event,
-            on_run_record=cfg.on_run_record,
-            run_id=cfg.run_id,
-            parent_run_id=cfg.parent_run_id,
-            trace_depth=cfg.trace_depth if cfg.trace_depth is not None else 0,
-            trace_retention=cfg.trace_retention,
-            data_use=cfg.data_use,
-        )
-    else:
-        _validate_existing_context_trace(cfg, context)
-    bind_context = getattr(subcalls, "bind_context", None)
-    if callable(bind_context):
-        bind_context(context)
-
-    # The environment contract owns one brokered subcall surface. The host's
-    # raw client remains trusted loop state for context binding/accounting.
-    sandbox_subcalls = environment.sandbox_subcalls(subcalls, context.ledger)
-    answer = env_globals.get("answer")
-    if not isinstance(answer, dict):
-        answer = {"content": "", "ready": False}
-        env_globals["answer"] = answer
-
-    semantic_evidence = (
-        _StructuredBatchEvidence()
-        if cfg.enforce_contract and cfg.policy_hints is not None and cfg.policy_hints.semantic
-        else None
-    )
-    # The semantic finalization gate wraps the brokered adapter, never the raw
-    # trusted client, so revocable saved bindings cannot become an egress bypass.
-    subcall_gate = _SubcallGate(sandbox_subcalls)
-    model_subcalls: SubcallClient = (
-        subcall_gate if semantic_evidence is not None else sandbox_subcalls
-    )
-    env_globals["llm_query"] = model_subcalls.llm_query
-    env_globals["llm_batch"] = model_subcalls.llm_batch
-    env_globals["batch_llm_query"] = model_subcalls.llm_batch
-    # llm_query_batched is the name models primed on RLM conventions reach
-    # for first, so the sandbox must answer to it.
-    env_globals["llm_query_batched"] = model_subcalls.llm_batch
-
-    structured_batch = bind_structured_batch(model_subcalls, semantic_evidence)
-    # These two aliases are one core helper, so bind Droste's version even when
-    # an environment pre-populated a custom helper during setup. Semantic runs
-    # use the evidence-tracked form selected above.
-    env_globals["llm_batch_json"] = structured_batch
-    env_globals["llm_query_batched_json"] = structured_batch
-    env_globals["aggregate_json_counts"] = aggregate_json_counts
-
-    manifest = _accessor_manifest(environment)
-    data_accessor_names = set(manifest.flat)
-    namespaced_accessor_pairs = set(manifest.namespaced)
-
-    if system_prompt is None:
-        prompt_additions = environment.prompt_fragment()
-        if system_prompt_additions:
-            prompt_additions = (
-                f"{prompt_additions}\n\n{system_prompt_additions}"
-                if prompt_additions
-                else system_prompt_additions
+        cfg = resolved_scaffold.config
+        resolved_prompt_pack = resolved_scaffold.prompt_pack
+        prompt_pack_record = resolved_scaffold.prompt_pack_record
+        if context is None:
+            context = create_execution_context(
+                budget=cfg.budget,
+                sandbox=cfg.sandbox,
+                verbose=cfg.verbose,
+                on_progress=on_progress or cfg.on_progress,
+                # None -> NO emission (#35). Embedders that want the NDJSON
+                # stderr stream attach droste.execution.progress.emit_event.
+                on_event=on_event,
+                on_run_record=cfg.on_run_record,
+                run_id=cfg.run_id,
+                parent_run_id=cfg.parent_run_id,
+                trace_depth=cfg.trace_depth if cfg.trace_depth is not None else 0,
+                trace_retention=cfg.trace_retention,
+                data_use=cfg.data_use,
             )
-        system_prompt = render_system_prompt(
-            resolved_prompt_pack.pack,
-            PromptSlots(
-                capabilities=prompt_additions,
-                budget=_budget_prompt(cfg, model_subcalls),
-                question=question,
-                output_contract=CODE_OUTPUT_CONTRACT,
-            ),
-        )
+        else:
+            _validate_existing_context_trace(cfg, context)
+        bind_context = getattr(subcalls, "bind_context", None)
+        if callable(bind_context):
+            bind_context(context)
 
-    if user_prompt_template is not None:
-        user_content = user_prompt_template.format(question=question)
-        if conversation_context:
-            user_content = f"{user_content}\n\nConversation Context:\n{conversation_context}"
-    else:
-        user_content = render_prompt_template(
-            resolved_prompt_pack.pack.templates.user,
-            PromptSlots(
-                question=question,
-                history=(
-                    f"Conversation Context:\n{conversation_context}" if conversation_context else ""
+        # The environment contract owns one brokered subcall surface. The host's
+        # raw client remains trusted loop state for context binding/accounting.
+        sandbox_subcalls = environment.sandbox_subcalls(subcalls, context.ledger)
+        answer = env_globals.get("answer")
+        if not isinstance(answer, dict):
+            answer = {"content": "", "ready": False}
+            env_globals["answer"] = answer
+
+        semantic_evidence = (
+            _StructuredBatchEvidence()
+            if cfg.enforce_contract and cfg.policy_hints is not None and cfg.policy_hints.semantic
+            else None
+        )
+        # The semantic finalization gate wraps the brokered adapter, never the raw
+        # trusted client, so revocable saved bindings cannot become an egress bypass.
+        subcall_gate = _SubcallGate(sandbox_subcalls)
+        model_subcalls: SubcallClient = (
+            subcall_gate if semantic_evidence is not None else sandbox_subcalls
+        )
+        env_globals["llm_query"] = model_subcalls.llm_query
+        env_globals["llm_batch"] = model_subcalls.llm_batch
+        env_globals["batch_llm_query"] = model_subcalls.llm_batch
+        # llm_query_batched is the name models primed on RLM conventions reach
+        # for first, so the sandbox must answer to it.
+        env_globals["llm_query_batched"] = model_subcalls.llm_batch
+
+        structured_batch = bind_structured_batch(model_subcalls, semantic_evidence)
+        # These two aliases are one core helper, so bind Droste's version even when
+        # an environment pre-populated a custom helper during setup. Semantic runs
+        # use the evidence-tracked form selected above.
+        env_globals["llm_batch_json"] = structured_batch
+        env_globals["llm_query_batched_json"] = structured_batch
+        env_globals["aggregate_json_counts"] = aggregate_json_counts
+
+        manifest = _accessor_manifest(environment)
+        data_accessor_names = set(manifest.flat)
+        namespaced_accessor_pairs = set(manifest.namespaced)
+
+        if system_prompt is None:
+            prompt_additions = environment.prompt_fragment()
+            if system_prompt_additions:
+                prompt_additions = (
+                    f"{prompt_additions}\n\n{system_prompt_additions}"
+                    if prompt_additions
+                    else system_prompt_additions
+                )
+            system_prompt = render_system_prompt(
+                resolved_prompt_pack.pack,
+                PromptSlots(
+                    capabilities=prompt_additions,
+                    budget=_budget_prompt(cfg, model_subcalls),
+                    question=question,
+                    output_contract=CODE_OUTPUT_CONTRACT,
                 ),
-                output_contract=CODE_OUTPUT_CONTRACT,
-            ),
+            )
+
+        if user_prompt_template is not None:
+            user_content = user_prompt_template.format(question=question)
+            if conversation_context:
+                user_content = f"{user_content}\n\nConversation Context:\n{conversation_context}"
+        else:
+            user_content = render_prompt_template(
+                resolved_prompt_pack.pack.templates.user,
+                PromptSlots(
+                    question=question,
+                    history=(
+                        f"Conversation Context:\n{conversation_context}"
+                        if conversation_context
+                        else ""
+                    ),
+                    output_contract=CODE_OUTPUT_CONTRACT,
+                ),
+            )
+
+        trajectory: list[IterationRecord] = []
+        has_successful_step = False
+        iterations = 0
+        last_output = ""
+        last_response = ""
+        last_execution_status: ExecutionStatus | None = None
+        error: RLMError | None = None
+        answer_metadata: dict[str, Any] = {}
+        scaffold_manifest: ScaffoldManifest | None = resolved_scaffold.scaffold_manifest
+        terminal_budget_handoff = False
+        finalization_base_messages: list[dict[str, str]] = []
+        finalization_base_code = ""
+
+        messages: list[dict[str, str]] = []
+        code = ""
+
+        def step_kwargs() -> dict[str, Any]:
+            return dict(
+                iteration=iterations,
+                environment=environment,
+                env_globals=env_globals,
+                answer=answer,
+                cfg=cfg,
+                context=context,
+                data_accessor_names=data_accessor_names,
+                namespaced_accessor_pairs=namespaced_accessor_pairs,
+                semantic_evidence=semantic_evidence,
+            )
+
+        def early_result(run_error: RLMError | None) -> RLMResult:
+            return finalize(
+                answer_text=_best_answer(answer, last_output, last_response, last_execution_status),
+                answer=answer,
+                iterations=iterations,
+                context=context,
+                trajectory=trajectory,
+                error=run_error,
+                answer_metadata=answer_metadata,
+                prompt_pack=prompt_pack_record,
+                config=cfg,
+                scaffold_manifest=scaffold_manifest,
+            )
+
+    except BaseException as exc:
+        _raise_with_environment_cleanup(
+            environment,
+            exc,
+            "RLM setup and environment cleanup failed",
         )
-
-    trajectory: list[IterationRecord] = []
-    has_successful_step = False
-    iterations = 0
-    last_output = ""
-    last_response = ""
-    last_execution_status: ExecutionStatus | None = None
-    error: RLMError | None = None
-    answer_metadata: dict[str, Any] = {}
-    scaffold_manifest: ScaffoldManifest | None = resolved_scaffold.scaffold_manifest
-    terminal_budget_handoff = False
-    finalization_base_messages: list[dict[str, str]] = []
-    finalization_base_code = ""
-
-    messages: list[dict[str, str]] = []
-    code = ""
-
-    def step_kwargs() -> dict[str, Any]:
-        return dict(
-            iteration=iterations,
-            environment=environment,
-            env_globals=env_globals,
-            answer=answer,
-            cfg=cfg,
-            context=context,
-            data_accessor_names=data_accessor_names,
-            namespaced_accessor_pairs=namespaced_accessor_pairs,
-            semantic_evidence=semantic_evidence,
-        )
-
-    def early_result(run_error: RLMError | None) -> RLMResult:
-        return finalize(
-            answer_text=_best_answer(answer, last_output, last_response, last_execution_status),
-            answer=answer,
-            iterations=iterations,
-            context=context,
-            trajectory=trajectory,
-            error=run_error,
-            answer_metadata=answer_metadata,
-            prompt_pack=prompt_pack_record,
-            config=cfg,
-            scaffold_manifest=scaffold_manifest,
-        )
-
+        raise
+    primary_error: BaseException | None = None
     try:
         context.emit_event(
             {
@@ -1111,5 +1144,17 @@ def run_rlm(
             config=cfg,
             scaffold_manifest=scaffold_manifest,
         )
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
-        environment.close()
+        try:
+            environment.close()
+        except BaseException as cleanup_error:
+            if primary_error is None:
+                _warn_environment_cleanup(cleanup_error)
+            else:
+                raise BaseExceptionGroup(
+                    "RLM execution and environment cleanup failed",
+                    [primary_error, cleanup_error],
+                ) from None

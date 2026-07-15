@@ -13,6 +13,7 @@ import json
 import signal
 from typing import Any
 
+from .._lifecycle import CloseOnce
 from ..capabilities import (
     BrokeredSubcallClient,
     CapabilityAnnotator,
@@ -141,6 +142,7 @@ class RunnerEnvironment(RLMEnvironment):
     ) -> None:
         self._context = context
         self._registry = registry
+        self._lifecycle = CloseOnce(self._close_resources)
         self._subcalls = subcalls
         self._max_output_chars = max_output_chars
         self._exec_timeout_ms = exec_timeout_ms
@@ -276,4 +278,10 @@ class RunnerEnvironment(RLMEnvironment):
         )
 
     def close(self) -> None:
-        return
+        """Release the registry transferred to this environment exactly once."""
+
+        self._lifecycle.close()
+
+    def _close_resources(self) -> None:
+        if self._registry is not None:
+            self._registry.close()

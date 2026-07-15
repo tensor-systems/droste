@@ -306,6 +306,8 @@ class LocalSqlRuntime:
         # connection via ctx; otherwise the spec supplies a path and we open
         # it read-only ourselves (mode=ro — the gate is not the only wall).
         self._conn: sqlite3.Connection | None = None
+        self._owns_connection = not (ctx is not None and isinstance(ctx, sqlite3.Connection))
+        self._closed = False
         if ctx is not None and isinstance(ctx, sqlite3.Connection):
             # A host-supplied connection may have been opened read-write —
             # silently accepting it would bypass the documented mode=ro
@@ -323,6 +325,17 @@ class LocalSqlRuntime:
             self._sqlite_path = path
         self._lock = threading.Lock()
         self.queries_made = 0
+
+    def close(self) -> None:
+        """Close only a connection opened by this runtime, never a host handle."""
+
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            if self._owns_connection and self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     def get_schema(self) -> str:
         conn = self._connection()
@@ -413,15 +426,18 @@ class LocalSqlRuntime:
     # -- internals -------------------------------------------------------------
 
     def _connection(self) -> sqlite3.Connection:
-        if self._conn is None:
-            # mode=ro: the database file is opened read-only at the SQLite
-            # layer — even a statement that slipped past the gate cannot
-            # mutate. check_same_thread=False + self._lock: llm_batch fans out
-            # threads, sqlite connections are not thread-safe by default.
-            self._conn = sqlite3.connect(
-                f"file:{self._sqlite_path}?mode=ro", uri=True, check_same_thread=False
-            )
-        return self._conn
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("sqlite provider runtime is closed")
+            if self._conn is None:
+                # Keep lazy acquisition atomic with close: once close observes
+                # the runtime, no later caller may install an orphaned handle.
+                # mode=ro is the SQLite-layer mutation guard; the connection is
+                # shared across llm_batch threads under this same lock.
+                self._conn = sqlite3.connect(
+                    f"file:{self._sqlite_path}?mode=ro", uri=True, check_same_thread=False
+                )
+            return self._conn
 
     @staticmethod
     def _quote_ident(name: str) -> str:
@@ -498,6 +514,7 @@ def _bind_sqlite(source: ConfiguredSource, context: Any = None) -> ProviderRunti
         handlers={"query": query, "schema": schema},
         source_description=runtime.get_schema(),
         stats=lambda: {"queries_made": runtime.queries_made},
+        close_callback=runtime.close,
     )
 
 

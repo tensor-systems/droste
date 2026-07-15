@@ -273,6 +273,7 @@ def _bind_filesystem_text(source: ConfiguredSource, context: Any = None) -> Prov
             "Root-scoped read-only text files. Paths are relative POSIX paths; reads and "
             "result pages are bounded."
         ),
+        close_callback=runtime.close,
     )
 
 

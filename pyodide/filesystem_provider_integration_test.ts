@@ -53,18 +53,19 @@ _registry = ProviderCatalog((sqlite_provider(), filesystem_text_provider())).bin
 _db_service = ProviderService(_registry.sources[0])
 _docs_service = ProviderService(_registry.sources[1])
 `);
-  const dbHandle = provider.globals.get("_db_service").handle;
-  const docsHandle = provider.globals.get("_docs_service").handle;
+  try {
+    const dbHandle = provider.globals.get("_db_service").handle;
+    const docsHandle = provider.globals.get("_docs_service").handle;
 
-  const dbCall = async (method: string, params: string): Promise<string> =>
-    dbHandle(method, params) as string;
-  const docsCall = async (method: string, params: string): Promise<string> =>
-    docsHandle(method, params) as string;
+    const dbCall = async (method: string, params: string): Promise<string> =>
+      dbHandle(method, params) as string;
+    const docsCall = async (method: string, params: string): Promise<string> =>
+      docsHandle(method, params) as string;
 
-  const repl = await loadWithDroste();
-  repl.globals.set("db_call", dbCall);
-  repl.globals.set("docs_call", docsCall);
-  const raw = await repl.runPythonAsync(`
+    const repl = await loadWithDroste();
+    repl.globals.set("db_call", dbCall);
+    repl.globals.set("docs_call", docsCall);
+    const raw = await repl.runPythonAsync(`
 import json
 import os
 from droste import CapabilityBroker, ConfiguredSource, ProviderCatalog, SideEffect
@@ -99,7 +100,7 @@ except FileNotFoundError:
 document = generated["docs"].read("secret.txt")
 rows = generated["db"].query("SELECT value FROM facts")
 listing = generated["docs"].list_files(limit=10)
-json.dumps({
+payload = {
     "ambient_exists": ambient_exists,
     "ambient_opened": ambient_opened,
     "text": document["text"],
@@ -112,29 +113,34 @@ json.dumps({
     "provider_globals_leaked": any(name in globals() for name in (
         "_registry", "_docs_service", "_db_service", "_connection"
     )),
-})
+}
+registry.close()
+json.dumps(payload)
 `);
-  const result = JSON.parse(raw);
-  assertEquals(result.ambient_exists, false);
-  assertEquals(result.ambient_opened, false);
-  assertEquals(result.text, "broker-only filesystem fact\n");
-  assertEquals(result.evidence.source_id, "docs");
-  assertEquals(result.evidence.path, "secret.txt");
-  assertEquals(result.rows, [{ value: "sqlite fact" }]);
-  assertEquals(result.paths, ["guide.md", "secret.txt"]);
-  assertEquals(result.bindings.db, ["get_schema", "query"]);
-  assertEquals(result.bindings.docs, [
-    "grep",
-    "list_files",
-    "read",
-    "search",
-    "stat",
-  ]);
-  assert(
-    result.accessors.some((item: string[]) => item.join(".") === "docs.read"),
-  );
-  assert(result.prompt.includes("docs.read"));
-  assert(result.prompt.includes("db.query"));
-  assert(!result.prompt.includes("/trusted_docs"));
-  assertEquals(result.provider_globals_leaked, false);
+    const result = JSON.parse(raw);
+    assertEquals(result.ambient_exists, false);
+    assertEquals(result.ambient_opened, false);
+    assertEquals(result.text, "broker-only filesystem fact\n");
+    assertEquals(result.evidence.source_id, "docs");
+    assertEquals(result.evidence.path, "secret.txt");
+    assertEquals(result.rows, [{ value: "sqlite fact" }]);
+    assertEquals(result.paths, ["guide.md", "secret.txt"]);
+    assertEquals(result.bindings.db, ["get_schema", "query"]);
+    assertEquals(result.bindings.docs, [
+      "grep",
+      "list_files",
+      "read",
+      "search",
+      "stat",
+    ]);
+    assert(
+      result.accessors.some((item: string[]) => item.join(".") === "docs.read"),
+    );
+    assert(result.prompt.includes("docs.read"));
+    assert(result.prompt.includes("db.query"));
+    assert(!result.prompt.includes("/trusted_docs"));
+    assertEquals(result.provider_globals_leaked, false);
+  } finally {
+    await provider.runPythonAsync(`_registry.close(); _registry.close()`);
+  }
 });

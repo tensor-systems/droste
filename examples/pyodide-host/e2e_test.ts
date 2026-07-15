@@ -130,6 +130,11 @@ async function buildTempSources(): Promise<string> {
     `${dir}/_failing_adapter.py`,
     { overwrite: true },
   );
+  await copy(
+    `${HERE}_close_failing_adapter.py`,
+    `${dir}/_close_failing_adapter.py`,
+    { overwrite: true },
+  );
   return dir;
 }
 
@@ -255,6 +260,52 @@ Deno.test({
       assert(
         typeof startup.engine_version === "string" &&
           startup.engine_version.length > 0,
+      );
+    } finally {
+      await shutdown();
+    }
+  },
+});
+
+Deno.test({
+  name: "relay.ts preserves a successful response when provider cleanup fails",
+  fn: async () => {
+    const { port, shutdown } = await startMockModelRelay();
+    try {
+      const sourcesDir = await buildTempSources();
+      const dbPath = await buildTempDb();
+      const { lastLine, stderrText } = await runRelayRaw(
+        sourcesDir,
+        {
+          question: "how many widgets are there",
+          db_path: dbPath,
+          root_model: "test-model",
+          base_url: `http://127.0.0.1:${port}/api/v1`,
+          api_key: "test-key",
+          budget: TEST_BUDGET,
+        },
+        port,
+        {},
+        "_close_failing_adapter",
+      );
+
+      const response = JSON.parse(lastLine);
+      assertEquals(response.error, null);
+      assertEquals(response.answer, "3");
+      const diagnostic = stderrText.split("\n").find((line) =>
+        line.startsWith("droste relay: provider cleanup failed (1): ")
+      );
+      assert(
+        diagnostic,
+        `expected cleanup diagnostic on stderr:\n${stderrText}`,
+      );
+      assert(
+        diagnostic.includes("intentional provider close failure"),
+        `expected cleanup failure detail on stderr:\n${stderrText}`,
+      );
+      assert(
+        diagnostic.length <= 1_100,
+        "cleanup diagnostic must stay bounded",
       );
     } finally {
       await shutdown();

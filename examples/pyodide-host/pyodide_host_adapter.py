@@ -143,10 +143,6 @@ def run_for_host_pyodide(
         effects={"query": SideEffect.READ, "schema": SideEffect.READ},
         policy_metadata={"query": {"read_only": True}},
     )
-    registry = ProviderCatalog((registration,)).bind(
-        (ConfiguredSource(bridge.source_id, bridge.manifest.provider_type),),
-        default_source_id=bridge.source_id,
-    )
     subcalls = MockSubcallClient()
     raw_budget = request.get("budget")
     budget = Budget.from_dict(raw_budget) if isinstance(raw_budget, dict) else Budget()
@@ -166,6 +162,10 @@ def run_for_host_pyodide(
         # filter under Pyodide — attached explicitly (#35: no default sink).
         on_progress=emit_progress,
         on_event=emit_event,
+    )
+    registry = ProviderCatalog((registration,)).bind(
+        (ConfiguredSource(bridge.source_id, bridge.manifest.provider_type),),
+        default_source_id=bridge.source_id,
     )
     environment = create_environment(
         environment_config,

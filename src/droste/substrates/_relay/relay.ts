@@ -143,6 +143,7 @@ if (Deno.build.os !== "windows") {
 // round any integer beyond Number.MAX_SAFE_INTEGER (e.g. a 64-bit record id
 // or timestamp an adapter puts in meta) before the adapter ever sees it.
 let bridgeMetaJson: string | null = null;
+let closeProviderService: (() => Promise<void>) | null = null;
 if (hasDbPath) {
   try {
     const quiet = { stdout: () => {}, stderr: () => {} };
@@ -180,10 +181,19 @@ _adapter = importlib.import_module(adapter_module_name)
 # ("JsNull"), NOT Python's None — normalize here so every adapter gets a
 # clean "str or None" contract regardless of whether it knows this quirk.
 _contacts_db_path = svc_contacts_db_path if isinstance(svc_contacts_db_path, str) else None
-_service, _meta = _adapter.build_db_service(svc_db_path, _contacts_db_path)
-json.dumps(_meta)
+try:
+    _service, _meta = _adapter.build_db_service(svc_db_path, _contacts_db_path)
+    _meta_json = json.dumps(_meta)
+except BaseException:
+    if "_service" in globals():
+        _service.close()
+    raise
+_meta_json
 `);
     bridgeMetaJson = metaJson;
+    closeProviderService = async () => {
+      await dbsvc.runPythonAsync(`_service.close()`);
+    };
     const handle = dbsvc.globals.get("_service").handle;
     // Async wrapper: the REPL interpreter's Python side calls this via
     // run_sync, which requires an awaitable (proven in
@@ -252,11 +262,23 @@ json.dumps(_meta)
       };
     };
   } catch (e) {
+    let failure: unknown = e;
+    if (closeProviderService !== null) {
+      try {
+        await closeProviderService();
+      } catch (cleanupError) {
+        failure = new AggregateError(
+          [e, cleanupError],
+          "provider setup and cleanup failed",
+        );
+      }
+      closeProviderService = null;
+    }
     await writeHostResponse({
       answer: null,
       error: {
         type: "DBServiceError",
-        message: String(e instanceof Error ? e.message : e),
+        message: String(failure instanceof Error ? failure.message : failure),
       },
     });
     Deno.exit(0); // match the existing contract: exit 0, error in the JSON body
@@ -454,7 +476,9 @@ py.globals.set("get_last_http_error_status", () => lastHttpErrorStatus);
 // bridge_meta_json passthrough above exists to avoid, for ANY large integer
 // anywhere in the adapter's response (not just meta). `out` is the final
 // stdout payload as-is; nothing here re-parses it in JS.
-const out = await py.runPythonAsync(`
+let out: string;
+try {
+  out = await py.runPythonAsync(`
 import importlib, json, io, contextlib, traceback
 from droste_runner.protocol import (
     RUNNER_PROTOCOL_VERSION, build_exception_response, resolve_operation,
@@ -489,5 +513,33 @@ if _status and isinstance(resp.get("error"), dict):
     resp["error"]["status"] = _status
 json.dumps(resp)
 `);
+} finally {
+  const cleanupErrors: unknown[] = [];
+  const sessions = [...activeDuplexSessions];
+  for (const session of sessions) {
+    try {
+      await session.close();
+    } catch (error) {
+      cleanupErrors.push(error);
+    } finally {
+      activeDuplexSessions.delete(session);
+    }
+  }
+  if (closeProviderService !== null) {
+    try {
+      await closeProviderService();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  if (cleanupErrors.length > 0) {
+    const detail = cleanupErrors.map((error) =>
+      error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+    ).join("; ").replace(/\s+/g, " ").trim().slice(0, 1_000);
+    console.error(
+      `droste relay: provider cleanup failed (${cleanupErrors.length}): ${detail}`,
+    );
+  }
+}
 
 await Deno.stdout.write(new TextEncoder().encode(out + "\n"));

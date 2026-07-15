@@ -243,6 +243,20 @@ evidence with that status rather than leaving the model to interpret prefixes.
   `ProviderManifest` is reusable across sources; `ConfiguredSource` contains a
   name and frozen configuration; `ProviderRegistration.bind` is the only edge
   that creates live handlers. Do not add process-global provider registries.
+- Treat each `ProviderRuntime` as one live ownership token. Resource-free
+  providers omit `close_callback`; resource-owning providers attach one and
+  never rely on finalizers. Registries close in reverse bind order, clean up
+  partial binds, and invoke each runtime close at most once under concurrency.
+- Do not share one runtime object across configured sources. Shared pools use
+  separate provider-owned leases. The host owns a bound registry until it is
+  passed to `create_environment`, which takes ownership even on construction
+  failure. A trusted bridge service owns its bound source until service close.
+- Close only after broker calls quiesce; cancellation is a separate execution
+  concern. Keep optional runtime stats as content-free counters that remain
+  readable after close, since hosts may project final stats afterward.
+- Keep result and cleanup outcomes separate: post-result cleanup failure emits
+  a bounded diagnostic without discarding the result; simultaneous execution
+  and cleanup failures remain together in a `BaseExceptionGroup`.
 - `ProviderOperation.operation_id` is the transport/identity value and
   `binding_name` is only the Python projection. Do not derive one from the
   other. Parameter and result schemas require explicit dialect and provenance;
