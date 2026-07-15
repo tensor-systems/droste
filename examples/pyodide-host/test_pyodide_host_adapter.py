@@ -23,10 +23,16 @@ from pyodide_host_adapter import build_db_service, run_for_host_pyodide  # noqa:
 from droste.sources.bridge import ProviderService  # noqa: E402
 
 
-def _fake_host_fetch_answering(content: str, captured_headers: dict | None = None):
+def _fake_host_fetch_answering(
+    content: str,
+    captured_headers: dict | None = None,
+    captured_body: dict | None = None,
+):
     def host_fetch(method: str, url: str, headers_json: str, body: str) -> str:
         if captured_headers is not None:
             captured_headers.update(json.loads(headers_json))
+        if captured_body is not None:
+            captured_body.update(json.loads(body))
         code = f"```python\nanswer['content'] = {content!r}\nanswer['ready'] = True\n```"
         return json.dumps(
             {
@@ -56,11 +62,16 @@ class TestPyodideHostAdapter(unittest.TestCase):
 
     def test_single_interpreter_mode_no_bridge_call(self) -> None:
         request = {"question": "q", "db_path": self.db_path, "root_model": "test-model"}
-        resp = run_for_host_pyodide(request, _fake_host_fetch_answering("two widgets"))
+        body: dict = {}
+        resp = run_for_host_pyodide(
+            request,
+            _fake_host_fetch_answering("two widgets", captured_body=body),
+        )
         self.assertIsNone(resp["error"])
         self.assertEqual(resp["answer"], "two widgets")
         self.assertFalse(resp["extracted"])
         self.assertIsNone(resp["extract_error"])
+        self.assertNotIn("reasoning_effort", body)
 
     def test_db_service_bridge_mode(self) -> None:
         """build_db_service + a real bridge_call round-trip, exactly like the
@@ -116,6 +127,33 @@ class TestPyodideHostAdapter(unittest.TestCase):
         }
         run_for_host_pyodide(request, _fake_host_fetch_answering("ok", headers))
         self.assertEqual(headers.get("Authorization"), "Bearer ct_REAL")
+
+    def test_root_reasoning_effort_reaches_pyodide_callback(self) -> None:
+        body: dict = {}
+        request = {
+            "question": "q",
+            "db_path": self.db_path,
+            "root_model": "test-model",
+            "root_reasoning_effort": "none",
+        }
+
+        run_for_host_pyodide(
+            request,
+            _fake_host_fetch_answering("ok", captured_body=body),
+        )
+
+        self.assertEqual(body.get("reasoning_effort"), "none")
+
+    def test_root_reasoning_effort_is_typed(self) -> None:
+        request = {
+            "question": "q",
+            "db_path": self.db_path,
+            "root_model": "test-model",
+            "root_reasoning_effort": 7,
+        }
+
+        with self.assertRaisesRegex(ValueError, "root_reasoning_effort"):
+            run_for_host_pyodide(request, _fake_host_fetch_answering("unused"))
 
     def test_serialize_error_on_root_failure(self) -> None:
         def failing_host_fetch(method: str, url: str, headers_json: str, body: str) -> str:

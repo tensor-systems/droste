@@ -144,6 +144,17 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - Every request MUST carry `"protocol_version": 4` and one complete `budget`
   object. Missing/mismatched versions or incomplete budgets fail before work.
   See docs/architecture.md, "The runner protocol".
+- Version refusal precedes operation resolution and carries `operation: null`.
+  Once a process worker resolves v4 `run` or `preflight`, every top-level
+  exception envelope carries that immutable operation with its structured
+  error. Trusted in-process `run(...)` calls still raise Python exceptions.
+- Custom-catalog process hosts use `run_worker_request(...)` so version,
+  operation, and exception shaping have one owner. Preflight exceptions keep
+  the exact closed five-field preflight envelope; never stamp `preflight` onto
+  the generic run envelope.
+- `root_reasoning_effort` is the single runner authority for root reasoning:
+  pass it unchanged to native/Pyodide root callbacks and record the same value
+  in scaffold root sampling. Reject conflicting duplicate evidence.
 - `operation` is the explicit `run | preflight` control value and defaults to
   `run` for compatibility. Preflight must use the same scaffold resolver as a
   real run, must not dispatch root/subcall/provider calls, and its

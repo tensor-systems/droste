@@ -189,14 +189,24 @@ def _check_protocol_version(request: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def build_exception_response(exc: Exception, traceback_text: str) -> dict[str, Any]:
+def build_exception_response(
+    exc: Exception,
+    traceback_text: str,
+    *,
+    operation: RunnerOperation | None = None,
+) -> dict[str, Any]:
     """Build the version-stamped worker exception envelope."""
-    return build_response(
-        status="error",
-        operation=None,
-        error={
-            "type": exc.__class__.__name__,
-            "message": str(exc),
-            "traceback": traceback_text,
-        },
-    )
+    error = {
+        "type": exc.__class__.__name__,
+        "message": str(exc),
+        "traceback": traceback_text,
+    }
+    if operation is RunnerOperation.PREFLIGHT:
+        return {
+            "protocol_version": RUNNER_PROTOCOL_VERSION,
+            "operation": RunnerOperation.PREFLIGHT.value,
+            "status": "error",
+            "preflight": None,
+            "error": error,
+        }
+    return build_response(status="error", operation=operation, error=error)

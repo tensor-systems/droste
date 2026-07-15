@@ -264,6 +264,7 @@ class RootLLMClient:
         stop: list[str] | None,
         session: str,
         session_index: int,
+        reasoning_effort: str = "",
     ) -> None:
         self._endpoint = endpoint
         self._token = token
@@ -274,6 +275,7 @@ class RootLLMClient:
         self._stop = stop or []
         self._session = session
         self._session_index = int(session_index or 0)
+        self._reasoning_effort = str(reasoning_effort or "")
         self.response_metadata = RootResponseMetadata()
 
     @property
@@ -320,6 +322,8 @@ class RootLLMClient:
             payload["temperature"] = temp
         if self._provider:
             payload["provider"] = self._provider
+        if self._reasoning_effort:
+            payload["reasoning_effort"] = self._reasoning_effort
         body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             self._endpoint,

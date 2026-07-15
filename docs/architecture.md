@@ -232,9 +232,18 @@ effect policy, source type, and source name. Preflight deliberately does not
 invoke live provider binders: binders may open files, databases, or network
 connections, while those runtime resources and task data do not participate in
 the scaffold identity. Normal execution binds the same descriptors to their
-live handlers for the run. Refusals or worker errors that occur before
-an operation result is produced carry `operation: null`; successful runs and
-typed preflight compatibility refusals carry their accepted discriminant.
+live handlers for the run. Missing/mismatched protocol refusals and invalid
+operation values carry `operation: null`. After a current-protocol request has
+selected `run` or `preflight`, worker exception envelopes retain that accepted
+discriminant and their structured error fields.
+
+`run_worker_request(...)` is the process-host boundary for embedders that
+inject a trusted `ProviderCatalog`. It returns a frozen `WorkerOutcome`
+containing the response and process exit code, and owns the version gate,
+operation selection, and exception projection. Hosts must not wrap `run(...)`
+with a second operation resolver or generic exception envelope. Preflight
+exceptions use the same closed five-field shape as other preflight responses;
+run exceptions use the ordinary run response shape.
 
 Completed responses also carry the policy-resolved
 [Trace ABI v1](trace-abi.md) `run_record`. Live events and terminal records use
@@ -252,6 +261,13 @@ client construction (default 5), controls every HTTP-backed subcall batch, and
 is recorded at `scaffold_manifest.inference.concurrency`. Native CLI rollout
 configuration follows the same path. The Pyodide relay forwards the value
 unchanged; it does not choose another concurrency policy.
+
+The optional non-empty `root_reasoning_effort` request field is also resolved
+once. Native and Pyodide root clients send it unchanged on every root callback,
+and the runner records the same value at
+`scaffold_manifest.inference.root_sampling.reasoning_effort`. If an explicit
+`root_sampling` object contains a different effort, the request fails before
+inference rather than publishing evidence that differs from execution.
 
 **Versioned boundary**: the request/response schema and provider contract
 are versioned, each by a single integer:

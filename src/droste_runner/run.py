@@ -6,6 +6,8 @@ import importlib
 import json
 import os
 import sys
+import traceback
+from dataclasses import dataclass
 from typing import Any, NoReturn
 
 from droste.environments import EnvironmentConfig, create_environment, create_environment_context
@@ -24,6 +26,7 @@ from .protocol import (
     RUNNER_PROTOCOL_VERSION,
     RunnerOperation,
     _check_protocol_version,
+    build_exception_response,
     build_operation_refusal,
     build_preflight_response,
     build_response,
@@ -60,6 +63,14 @@ class _PreflightSubcallClient:
         contexts: list[str] | None = None,
     ) -> tuple[list[str], list[dict[str, object]]]:
         self._refuse()
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerOutcome:
+    """One process-safe response plus its shell exit status."""
+
+    response: dict[str, Any]
+    exit_code: int
 
 
 def _read_request(path: str | None = None) -> dict[str, Any]:
@@ -133,6 +144,32 @@ def _checkpoint_requirements(
     )
 
 
+def _root_sampling_evidence(
+    explicit: dict[str, Any] | None,
+    *,
+    temperature: Any,
+    stop: Any,
+    reasoning_effort: str | None,
+) -> dict[str, Any]:
+    """Resolve one root-effort fact for execution and scaffold evidence."""
+
+    sampling = (
+        dict(explicit)
+        if explicit is not None
+        else {
+            "temperature": temperature,
+            "stop": stop,
+        }
+    )
+    if "reasoning_effort" in sampling and sampling["reasoning_effort"] != reasoning_effort:
+        raise ValueError(
+            "request.root_sampling.reasoning_effort must match request.root_reasoning_effort"
+        )
+    if reasoning_effort is not None:
+        sampling["reasoning_effort"] = reasoning_effort
+    return sampling
+
+
 def _run_adapter(request: dict[str, Any]) -> dict[str, Any]:
     adapter_module = str(request.get("adapter_module") or "").strip()
     if not adapter_module:
@@ -159,25 +196,27 @@ def run(
     if refusal is not None:
         return refusal
 
-    return _run_valid_request(
+    try:
+        operation = resolve_operation(request)
+    except ValueError as exc:
+        return build_operation_refusal(str(exc))
+
+    return _run_selected_request(
         request,
+        operation=operation,
         source_ctx=source_ctx,
         provider_catalog=provider_catalog or default_provider_catalog(),
     )
 
 
-def _run_valid_request(
+def _run_selected_request(
     request: dict[str, Any],
     *,
+    operation: RunnerOperation,
     source_ctx: Any = None,
     provider_catalog: ProviderCatalog,
 ) -> dict[str, Any]:
-    """Run an already version-checked request."""
-
-    try:
-        operation = resolve_operation(request)
-    except ValueError as exc:
-        return build_operation_refusal(str(exc))
+    """Run a request after its protocol and operation have been selected."""
 
     adapter_module = request.get("adapter_module")
     if isinstance(adapter_module, str) and adapter_module.strip():
@@ -267,6 +306,7 @@ def _run_valid_request(
     temperature = request.get("temperature")
     stop = request.get("stop")
     subcall_model = str(request.get("subcall_model") or "")
+    root_reasoning_effort = _optional_text(request, "root_reasoning_effort")
     subcall_reasoning_effort = str(request.get("subcall_reasoning_effort") or "")
     root_sampling = _optional_object(request, "root_sampling")
     subcall_sampling = _optional_object(request, "subcall_sampling")
@@ -301,10 +341,11 @@ def _run_valid_request(
             root_revision=_optional_text(request, "root_model_revision"),
             subcall_model=resolved_subcall_model,
             subcall_revision=_optional_text(request, "subcall_model_revision"),
-            root_sampling=(
-                root_sampling
-                if root_sampling is not None
-                else {"temperature": temperature, "stop": stop}
+            root_sampling=_root_sampling_evidence(
+                root_sampling,
+                temperature=temperature,
+                stop=stop,
+                reasoning_effort=root_reasoning_effort,
             ),
             subcall_sampling=(
                 subcall_sampling
@@ -361,6 +402,7 @@ def _run_valid_request(
         stop=stop,
         session=session,
         session_index=session_index,
+        reasoning_effort=root_reasoning_effort or "",
     )
     subcalls = HTTPSubcallClient(
         endpoint=subcall_endpoint,
@@ -412,26 +454,64 @@ def _run_valid_request(
     )
 
 
-def main() -> None:
-    request = _read_request()
-    # The version gate runs FIRST — before any other request-field check —
-    # so a bad envelope always gets the structured versioned refusal, never
-    # a generic error from a later validation the caller can't attribute.
+def run_worker_request(
+    request: dict[str, Any],
+    *,
+    source_ctx: Any = None,
+    provider_catalog: ProviderCatalog | None = None,
+) -> WorkerOutcome:
+    """Handle one untrusted worker request with operation-aware exceptions."""
+
+    operation: RunnerOperation | None = None
     refusal = _check_protocol_version(request)
     if refusal is not None:
-        sys.stdout.write(json.dumps(refusal, ensure_ascii=True))
-        return
-    # The request file is the untrusted boundary (hosted runners are fed one by
-    # the parent process). A request must never name code to import: source
-    # types come only from the host's explicit ProviderCatalog, and the
-    # in-process adapter seam is reserved for trusted callers of run().
-    if str(request.get("adapter_module") or "").strip():
-        raise RuntimeError(
-            "adapter_module is not accepted from the request file; pass an "
-            "explicit ProviderCatalog to run() from a trusted host"
+        return WorkerOutcome(refusal, 0)
+
+    try:
+        operation = resolve_operation(request)
+    except ValueError as exc:
+        return WorkerOutcome(build_operation_refusal(str(exc)), 0)
+
+    try:
+        # The request file is the untrusted boundary (hosted runners are fed one by
+        # the parent process). A request must never name code to import: source
+        # types come only from the host's explicit ProviderCatalog, and the
+        # in-process adapter seam is reserved for trusted callers of run().
+        if str(request.get("adapter_module") or "").strip():
+            raise RuntimeError(
+                "adapter_module is not accepted from the request file; pass an "
+                "explicit ProviderCatalog to run() from a trusted host"
+            )
+        response = _run_selected_request(
+            request,
+            operation=operation,
+            source_ctx=source_ctx,
+            provider_catalog=provider_catalog or default_provider_catalog(),
         )
-    response = _run_valid_request(
-        request,
-        provider_catalog=default_provider_catalog(),
-    )
-    sys.stdout.write(json.dumps(response, ensure_ascii=True))
+    except Exception as exc:
+        return WorkerOutcome(
+            build_exception_response(
+                exc,
+                traceback.format_exc(),
+                operation=operation,
+            ),
+            1,
+        )
+    return WorkerOutcome(response, 0)
+
+
+def main() -> int:
+    """Run the process boundary and retain the selected operation on failures."""
+
+    try:
+        request = _read_request()
+    except Exception as exc:
+        outcome = WorkerOutcome(
+            build_exception_response(exc, traceback.format_exc()),
+            1,
+        )
+    else:
+        outcome = run_worker_request(request)
+
+    sys.stdout.write(json.dumps(outcome.response, ensure_ascii=True))
+    return outcome.exit_code

@@ -121,6 +121,7 @@ def test_main_version_gate_precedes_adapter_module_rejection(monkeypatch, capsys
 
     payload = json.loads(out)
     assert payload["error"]["type"] == "protocol_version_missing"
+    assert payload["operation"] is None
     assert payload["protocol_version"] == runner.RUNNER_PROTOCOL_VERSION
 
 
@@ -152,10 +153,13 @@ def test_worker_exception_envelope_is_version_stamped(tmp_path) -> None:
     assert proc.returncode == 1
     payload = json.loads(proc.stdout)
     assert payload["protocol_version"] == runner.RUNNER_PROTOCOL_VERSION
+    assert payload["operation"] == "run"
+    assert payload["error"]["type"] == "RuntimeError"
     assert "missing endpoints" in payload["error"]["message"]
+    assert "traceback" in payload["error"]
 
 
-def test_worker_preflight_validation_error_has_no_false_operation(tmp_path) -> None:
+def test_worker_preflight_validation_error_retains_active_operation(tmp_path) -> None:
     import json
     import subprocess
     import sys as _sys
@@ -179,9 +183,19 @@ def test_worker_preflight_validation_error_has_no_false_operation(tmp_path) -> N
 
     assert proc.returncode == 1
     payload = json.loads(proc.stdout)
+    assert set(payload) == {
+        "protocol_version",
+        "operation",
+        "status",
+        "preflight",
+        "error",
+    }
     assert payload["status"] == "error"
-    assert payload["operation"] is None
+    assert payload["operation"] == "preflight"
+    assert payload["preflight"] is None
+    assert payload["error"]["type"] == "ValueError"
     assert "budget" in payload["error"]["message"]
+    assert "traceback" in payload["error"]
 
 
 def test_version_gate_runs_before_adapter_dispatch() -> None:
@@ -238,6 +252,7 @@ def test_runner_preflight_is_content_free_and_constructs_no_http_clients(monkeyp
             "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
             "operation": "preflight",
             "model": "root-model",
+            "root_reasoning_effort": "none",
             "question": marker,
             "context": {"text": marker},
             "conversation_context": marker,
@@ -261,7 +276,36 @@ def test_runner_preflight_is_content_free_and_constructs_no_http_clients(monkeyp
     assert response["preflight"]["schema_version"] == 1
     manifest = response["preflight"]["scaffold_manifest"]
     assert manifest["id"].startswith("sha256:")
+    assert manifest["inference"]["root_sampling"]["reasoning_effort"] == "none"
     assert marker not in json.dumps(response)
+
+
+def test_root_reasoning_effort_is_one_typed_scaffold_fact() -> None:
+    import pytest
+
+    accepted = runner.run(
+        _manifest_request(
+            operation="preflight",
+            root_reasoning_effort="none",
+            root_sampling={"reasoning_effort": "none"},
+        )
+    )
+    assert (
+        accepted["preflight"]["scaffold_manifest"]["inference"]["root_sampling"]["reasoning_effort"]
+        == "none"
+    )
+
+    with pytest.raises(ValueError, match="root_reasoning_effort must be a non-empty string"):
+        runner.run(_manifest_request(operation="preflight", root_reasoning_effort=7))
+
+    with pytest.raises(ValueError, match="root_sampling.reasoning_effort must match"):
+        runner.run(
+            _manifest_request(
+                operation="preflight",
+                root_reasoning_effort="none",
+                root_sampling={"reasoning_effort": "high"},
+            )
+        )
 
 
 def test_runner_preflight_returns_typed_scaffold_refusal_without_dispatch(monkeypatch) -> None:

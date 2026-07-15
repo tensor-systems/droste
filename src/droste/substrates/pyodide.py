@@ -123,10 +123,12 @@ class BridgedLLMClient:
         api_key: str | None = None,
         customer_token: str | None = None,
         base_url: str = "https://api.modelrelay.ai/api/v1",
+        reasoning_effort: str = "",
     ) -> None:
         self._fetch = host_fetch
         self._api_key = api_key
         self._customer_token = customer_token
+        self._reasoning_effort = str(reasoning_effort or "")
         # Strip a trailing slash: a base_url like ".../api/v1/" would otherwise
         # produce ".../api/v1//responses" below, which fails the host broker's
         # exact-path credential scoping (isModelRelayResponsesCall) and sends
@@ -178,6 +180,8 @@ class BridgedLLMClient:
         }
         if temperature is not None:
             body["temperature"] = temperature
+        if self._reasoning_effort:
+            body["reasoning_effort"] = self._reasoning_effort
         data = self._post("/responses", body)
         text = _extract_text(data)
         if return_usage:

@@ -418,6 +418,13 @@ def test_subcall_payload_includes_cost_controls_when_set() -> None:
     assert "subcall_output_tokens_per_call=1024" in system_prompt
 
 
+def test_root_payload_includes_resolved_reasoning_effort() -> None:
+    _run_with_capture({"root_reasoning_effort": "none"})
+
+    assert len(_CapturingHandler.root_payloads) == 1
+    assert _CapturingHandler.root_payloads[0]["reasoning_effort"] == "none"
+
+
 def test_subcall_payload_uses_budget_ceiling_and_omits_optional_controls() -> None:
     payloads = _run_with_capture({})
     assert len(payloads) == 1
@@ -425,6 +432,7 @@ def test_subcall_payload_uses_budget_ceiling_and_omits_optional_controls() -> No
     assert payload["max_output_tokens"] == 2048
     assert "model" not in payload
     assert "reasoning_effort" not in payload
+    assert "reasoning_effort" not in _CapturingHandler.root_payloads[0]
     system_prompt = _CapturingHandler.root_payloads[0]["messages"][0]["content"]
     assert "subcall_output_tokens_per_call=2048" in system_prompt
 

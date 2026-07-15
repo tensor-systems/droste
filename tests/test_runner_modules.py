@@ -14,6 +14,7 @@ from droste_runner import runner
 from droste_runner.http_clients import HTTPSubcallClient, RootLLMClient
 from droste_runner.protocol import (
     RootResponseMetadata,
+    RunnerOperation,
     _protocol_error_response,
     build_exception_response,
     build_response,
@@ -30,6 +31,7 @@ def test_legacy_runner_facade_reexports_canonical_implementations() -> None:
     assert runner.WrapperTransport is WrapperTransport
     assert runner.build_provider_registry is build_provider_registry
     assert runner.run is run_module.run
+    assert runner.run_worker_request is run_module.run_worker_request
     assert not hasattr(runner, "run_rlm")
 
 
@@ -104,8 +106,87 @@ def test_one_response_builder_shapes_refusal_and_success() -> None:
     assert response["response_id"] == "response-1"
     assert response["model"] == "resolved-model"
     assert response["data_source_requests"] == 3
-    exception = build_exception_response(RuntimeError("boom"), "traceback")
-    assert set(refusal) == set(response) == set(exception)
+    run_exception = build_exception_response(
+        RuntimeError("boom"), "traceback", operation=RunnerOperation.RUN
+    )
+    assert set(refusal) == set(response) == set(run_exception)
+
+    preflight_exception = build_exception_response(
+        RuntimeError("boom"), "traceback", operation=RunnerOperation.PREFLIGHT
+    )
+    assert set(preflight_exception) == {
+        "protocol_version",
+        "operation",
+        "status",
+        "preflight",
+        "error",
+    }
+    assert preflight_exception["operation"] == "preflight"
+    assert preflight_exception["status"] == "error"
+    assert preflight_exception["preflight"] is None
+    assert preflight_exception["error"] == {
+        "type": "RuntimeError",
+        "message": "boom",
+        "traceback": "traceback",
+    }
+
+
+def test_root_client_includes_explicit_reasoning_effort(monkeypatch) -> None:
+    import droste_runner.http_clients as clients
+
+    captured: dict[str, Any] = {}
+
+    class Response:
+        def read(self) -> bytes:
+            return json.dumps({"result": "ok"}).encode()
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: Any) -> bool:
+            return False
+
+    def urlopen(request, **kwargs):
+        captured.update(json.loads(request.data.decode("utf-8")))
+        return Response()
+
+    monkeypatch.setattr(clients.urllib.request, "urlopen", urlopen)
+    client = RootLLMClient(
+        endpoint="https://example.invalid/root",
+        token="t",
+        default_model="requested-model",
+        provider=None,
+        max_output_tokens=100,
+        temperature=None,
+        stop=None,
+        session="session",
+        session_index=0,
+        reasoning_effort="none",
+    )
+
+    assert client.responses_create([], model="") == "ok"
+    assert captured["reasoning_effort"] == "none"
+
+
+def test_catalog_aware_worker_entrypoint_owns_exception_attribution() -> None:
+    outcome = runner.run_worker_request(
+        {
+            "protocol_version": runner.RUNNER_PROTOCOL_VERSION,
+            "operation": "preflight",
+        },
+        provider_catalog=runner.ProviderCatalog(()),
+    )
+
+    assert outcome.exit_code == 1
+    assert set(outcome.response) == {
+        "protocol_version",
+        "operation",
+        "status",
+        "preflight",
+        "error",
+    }
+    assert outcome.response["operation"] == "preflight"
+    assert outcome.response["error"]["type"] == "ValueError"
 
 
 def test_root_client_collects_response_metadata_as_one_record(monkeypatch) -> None:

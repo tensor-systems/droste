@@ -253,10 +253,22 @@ flowchart LR
 - `budget`: **required** complete six-field compute authorization object.
 - `subcall_concurrency`: optional positive batch limit (default: `5`), recorded
   in the returned scaffold manifest.
+- `root_reasoning_effort`: optional non-empty root inference control. The runner
+  sends this exact value on every root callback and records it in
+  `scaffold_manifest.inference.root_sampling`.
 - `operation`: `run` (default) or `preflight`; preflight resolves and checks the
   content-free scaffold without model/provider calls or endpoint credentials.
 - `root_endpoint` + `subcall_endpoint` + `token`: required for HTTP-backed runs.
 - `adapter_module`: optional Python module path to override the runner entirely.
+
+Once a current-protocol process request selects `run` or `preflight`, worker
+exception envelopes retain that operation alongside the structured error.
+Version refusals keep `operation: null` because operation semantics cannot be
+trusted until the protocol gate succeeds. Trusted in-process `run(...)` calls
+continue to raise ordinary Python exceptions.
+Process hosts that inject a custom `ProviderCatalog` should call
+`run_worker_request(...)`; it owns version gating, operation resolution, and
+operation-specific exception shaping once, and returns a typed `WorkerOutcome`.
 
 ### Core concepts
 
