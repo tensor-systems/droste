@@ -1,5 +1,7 @@
 """Provider implementations and transport adapters shipped with Droste."""
 
+from typing import TYPE_CHECKING, Any
+
 from .bridge import (
     BridgeCall,
     BridgeProtocolError,
@@ -14,7 +16,6 @@ from .filesystem_text import (
     FilesystemTextConfig,
     filesystem_text_provider,
 )
-from .mcp_http import McpHttpHost, McpSecretRequest, open_mcp_http_source
 from .mcp_stdio import (
     MCP_PROTOCOL_VERSION,
     McpBindingPolicy,
@@ -36,6 +37,20 @@ from .sql_local import (
     sqlite_provider,
     validate_local_sql,
 )
+
+if TYPE_CHECKING:
+    from .mcp_http import McpHttpHost, McpSecretRequest, open_mcp_http_source
+
+
+def __getattr__(name: str) -> Any:
+    if name in {"McpHttpHost", "McpSecretRequest", "open_mcp_http_source"}:
+        from . import mcp_http
+
+        value = getattr(mcp_http, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "BridgeCall",
