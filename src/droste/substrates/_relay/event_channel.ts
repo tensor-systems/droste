@@ -59,7 +59,9 @@ export class EventChannel {
       throw this.#failure;
     }
     try {
-      this.#write(this.#descriptor, new Uint8Array());
+      if (this.#write(this.#descriptor, new Uint8Array()) !== 0) {
+        this.#fail("descriptor_unavailable");
+      }
     } catch {
       this.#fail("descriptor_unavailable");
     }
@@ -69,7 +71,7 @@ export class EventChannel {
     if (this.#failure !== null) {
       throw this.#failure;
     }
-    if (frame.includes("\n") || frame.includes("\r")) {
+    if (frame.length === 0 || frame.includes("\n") || frame.includes("\r")) {
       this.#fail("write_failed");
     }
 

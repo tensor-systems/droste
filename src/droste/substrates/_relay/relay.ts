@@ -115,8 +115,12 @@ function writeEventChannelDiagnostic(error: RelayEventChannelError): void {
 async function terminateForEventChannel(
   error: RelayEventChannelError,
 ): Promise<never> {
-  await writeHostResponse(eventChannelFailureResponse(error));
   writeEventChannelDiagnostic(error);
+  try {
+    await writeHostResponse(eventChannelFailureResponse(error));
+  } catch {
+    Deno.exit(1);
+  }
   Deno.exit(0);
 }
 
@@ -598,8 +602,7 @@ json.dumps(resp)
 }
 
 if (eventChannel.failure !== null) {
-  out = JSON.stringify(eventChannelFailureResponse(eventChannel.failure));
-  writeEventChannelDiagnostic(eventChannel.failure);
+  await terminateForEventChannel(eventChannel.failure);
 }
 
 await Deno.stdout.write(new TextEncoder().encode(out + "\n"));

@@ -68,4 +68,8 @@ Deno.test("event channel latches descriptor and frame write failures", () => {
     () => new EventChannel(3, () => 1).writeFrame("{}\n{}"),
     "write_failed",
   );
+  assertChannelError(
+    () => new EventChannel(3, () => 1).writeFrame(""),
+    "write_failed",
+  );
 });
