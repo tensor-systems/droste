@@ -562,7 +562,7 @@ wheels = [
 
 [[package]]
 name = "droste"
-version = "0.15.3"
+version = "0.15.4"
 source = { editable = "." }
 
 [package.optional-dependencies]

@@ -11,9 +11,25 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.15.3)
+## Unreleased (post-0.15.4)
 
 No changes yet.
+
+## 0.15.4 (from 0.15.3)
+
+### Lifecycle conformance scenarios are available to exact-pinned embedders
+
+This patch publishes transport-neutral lifecycle test support under
+`droste.testing`: explicit `LifecycleGate` rendezvous points, bounded
+`run_while_blocked` scenarios with caller-owned timeout cleanup, immutable
+thread and settlement observations, a recording attempt authority, and pure
+unknown-completion and terminal-event assertions. Embedders can use the same
+helpers to exercise their host adapters after pinning Droste 0.15.4 exactly.
+
+The helpers own test coordination only; they do not own production lifecycle,
+retry, cancellation, or settlement policy. Trace ABI v2, runner protocol v6,
+the dedicated Deno event descriptor contract, and the 0.15.1 conformance corpus
+are unchanged.
 
 ## 0.15.3 (from 0.15.2)
 
