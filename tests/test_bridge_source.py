@@ -22,7 +22,7 @@ from droste import (
     SideEffect,
 )
 from droste.sources.bridge import BridgeProvider, ProviderService
-from droste.testing import fake_records_provider
+from droste.testing import LifecycleGate, fake_records_provider, run_while_blocked
 
 
 def _service() -> ProviderService:
@@ -612,13 +612,11 @@ def test_duplex_streams_ordered_idempotent_checkpoints_to_receiving_authority() 
 
 
 def test_duplex_delivers_cancellation_after_remote_entry_and_settles_once() -> None:
-    entered = Event()
-    release = Event()
+    gate = LifecycleGate()
 
     def fetch(execution, record_id):
-        entered.set()
         execution.checkpoint(tokens=3, subcalls=1)
-        assert release.wait(timeout=2)
+        gate.pause()
         execution.check()
         return {"id": record_id}
 
@@ -631,24 +629,28 @@ def test_duplex_delivers_cancellation_after_remote_entry_and_settles_once() -> N
         observer=observed.append,
     )
     capability_id = registry.capability_registrations()[1].descriptor.capability_id
-    results = []
-    worker = Thread(target=lambda: results.append(broker.call(capability_id, "7")))
-    worker.start()
-    assert entered.wait(timeout=2)
-    assert authority.checkpointed.wait(timeout=2)
-    assert authority.call is not None
-    assert broker.cancel(authority.call.call_id) is True
-    release.set()
-    worker.join(timeout=2)
 
-    assert not worker.is_alive()
-    assert len(results) == 1
-    assert results[0].error is not None
-    assert results[0].error.code == "cancelled"
-    assert len(authority.settlements) == 1
-    assert authority.settlements[0][2:] == (CapabilityCheckpoint(3, 1), True)
-    assert len(observed) == 1
-    assert broker.cancel(authority.call.call_id) is False
+    def cancel() -> None:
+        assert authority.call is not None
+        assert authority.checkpointed.wait(timeout=2)
+        assert broker.cancel(authority.call.call_id) is True
+
+    try:
+        result = run_while_blocked(
+            lambda: broker.call(capability_id, "7"),
+            gate=gate,
+            while_blocked=cancel,
+            on_timeout=registry.close,
+        ).require_value()
+
+        assert result.error is not None
+        assert result.error.code == "cancelled"
+        assert len(authority.settlements) == 1
+        assert authority.settlements[0][2:] == (CapabilityCheckpoint(3, 1), True)
+        assert len(observed) == 1
+        assert broker.cancel(authority.call.call_id) is False
+    finally:
+        registry.close()
 
 
 def test_duplex_cancellation_property_is_local_and_does_not_emit_a_frame() -> None:

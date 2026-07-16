@@ -31,7 +31,7 @@ from droste.sources.filesystem_text import (
     filesystem_text_provider,
 )
 from droste.sources.sql_local import sqlite_provider
-from droste.testing import MockSubcallClient
+from droste.testing import MockSubcallClient, RecordingAttemptAuthority
 
 
 def _tree(tmp_path: Path) -> Path:
@@ -567,12 +567,25 @@ def test_duplex_bridge_observes_cancellation_during_filesystem_scan(tmp_path: Pa
         if item.descriptor.capability_id.operation == "grep"
     )
 
-    result = CapabilityBroker(registry.capability_registrations()).call(capability_id, "search")
+    authority = RecordingAttemptAuthority()
+    try:
+        result = CapabilityBroker(
+            registry.capability_registrations(),
+            run_id="run-1",
+            attempt_authority=authority,
+        ).dispatch(CapabilityCall(capability_id, "filesystem-cancel", "run-1", args=("search",)))
 
-    assert result.ok is False
-    assert result.error is not None
-    assert result.error.code == "cancelled"
-    assert result.result is None
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == "cancelled"
+        assert result.result is None
+        settlement = authority.require_single_settlement("filesystem-cancel")
+        assert settlement.attempted is True
+        assert settlement.error_code == "cancelled"
+        assert authority.active_calls == frozenset()
+    finally:
+        registry.close()
+        native_registry.close()
 
 
 def test_real_sqlite_and_filesystem_sources_share_one_registry_and_environment(

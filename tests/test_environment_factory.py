@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from droste import RLMConfig, run_rlm
 from droste.environments import (
     EnvironmentConfig,
     PyodideEnvironment,
@@ -17,7 +18,13 @@ from droste.environments import (
     select_environment,
 )
 from droste.execution import Budget, SandboxLimits
-from droste.testing import MockSubcallClient
+from droste.protocols.llm_client import TokenUsage
+from droste.testing import (
+    MockLLMClient,
+    MockResponse,
+    MockSubcallClient,
+    require_ordered_terminal_events,
+)
 
 
 def _environment(config: EnvironmentConfig):
@@ -158,6 +165,48 @@ def test_pyodide_environment_uses_shared_raw_namespace_without_signal_timers(
     assert result.stderr == "warning\n"
     assert environment.globals()["answer"] == {"content": "done", "ready": True}
     assert result.timed_out is False
+
+
+def test_native_and_pyodide_deliver_the_same_ordered_terminal_event_lifecycle() -> None:
+    event_orders: list[tuple[str, ...]] = []
+    for config in (
+        EnvironmentConfig(kind="native"),
+        EnvironmentConfig(
+            kind="pyodide",
+            host_managed_timeout=True,
+            host_managed_isolation=True,
+        ),
+    ):
+        events: list[dict[str, object]] = []
+        run_id = f"lifecycle-{config.kind}"
+        context = create_environment_context(config, on_event=events.append, run_id=run_id)
+        subcalls = MockSubcallClient()
+        environment = create_environment(
+            config,
+            context={},
+            registry=None,
+            subcalls=subcalls,
+            execution_context=context,
+        )
+        result = run_rlm(
+            "question",
+            environment=environment,
+            root_llm=MockLLMClient(
+                [
+                    MockResponse(
+                        "```python\nanswer['content'] = 'done'\nanswer['ready'] = True\n```",
+                        TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                    )
+                ]
+            ),
+            subcalls=subcalls,
+            config=RLMConfig(run_id=run_id),
+            context=context,
+        )
+        assert result.answer == "done"
+        event_orders.append(require_ordered_terminal_events(events))
+
+    assert event_orders[0] == event_orders[1]
 
 
 def test_native_rejects_pyodide_only_safety_declarations() -> None:

@@ -97,11 +97,7 @@ def call_tool(request_id: int, name: str, arguments: dict[str, Any]) -> None:
         def wait() -> None:
             sys.stderr.write("slow call started\n")
             sys.stderr.flush()
-            if not cancelled.wait(10):
-                result(
-                    request_id,
-                    {"content": [], "structuredContent": {"done": True}, "isError": False},
-                )
+            cancelled.wait()
 
         threading.Thread(target=wait, daemon=True).start()
         return
