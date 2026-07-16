@@ -188,14 +188,26 @@ Droste 0.15.1 and later ship the authoritative fixture bytes inside the wheel
 and sdist. Python consumers load them through package resources:
 
 ```python
-from droste.testing import runner_v6_refusal_ndjson, trace_v2_lifecycle_ndjson
+from droste.testing import (
+    runner_v6_refusal_ndjson,
+    trace_v2_execution_ndjson,
+    trace_v2_lifecycle_ndjson,
+)
 
+execution_lines = trace_v2_execution_ndjson().splitlines()
 event_lines = trace_v2_lifecycle_ndjson().splitlines()
 pre_admission_refusal = runner_v6_refusal_ndjson()
 ```
 
-The NDJSON contains five contiguous runs whose per-run sequences restart at
-one: ordinary success, successful and failed extract fallback, loud
+The compact execution NDJSON contains a two-iteration root trace plus a
+depth-one child trace. Its producer-stamped `llm_response`, `code`, successful
+`output`, and `execution_error` events let consumers test iteration and depth
+projection.
+The successful root output deliberately starts with `ERROR:` so consumers must
+use the event discriminant rather than interpreting stdout prose as status.
+
+The lifecycle NDJSON contains five contiguous runs whose per-run sequences
+restart at one: ordinary success, successful and failed extract fallback, loud
 output-limit failure, and cancellation. Together they cover unary and
 atomic-batch subcall outcomes with stable call attribution, structured
 execution error, repair and extract completion/failure, and exact

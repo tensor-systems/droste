@@ -32,8 +32,10 @@ from droste.testing import (
     MockResponse,
     MockSubcallClient,
     runner_v6_refusal_ndjson,
+    trace_v2_execution_ndjson,
     trace_v2_lifecycle_ndjson,
 )
+from droste.testing._trace_fixtures import build_trace_v2_execution_ndjson
 from droste_runner.run import run as run_worker
 
 
@@ -566,6 +568,36 @@ def _trace_v2_golden_runs() -> dict[str, list[RunEvent]]:
             previous_run_id = event.run_id
         runs.setdefault(event.run_id, []).append(event)
     return runs
+
+
+def test_trace_v2_execution_fixture_is_canonical_and_exact() -> None:
+    fixture = trace_v2_execution_ndjson()
+    assert fixture == build_trace_v2_execution_ndjson()
+    events = [parse_event(json.loads(line)) for line in fixture.decode("utf-8").splitlines()]
+
+    root = events[:6]
+    child = events[6:]
+    assert [event.type for event in root] == [
+        "llm_response",
+        "code",
+        "output",
+        "llm_response",
+        "code",
+        "execution_error",
+    ]
+    assert [event.body["iteration"] for event in root] == [1, 1, 1, 2, 2, 2]
+    assert [event.seq for event in root] == [1, 2, 3, 4, 5, 6]
+    assert all(event.depth == 0 and event.parent_run_id is None for event in root)
+    assert root[2].body["stdout"].startswith("ERROR:")
+    assert root[2].type == "output"
+    assert root[5].body["error_type"] == "ValueError"
+
+    assert [event.type for event in child] == ["llm_response", "code", "output"]
+    assert [event.seq for event in child] == [1, 2, 3]
+    assert all(event.depth == 1 for event in child)
+    assert all(event.parent_run_id == root[0].run_id for event in child)
+    projected = [event for event in events if event.type in {"code", "output", "execution_error"}]
+    assert len(projected) == 6
 
 
 def _error_type(value: object) -> object:
