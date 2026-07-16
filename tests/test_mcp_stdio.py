@@ -36,7 +36,6 @@ from droste import (
     run_rlm,
 )
 from droste.protocols.llm_client import TokenUsage
-from droste.sources._mcp_stdio_transport import McpStdioSession
 from droste.sources.mcp_stdio import (
     MCP_PROTOCOL_VERSION,
     McpConfigurationError,
@@ -552,7 +551,10 @@ def test_mid_call_cancellation_terminates_session_and_settles_once(
 
     try:
         outcome = run_while_blocked(
-            lambda: broker.dispatch(call), gate=gate, while_blocked=cancel
+            lambda: broker.dispatch(call),
+            gate=gate,
+            while_blocked=cancel,
+            on_timeout=registry.close,
         ).require_value()
         assert outcome.status.value == "cancelled"
         assert outcome.error.code == "cancelled"
@@ -637,14 +639,13 @@ def test_cancellation_interrupts_pipe_filling_write_and_unblocks_sibling(
     gate = LifecycleGate()
     first_dispatching = threading.Event()
     request_write_started = threading.Event()
-    sibling_waiting = threading.Event()
+    sibling_admitted = threading.Event()
     real_select = select.select
     real_write = os.write
-    real_acquire_write_lock = McpStdioSession._acquire_write_lock
 
     def observed_write(descriptor, data) -> int:
         written = real_write(descriptor, data)
-        if first_dispatching.is_set() and not sibling_waiting.is_set() and written:
+        if first_dispatching.is_set() and not sibling_admitted.is_set() and written:
             request_write_started.set()
         return written
 
@@ -655,28 +656,24 @@ def test_cancellation_interrupts_pipe_filling_write_and_unblocks_sibling(
             and not result[1]
             and first_dispatching.is_set()
             and request_write_started.is_set()
-            and not sibling_waiting.is_set()
+            and not sibling_admitted.is_set()
         ):
             gate.arrive()
         return result
 
-    def observed_acquire_write_lock(
-        session: McpStdioSession, execution, expires: float | None
-    ) -> None:
-        if execution is not None and execution.call_id == "blocked-sibling":
-            if session._write_lock.acquire(blocking=False):
-                session._write_lock.release()
-                raise AssertionError("MCP sibling reached an unlocked writer")
-            sibling_waiting.set()
-        real_acquire_write_lock(session, execution, expires)
+    class SiblingAdmissionAuthority(_CountingAttemptAuthority):
+        def admit(self, call: CapabilityCall) -> CapabilityAdmission:
+            admission = super().admit(call)
+            if call.call_id == "blocked-sibling":
+                sibling_admitted.set()
+            return admission
 
     source = _source(tmp_path, mode="stop-reading", close_timeout_ms=50)
     bound = open_mcp_stdio_source(source)
     registry = ProviderRegistry((bound,))
     monkeypatch.setattr("droste.sources._mcp_stdio_transport.os.write", observed_write)
     monkeypatch.setattr("droste.sources._mcp_stdio_transport.select.select", observed_select)
-    monkeypatch.setattr(McpStdioSession, "_acquire_write_lock", observed_acquire_write_lock)
-    authority = _CountingAttemptAuthority()
+    authority = SiblingAdmissionAuthority()
     broker = CapabilityBroker(
         registry.capability_registrations(), run_id="run", attempt_authority=authority
     )
@@ -702,11 +699,11 @@ def test_cancellation_interrupts_pipe_filling_write_and_unblocks_sibling(
     )
     started = time.monotonic()
 
-    def cancel_after_sibling_waits() -> None:
+    def cancel_after_sibling_admission() -> None:
         reached_sibling = False
         try:
             second.start()
-            reached_sibling = sibling_waiting.wait(timeout=2)
+            reached_sibling = sibling_admitted.wait(timeout=2)
         finally:
             cancelled = broker.cancel("blocked-write")
         assert reached_sibling
@@ -720,7 +717,8 @@ def test_cancellation_interrupts_pipe_filling_write_and_unblocks_sibling(
         first_outcome = run_while_blocked(
             dispatch_first,
             gate=gate,
-            while_blocked=cancel_after_sibling_waits,
+            while_blocked=cancel_after_sibling_admission,
+            on_timeout=registry.close,
         ).require_value()
     finally:
         if second.ident is not None:
@@ -728,8 +726,7 @@ def test_cancellation_interrupts_pipe_filling_write_and_unblocks_sibling(
         registry.close()
         if second.is_alive():
             second.join(timeout=2)
-        assert not second.is_alive(), "blocked MCP sibling survived runtime close"
-    assert not second.is_alive()
+    assert not second.is_alive(), "blocked MCP sibling survived runtime close"
     assert time.monotonic() - started < 2
     second_outcome = outcomes["second"]
     assert first_outcome.status.value == "cancelled"

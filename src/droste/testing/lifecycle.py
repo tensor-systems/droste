@@ -33,27 +33,25 @@ class _GateTimeout(AssertionError):
 class LifecycleGate:
     """One explicit rendezvous for a deterministic blocked-operation test."""
 
-    def __init__(self, *, timeout: float = DEFAULT_LIFECYCLE_TIMEOUT) -> None:
+    def __init__(self) -> None:
         self._entered = Event()
         self._release = Event()
-        self._timeout = timeout
 
     def pause(self) -> None:
         """Signal entry and block until the test explicitly releases the gate."""
 
         self.arrive()
-        if not self._release.wait(self._timeout):
-            raise _GateTimeout("lifecycle gate was not released")
+        self._release.wait()
 
     def arrive(self) -> None:
         """Signal the rendezvous without blocking an observational callback."""
 
         self._entered.set()
 
-    def wait_until_paused(self) -> None:
+    def wait_until_paused(self, timeout: float) -> None:
         """Fail with a useful error when the operation never reaches the gate."""
 
-        if not self._entered.wait(self._timeout):
+        if not self._entered.wait(timeout):
             raise _GateTimeout("operation did not reach lifecycle gate")
 
     def release(self) -> None:
@@ -79,8 +77,15 @@ def run_while_blocked(
     gate: LifecycleGate,
     while_blocked: Callable[[], None],
     timeout: float = DEFAULT_LIFECYCLE_TIMEOUT,
+    on_timeout: Callable[[], None] | None = None,
 ) -> ThreadOutcome[T]:
-    """Run an operation, act at its explicit barrier, and require bounded exit."""
+    """Run an operation, act at its explicit barrier, and require bounded exit.
+
+    Resource-owning scenarios should supply an idempotent ``on_timeout`` that
+    interrupts their operation. The callback runs only after the first bounded
+    join expires, followed by one more bounded join, so a failed scenario does
+    not race the caller's later cleanup.
+    """
 
     values: list[T] = []
     errors: list[BaseException] = []
@@ -95,7 +100,7 @@ def run_while_blocked(
     worker.start()
     coordination_error: BaseException | None = None
     try:
-        gate.wait_until_paused()
+        gate.wait_until_paused(timeout)
         while_blocked()
     except BaseException as exc:
         coordination_error = exc
@@ -103,8 +108,24 @@ def run_while_blocked(
         gate.release()
         worker.join(timeout)
     if worker.is_alive():
-        raise AssertionError("lifecycle operation did not terminate within its bound") from (
-            coordination_error
+        cleanup_error: BaseException | None = None
+        if on_timeout is not None:
+            try:
+                on_timeout()
+            except BaseException as exc:
+                cleanup_error = exc
+            worker.join(timeout)
+        if worker.is_alive():
+            detail = (
+                " after timeout cleanup"
+                if on_timeout is not None
+                else "; no timeout cleanup was supplied"
+            )
+            raise AssertionError(f"lifecycle operation remained alive{detail}") from (
+                cleanup_error or coordination_error
+            )
+        raise AssertionError("lifecycle operation exceeded its bound") from (
+            cleanup_error or coordination_error
         )
     if isinstance(coordination_error, _GateTimeout) and errors:
         raise AssertionError("operation failed before reaching its lifecycle gate") from errors[0]

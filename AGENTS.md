@@ -442,7 +442,10 @@ reentry, and shutdown tests; scheduler sleeps are not evidence that a lifecycle
 state was reached. Compare native and Pyodide traces by their ordered event types
 and contiguous sequence numbers, since run identity and timestamps intentionally
 differ. Ambiguous remote completion is a single-attempt terminal fact and must
-never be advertised as retryable.
+never be advertised as retryable. Keep one timeout authority in the scenario
+runner, and give resource-owning scenarios an idempotent timeout cleanup so a
+failed join cannot leave a worker racing later teardown. Observe contention at
+public admission or protocol boundaries rather than private transport locks.
 
 ## Repo Hygiene (manual, before pushing docs/comments)
 

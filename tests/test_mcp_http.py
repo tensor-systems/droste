@@ -783,7 +783,10 @@ def test_cancellation_and_attempt_finalization_happen_once(
 
     try:
         outcome = run_while_blocked(
-            lambda: broker.dispatch(call), gate=gate, while_blocked=cancel
+            lambda: broker.dispatch(call),
+            gate=gate,
+            while_blocked=cancel,
+            on_timeout=registry.close,
         ).require_value()
         assert outcome.error.code == "cancelled"
         settlement = authority.require_single_settlement("call-1")

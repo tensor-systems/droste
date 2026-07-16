@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from threading import Event
+
 import pytest
 
 from droste import (
@@ -65,7 +67,7 @@ def test_blocked_scenario_preserves_the_operation_error_as_a_terminal_fact() -> 
 
 
 def test_blocked_scenario_surfaces_failure_before_the_rendezvous() -> None:
-    gate = LifecycleGate(timeout=0.01)
+    gate = LifecycleGate()
     failure = RuntimeError("failed before arrival")
 
     with pytest.raises(AssertionError, match="failed before reaching") as raised:
@@ -73,9 +75,35 @@ def test_blocked_scenario_surfaces_failure_before_the_rendezvous() -> None:
             lambda: (_ for _ in ()).throw(failure),
             gate=gate,
             while_blocked=lambda: None,
+            timeout=0.01,
         )
 
     assert raised.value.__cause__ is failure
+
+
+def test_blocked_scenario_runs_timeout_cleanup_before_reporting_a_stuck_operation() -> None:
+    gate = LifecycleGate()
+    stopped = Event()
+    cleanup_calls: list[str] = []
+
+    def operation() -> None:
+        gate.pause()
+        stopped.wait()
+
+    def cleanup() -> None:
+        cleanup_calls.append("cleanup")
+        stopped.set()
+
+    with pytest.raises(AssertionError, match="exceeded its bound"):
+        run_while_blocked(
+            operation,
+            gate=gate,
+            while_blocked=lambda: None,
+            timeout=0.01,
+            on_timeout=cleanup,
+        )
+
+    assert cleanup_calls == ["cleanup"]
 
 
 def test_recording_authority_exposes_snapshots_and_detects_duplicate_settlement() -> None:

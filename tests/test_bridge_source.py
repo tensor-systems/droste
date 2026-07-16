@@ -637,7 +637,10 @@ def test_duplex_delivers_cancellation_after_remote_entry_and_settles_once() -> N
 
     try:
         result = run_while_blocked(
-            lambda: broker.call(capability_id, "7"), gate=gate, while_blocked=cancel
+            lambda: broker.call(capability_id, "7"),
+            gate=gate,
+            while_blocked=cancel,
+            on_timeout=registry.close,
         ).require_value()
 
         assert result.error is not None
