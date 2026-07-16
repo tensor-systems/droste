@@ -13,7 +13,14 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.15.4)
 
-No changes yet.
+### The released fixture corpus covers code/output UI projection
+
+`droste.testing.trace_v2_execution_ndjson()` supplies exact producer-stamped
+Trace ABI v2 frames for two root iterations and a depth-one child run. It
+covers `llm_response`, `code`, successful `output`, and `execution_error`; one
+successful stdout deliberately begins with `ERROR:` so consumers do not infer
+failure from prose. The fixture changes no event shape, Trace ABI version,
+runner protocol, runtime behavior, or retention policy.
 
 ## 0.15.4 (from 0.15.3)
 

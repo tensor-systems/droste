@@ -225,6 +225,50 @@ Deno.test("successful output beginning ERROR remains an output event", () => {
   })));
 });
 
+Deno.test("Python and relay accept the same execution golden NDJSON", async () => {
+  const fixture = new URL(
+    "../src/droste/testing/fixtures/trace-v2-execution.ndjson",
+    import.meta.url,
+  );
+  const lines = (await Deno.readTextFile(fixture)).trim().split("\n");
+  assertEquals(lines.length, 9);
+  assert(lines.every(isRlmEvent));
+
+  const events = lines.map((line) =>
+    JSON.parse(line) as Record<string, unknown>
+  );
+  assertEquals(
+    events.map((event) => event.type),
+    [
+      "llm_response",
+      "code",
+      "output",
+      "llm_response",
+      "code",
+      "execution_error",
+      "llm_response",
+      "code",
+      "output",
+    ],
+  );
+  assertEquals(
+    events.slice(0, 6).map((event) => event.iteration),
+    [1, 1, 1, 2, 2, 2],
+  );
+  assertEquals(events[2].stdout, "ERROR: ordinary successful stdout\n");
+  assertEquals(events[2].type, "output");
+  assertEquals(events[5].error_type, "ValueError");
+  assertEquals(events[6].depth, 1);
+  assertEquals(events[6].parent_run_id, "golden-execution-root");
+  assertEquals(events[6].seq, 1);
+  assertEquals(
+    events.filter((event) =>
+      ["code", "output", "execution_error"].includes(String(event.type))
+    ).length,
+    6,
+  );
+});
+
 Deno.test("Python and relay accept the same lifecycle golden NDJSON", async () => {
   const fixture = new URL(
     "../src/droste/testing/fixtures/trace-v2-lifecycle.ndjson",
