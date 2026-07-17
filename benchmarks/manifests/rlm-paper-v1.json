@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite_id": "rlm-paper",
-  "suite_version": "0.2.1",
+  "suite_version": "0.3.0",
   "paper": {
     "title": "Recursive Language Models",
     "revision": "arXiv:2512.24601v3",
@@ -83,7 +83,29 @@
         "temperature": null
       },
       "limits": {
-        "tokens": 500000,
+        "tokens": 2000000,
+        "subcalls": 150,
+        "depth": 1,
+        "wall_ms": 900000,
+        "root_output_tokens": 16384,
+        "subcall_output_tokens": 2048,
+        "concurrency": 8
+      }
+    },
+    {
+      "id": "droste-terra-luna",
+      "method": "droste",
+      "executor": "modelrelay",
+      "model": {
+        "provider": "openai",
+        "root_model": "gpt-5.6-terra",
+        "subcall_model": "gpt-5.6-luna",
+        "root_reasoning_effort": "medium",
+        "subcall_reasoning_effort": "none",
+        "temperature": null
+      },
+      "limits": {
+        "tokens": 2000000,
         "subcalls": 150,
         "depth": 1,
         "wall_ms": 900000,
