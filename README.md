@@ -361,13 +361,15 @@ published rule — exact, comparison-phrase, and date matches score 1.0, and
 numeric answers earn graded credit of 0.75^|error| — so the mean score is
 graded, not plain accuracy.
 
-Read the table conservatively. This is one repetition of 50 tasks per arm,
-and a paired bootstrap over the per-task scores in the committed artifacts
-does not separate the three mean scores at 95% confidence. What this run
-supports is the paper's cost thesis, not a quality ranking: the droste
-configuration matched the stronger direct model's score — nominally highest
-of the three arms — at about 2.6× lower measured cost and fewer total
-tokens. Run-to-run variation comes from provider sampling (temperature is
+droste-terra-luna scored highest of the three arms — 0.6432, against 0.6020
+for direct-sol and 0.5668 for direct-terra — while costing about 2.6× less
+than the stronger direct baseline and using fewer total tokens. With one
+50-task repetition, a paired bootstrap over the per-task scores in the
+committed artifacts does not separate the three mean scores at 95%
+confidence, so treat the score ranking as this run's observed result rather
+than a statistically established ranking; the cost figure is a direct
+measurement, not a sampled statistic, and isn't subject to that caveat.
+Run-to-run variation comes from provider sampling (temperature is
 not pinned; the endpoint default applies), from possible server-side model
 changes behind pinned model ids, and from trajectory variance in the droste
 arm. Per-arm prompts are fixed harness prompts committed in
