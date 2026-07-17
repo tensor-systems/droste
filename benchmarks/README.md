@@ -277,3 +277,22 @@ has no skipped status).
 The machine-readable contracts are `schemas/suite-manifest-v1.schema.json` and
 `schemas/run-artifact-v1.schema.json`. Runtime validation in `models.py`
 remains the fail-fast source of truth used by the tooling.
+
+## Structured semantic guidance: exact replay
+
+`llm_batch_json` semantic evidence includes the validator object's identity. If generated
+benchmark code recreates a validator after an incomplete batch, the new call cannot clear the
+old unresolved request even when its prompts and schema look identical. Repeated outer-loop
+cell rewrites then accumulate unresolved requests until the policy reports that exact replay
+cannot fit the remaining subcall budget. See
+[droste#167](https://github.com/tensor-systems/droste/issues/167) for the engine-level
+mechanism.
+
+Benchmark-specific guidance that uses a validator must therefore put all one-time request
+construction behind a persistent-globals guard, including chunks, prompts, contexts, schema,
+validator, result slots, and attempt counters. It must handle incomplete results with a bounded
+in-cell loop that replays the complete exact request using those same objects. Never rebuild the
+validator and never retry only the failing subset as a new structured batch. State the full
+worst-case arithmetic, including internal repair calls, and keep it below the arm's subcall
+limit. If the bounded replay still fails, retain it as a typed benchmark failure rather than
+aggregating partial values.

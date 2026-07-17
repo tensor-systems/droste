@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -10,6 +11,7 @@ import pytest
 
 from benchmarks.cli import main as benchmark_main
 from benchmarks.live import (
+    _OOLONG_PAIRS_GUIDANCE,
     _OOLONG_SEMANTIC_GUIDANCE,
     _SNIAH_GUIDANCE,
     ModelPrice,
@@ -439,6 +441,37 @@ def test_sniah_guidance_requires_exact_lexical_retrieval() -> None:
     assert _policy_for_task("s-niah", {}) == (False, _SNIAH_GUIDANCE)
 
 
+def test_oolong_pairs_guidance_uses_bounded_exact_replay_then_local_pairs() -> None:
+    guidance = _OOLONG_PAIRS_GUIDANCE
+    prose = " ".join(guidance.split())
+
+    assert "exactly 787 records for 231 users" in prose
+    assert "if 'oolong_pairs_results' not in globals():" in guidance
+    assert "oolong_pairs_records[start:start + 12]" in guidance
+    assert "oolong_pairs_chunk_prompts[start:start + 20]" in guidance
+    assert "oolong_pairs_make_validator" in guidance
+    assert "mapping every displayed" in guidance
+    assert "record number to one A/D/E/H/L/N code" in prose
+    assert "set(labels) != expected_keys" in guidance
+    assert "expected one numbered allowed label per record" in guidance
+    assert "oolong_pairs_attempts[batch_index] < 2" in guidance
+    assert "max_repair_attempts=0" in guidance
+    assert "same prompts list" in prose
+    assert "Never retry only the failed prompt indices" in prose
+    assert "66 x 2 = 132 subcalls" in prose
+    assert "leaving 18 of the arm's 150-call limit" in prose
+    assert "all date constraints" in prose
+    assert "vacuously true" in prose
+    assert "asymmetric predicates accept either role assignment" in prose
+    assert "answer['content'] = '\\n'.join" in guidance
+    assert "do not print it" in guidance
+    assert "set-builder notation" in guidance
+    for index, code in enumerate(
+        re.findall(r"```python\n(.*?)```", guidance, flags=re.DOTALL), start=1
+    ):
+        compile(code, f"<oolong-pairs-guidance-{index}>", "exec")
+
+
 def test_direct_late_failure_preserves_accounted_usage_and_cost(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -483,6 +516,42 @@ def test_paid_failure_preserves_typed_timeout_status() -> None:
 
     assert _status_for_exception(failure) == "timeout"
     assert failure.usage.root_input_tokens == 10
+
+
+def test_http_504_is_a_typed_error_retained_in_the_score_denominator() -> None:
+    assert _status_for_exception(RuntimeError("root llm failed with HTTP 504")) == "error"
+
+    common = {
+        "suite_id": "suite",
+        "suite_version": "1",
+        "manifest_sha256": "a" * 64,
+        "benchmark_id": "benchmark",
+        "arm_id": "arm",
+        "metric": "exact_match",
+        "reference": "answer",
+    }
+    artifacts = (
+        RunArtifact(
+            **common,
+            task_id="failed",
+            status="error",
+            score=None,
+            prediction=None,
+            error="root llm failed with HTTP 504",
+        ),
+        RunArtifact(
+            **common,
+            task_id="passed",
+            status="ok",
+            score=1.0,
+            prediction="answer",
+        ),
+    )
+
+    row = aggregate(artifacts)[0]
+    assert row.attempted == 2
+    assert row.successful == 1
+    assert row.mean_score == 0.5
 
 
 def test_context_path_is_relative_to_selected_benchmark(tmp_path: Path) -> None:
