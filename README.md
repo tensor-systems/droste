@@ -13,19 +13,6 @@ through a sandboxed Python REPL. The model writes programs over that data and
 delegates bounded semantic judgments through `llm_query` and
 `llm_query_batched`.
 
-## Not a general-purpose agent
-
-General coding and tool agents choose actions across open-ended tasks. When
-they retrieve material, the observations return through the model's
-conversation context. Droste has a narrower job: run model-written programs
-over a corpus, use Python or SQL for exact computation, and send only selected
-semantic work to model subcalls. Its program may print excerpts into context,
-but the full corpus does not have to pass through the context window.
-
-This separation keeps the mechanism explicit: code locates and aggregates;
-subcalls interpret bounded inputs; the root model assembles the answer within
-configured iteration, subcall, and output limits.
-
 ```bash
 uvx droste "which customer had a failed charge, and why?" server.log
 uvx droste "which plan has the highest refund rate vs its MRR?" shop.db
@@ -57,38 +44,50 @@ introspects your schema, writes read-only SQL, and computes over the rows;
 in the demo above it noticed the free plan makes refund-rate-vs-MRR
 undefined and answered for the paid plans instead.
 
-## Why this structure
+## How it works
 
 Mechanical work stays mechanical: regex and SQL find *where*, model subcalls
-interpret *what*, and code combines the results. The root can inspect the
-shape of the corpus, narrow it without model calls, and fan out only when a
-step requires semantic judgment.
+interpret *what*, and code combines the results. The root model can inspect
+the shape of the corpus, narrow it without model calls, and fan out only when
+a step requires semantic judgment.
+
+This is a different data path from a general coding or tool agent. Agents
+choose actions across open-ended tasks, and every observation they make —
+file reads, search results, subagent reports — returns through the model's
+conversation context. Droste has a narrower job: the corpus lives as a
+variable in the REPL, the model sees only what its code chooses to print, and
+selected slices go to bounded subcalls instead of accumulating in the
+transcript. Code locates and aggregates; subcalls interpret bounded inputs;
+the root model assembles the answer.
 
 Execution is bounded by explicit iteration, subcall, and output limits. Root
 and subcall models can be configured independently. These controls make the
 work observable and limitable; they are not a promise of a particular answer
 quality, latency, or price, which depend on the data, models, and endpoint.
 
-## Reproducible evidence
+## When to reach for it
 
-The repository ships a [versioned benchmark harness](benchmarks/README.md),
-immutable per-task artifact schemas, deterministic scorers, and report
-generation. A zero-cost smoke run checks the artifact and reporting path
-without making network calls:
+Each of these follows from the mechanism above, not from benchmark claims:
 
-```bash
-output="$(mktemp -d)/droste-benchmark-smoke"
-uv run python -m benchmarks smoke --output "$output"
-```
+- **Exact answers over large mechanical data.** Counts, aggregates, and joins
+  over logs, exports, or SQLite — where attention over thousands of lines
+  approximates, but `len()` and `GROUP BY` do not.
+- **Semantic judgment at scale.** "Classify/judge each of these N records":
+  code selects the slices, `llm_query_batched` fans out bounded subcalls,
+  and code tallies the results. The corpus never transits the root model's
+  context window.
+- **Mixed questions.** Answers that need exact computation *and* actual
+  reading — "which plan has the highest refund rate, and what do those
+  customers complain about?" — the case neither pure SQL nor pure
+  long-context reading handles alone.
+- **Embedding a bounded question-answering primitive.** Product features that
+  answer questions over user data behind hard compute budgets and audit
+  traces, with no open-ended tool surface. See [Embed it](#embed-it).
 
-The smoke run validates the machinery, not model quality. Today the
-[suite manifest](benchmarks/manifests/rlm-paper-v1.json) has one ready dataset:
-a pinned 50-task, 131K-token OOLONG slice that must be materialized from its
-public source. Its live arms remain blocked until a public model configuration
-and immutable results are published; the other named benchmark families remain
-`planned`. This README therefore does not present score, cost, or latency
-numbers as reproducible results. Publishing the configuration, artifacts, and
-reports is tracked in [#81](https://github.com/tensor-systems/droste/issues/81).
+When the data fits comfortably in a context window, or the task is
+open-ended multi-step work rather than a question with an answer, use a
+general agent — droste is deliberately not one. Three worked starting points
+live in [docs/recipes.md](docs/recipes.md) (logs, chat archives, SQLite).
 
 ## Use it
 
@@ -132,19 +131,6 @@ scripting; `--verbose` streams one-line progress to stderr (watch it think);
 output with per-iteration sub-call counts and answer state, LLM responses,
 execution errors. Exit code 0 means a confirmed (or extracted-with-note)
 answer.
-
-The strict [Trace ABI v2](docs/trace-abi.md) gives every event one run identity,
-sequence, timestamp, and retention class, then returns a policy-resolved
-terminal record for host-owned local persistence. A trajectory-free canonical
-result is always delivered live before the content-free terminal event; full
-trajectory replay is emitted only under explicit retention. Retaining replay
-content and authorizing training use are separate, default-denied decisions;
-training also requires an auditable authorization reference and purpose. The
-wheel includes the exact cross-runtime conformance corpus for embedders; see
-the Trace ABI guide instead of reproducing its schema.
-
-Three worked starting points live in [docs/recipes.md](docs/recipes.md)
-(logs, chat archives, SQLite).
 
 Droste is the open execution engine. Compatible hosted gateways and control
 planes can add authentication, server-enforced policy and cost limits, and
@@ -246,37 +232,17 @@ flowchart LR
     Subcalls --> SubcallAPI[Host /rlm/subcall]
 ```
 
-**Runner Inputs**
-- `protocol_version`: **required** on every request (currently `6`) — a
-  missing or mismatched version gets a structured refusal, so hosts detect
-  incompatibility instead of failing on a missing field. See
-  [docs/architecture.md](docs/architecture.md) for the compatibility rules and
-  [UPGRADING.md](UPGRADING.md) for per-release embedder migration notes.
-- `budget`: **required** complete six-field compute authorization object.
-- `subcall_concurrency`: optional positive batch limit (default: `5`), recorded
-  in the returned scaffold manifest.
-- `root_reasoning_effort`: optional non-empty root inference control. The runner
-  sends this exact value on every root callback and records it in
-  `scaffold_manifest.inference.root_sampling`.
-- `operation`: `run` (default) or `preflight`; preflight resolves and checks the
-  content-free scaffold without model/provider calls or endpoint credentials.
-- `root_endpoint` + `subcall_endpoint` + `token`: required for HTTP-backed runs.
-- `adapter_module`: optional Python module path to override the runner entirely.
-
-Once a current-protocol process request selects `run` or `preflight`, worker
-exception envelopes retain that operation alongside the structured error.
-Version refusals keep `operation: null` because operation semantics cannot be
-trusted until the protocol gate succeeds. Trusted in-process `run(...)` calls
-continue to raise ordinary Python exceptions.
-Process hosts that inject a custom `ProviderCatalog` should call
-`run_worker_request(...)`; it owns version gating, operation resolution, and
-operation-specific exception shaping once, and returns a typed `WorkerOutcome`.
+Every request must carry `protocol_version` (currently `6`) and a complete
+`budget` object; a missing or mismatched version gets a structured refusal, so
+hosts detect incompatibility instead of failing on a missing field. The full
+request contract — endpoints, operations, refusal envelopes, and compatibility
+rules — lives in [docs/architecture.md](docs/architecture.md) ("The runner
+protocol"), with per-release embedder migration notes in
+[UPGRADING.md](UPGRADING.md).
 
 ### Core concepts
 
-#### Protocols
-
-Implement these to integrate with your infrastructure:
+Implement these protocols to integrate with your infrastructure:
 
 - **`RLMEnvironment`** - Sandboxed Python REPL with data access
 - **`LLMClient`** - Chat completion interface for the root LLM
@@ -287,36 +253,25 @@ Implement these to integrate with your infrastructure:
   reported to the root model as having an unknown limit.
 - **`ProviderManifest`** - Immutable data-operation metadata
 
-#### Providers are descriptor-driven
+Data access is descriptor-driven: a reusable `ProviderManifest` declares each
+provider's operations, schemas, and pagination; a host binds it with its own
+side-effect classifications and policy through an explicit `ProviderCatalog`.
+The bundled local providers are SQLite and `filesystem_text` (bounded
+`list_files`, `read`, literal `grep`, index-free `search`, and `stat` over an
+explicitly configured directory). Trusted hosts may also acquire MCP servers
+as the same provider abstraction; generated code still receives only
+descriptor-generated broker bindings. See
+[Provider manifests](docs/provider-manifests.md) for the value model and
+ownership boundaries, plus the [local stdio](docs/mcp-stdio.md) and
+[Streamable HTTP](docs/mcp-http.md) MCP transport contracts.
 
-Droste has no universal data verb table. A reusable `ProviderManifest`
-declares each provider's stable raw operation ID, Python binding name,
-description, parameter/result schemas with dialect and provenance, pagination,
-delivery mode, and budget class. A host combines the manifest with its own
-authoritative side-effect classifications and policy metadata in a
-`ProviderRegistration`, then binds named `ConfiguredSource` values through an
-explicit `ProviderCatalog`.
+Every run emits a strict, versioned structured event stream — the
+[Trace ABI](docs/trace-abi.md) gives each event one run identity, sequence,
+and retention class. Retaining replay content and authorizing training use
+are separate, default-denied decisions. The wheel includes the exact
+cross-runtime conformance corpus for embedders.
 
-The resulting immutable per-run descriptors generate the prompt, Python
-bindings, policy accessor inventory, and broker allowlist. Provider metadata
-can evolve without changing `CapabilityId`; raw operation IDs remain separate
-from Python names. The bridge transports manifests and operation calls but not
-authoritative effects or policy, which the receiving host must supply.
-See [Provider manifests](docs/provider-manifests.md) for the value model,
-ownership boundaries, bridge contract, and migration example.
-
-The bundled local providers are SQLite and `filesystem_text`. The latter offers
-bounded `list_files`, `read`, literal `grep`, index-free `search`, and `stat`
-over an explicitly configured directory, with typed evidence and authenticated,
-self-contained cursor continuation. It is strict UTF-8, never follows symlinks, and fails
-closed on platforms without secure componentwise POSIX path primitives. See the
-[local filesystem provider contract](docs/provider-manifests.md#local-filesystemtext-provider).
-Trusted hosts may also acquire MCP servers as the same provider abstraction;
-generated code still receives only descriptor-generated broker bindings. See
-the [local stdio](docs/mcp-stdio.md) and production
-[Streamable HTTP](docs/mcp-http.md) transport contracts.
-
-#### Configuration
+### Configuration
 
 ```python
 RLMConfig(
@@ -348,7 +303,7 @@ incomplete `llm_batch_json` result blocks confirmation. Only an error-free
 repeat with the exact prompts, contexts, schema, and validator object resolves
 that partial evidence. Omit the hint to retain purely prompt-driven behavior.
 
-#### Result
+### Result
 
 ```python
 RLMResult(
@@ -363,6 +318,27 @@ RLMResult(
     prompt_pack=...,        # Frozen resolved pack identity + provenance
 )
 ```
+
+## Benchmarks (in progress)
+
+The repository ships a [versioned benchmark harness](benchmarks/README.md),
+immutable per-task artifact schemas, deterministic scorers, and report
+generation. A zero-cost smoke run checks the artifact and reporting path
+without making network calls:
+
+```bash
+output="$(mktemp -d)/droste-benchmark-smoke"
+uv run python -m benchmarks smoke --output "$output"
+```
+
+The smoke run validates the machinery, not model quality. Today the
+[suite manifest](benchmarks/manifests/rlm-paper-v1.json) has one ready dataset:
+a pinned 50-task, 131K-token OOLONG slice that must be materialized from its
+public source. Publishing the public model configuration, immutable live
+artifacts, and reports is in progress
+([#81](https://github.com/tensor-systems/droste/issues/81)); until those land,
+this README presents no score, cost, or latency numbers as reproducible
+results.
 
 ## Development
 
