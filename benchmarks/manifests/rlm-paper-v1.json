@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite_id": "rlm-paper",
-  "suite_version": "0.2.0",
+  "suite_version": "0.2.1",
   "paper": {
     "title": "Recursive Language Models",
     "revision": "arXiv:2512.24601v3",
@@ -84,7 +84,7 @@
       },
       "limits": {
         "tokens": 500000,
-        "subcalls": 50,
+        "subcalls": 150,
         "depth": 1,
         "wall_ms": 900000,
         "root_output_tokens": 16384,
