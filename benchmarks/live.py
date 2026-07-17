@@ -55,6 +55,9 @@ _OOLONG_SEMANTIC_GUIDANCE = (
     "label string grow with the input size. Construct the chunks, "
     "schema, prompts, validator, and initial result exactly once so cell re-execution reuses "
     "the same objects:\n"
+    # Structured-batch evidence tracks validator object identity (see #167), so
+    # redefining it cannot clear prior evidence. This guard and the bounded exact-replay
+    # loop preserve the same objects across cell re-execution.
     "if 'oolong_result' not in globals():\n"
     "    oolong_chunk_size = min(100, max(1, len(records)))\n"
     "    oolong_chunks = [\n"
