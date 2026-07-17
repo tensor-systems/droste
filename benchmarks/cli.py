@@ -8,6 +8,7 @@ from .live import run_modelrelay_suite
 from .longbench_codeqa import materialize_longbench_codeqa
 from .models import load_manifest
 from .oolong import materialize_oolong
+from .oolong_pairs import materialize_oolong_pairs
 from .report import aggregate, load_artifacts, render_markdown, summary_dict
 from .runner import run_fixture_suite
 from .sniah import (
@@ -51,6 +52,12 @@ def _parser() -> argparse.ArgumentParser:
         help="materialize the pinned LongBench-v2 CodeQA 20-task cost-bounded subsample",
     )
     materialize_codeqa.add_argument("--output", type=Path, required=True)
+
+    materialize_pairs = commands.add_parser(
+        "materialize-oolong-pairs",
+        help="materialize the 20 OOLONG-Pairs tasks against the pinned 131K context",
+    )
+    materialize_pairs.add_argument("--output", type=Path, required=True)
 
     run = commands.add_parser("run", help="run selected live ModelRelay benchmark arms")
     run.add_argument("manifest", type=Path)
@@ -108,6 +115,13 @@ def main(argv: list[str] | None = None) -> int:
         result = materialize_longbench_codeqa(args.output)
         print(
             f"materialized {result.task_count} tasks and {result.context_count} contexts; "
+            f"tasks SHA-256: {result.tasks_sha256}"
+        )
+        return 0
+    if args.command == "materialize-oolong-pairs":
+        result = materialize_oolong_pairs(args.output)
+        print(
+            f"materialized {result.task_count} tasks and {result.context_count} context; "
             f"tasks SHA-256: {result.tasks_sha256}"
         )
         return 0

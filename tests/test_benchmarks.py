@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -24,9 +25,17 @@ from benchmarks.live import (
 from benchmarks.longbench_codeqa import materialize_longbench_codeqa
 from benchmarks.models import ArtifactError, ManifestError, RunArtifact, Usage, load_manifest
 from benchmarks.oolong import materialize_oolong
+from benchmarks.oolong_pairs import TASKS as OOLONG_PAIR_TASKS
+from benchmarks.oolong_pairs import evaluate_predicate, parse_labeled_context
 from benchmarks.report import ReportError, aggregate, load_artifacts, render_markdown
 from benchmarks.runner import BenchmarkRunError, run_fixture_suite
-from benchmarks.scoring import exact_match, numeric_score, oolong_official, token_f1
+from benchmarks.scoring import (
+    exact_match,
+    numeric_score,
+    oolong_official,
+    oolong_pairs_f1,
+    token_f1,
+)
 from benchmarks.sniah import (
     NOISE_SENTENCE,
     RULER_COMMIT,
@@ -87,6 +96,14 @@ def test_manifest_pins_paper_tasks_and_published_live_arms() -> None:
     assert codeqa.scorer == "exact_match"
     assert codeqa.tasks_sha256 == (
         "d796fbcf741fbfc516903afd929e1e5aa6e64ded85445acbf950e638303ab5f5"
+    )
+    oolong_pairs = next(
+        item for item in manifest.benchmarks if item.benchmark_id == "oolong-pairs"
+    )
+    assert oolong_pairs.status == "ready"
+    assert oolong_pairs.scorer == "oolong_pairs_f1"
+    assert oolong_pairs.tasks_sha256 == (
+        "169a2aaddc8603128f672d32f9aa8a2e0565974d91b6468b7431654dd81bde40"
     )
 
 
@@ -210,6 +227,76 @@ def test_oolong_official_scorer(prediction: object, reference: object, expected:
 def test_oolong_official_rejects_incomplete_reference() -> None:
     with pytest.raises(ValueError, match="answer and answer_type"):
         oolong_official("Answer: 1", {"answer": "[1]"})
+
+
+def test_oolong_pairs_f1_parses_normalizes_and_deduplicates_pairs() -> None:
+    prediction = "(2,1)\n(1, 2)\n (3,4)\nmalformed (5; 6)\n(8, 9)"
+    reference = [[1, 2], [3, 4], [6, 7]]
+
+    assert oolong_pairs_f1(prediction, reference) == pytest.approx(2 / 3)
+
+
+def test_oolong_pairs_f1_defines_empty_set_edges() -> None:
+    assert oolong_pairs_f1("no pairs", []) == 1.0
+    assert oolong_pairs_f1("no pairs", [[1, 2]]) == 0.0
+    assert oolong_pairs_f1("(1, 2)", []) == 0.0
+
+
+def test_oolong_pairs_f1_rejects_malformed_reference() -> None:
+    with pytest.raises(ValueError, match="pair 0 must contain two integers"):
+        oolong_pairs_f1("(1, 2)", [[1, "2"]])
+
+
+def test_oolong_pairs_predicates_cover_recorded_semantics() -> None:
+    task_by_id = {task.task_id: task for task in OOLONG_PAIR_TASKS}
+
+    assert evaluate_predicate(
+        task_by_id[1],
+        [("numeric value", date(2024, 1, 1))],
+        [("location", date(2024, 1, 2))],
+    )
+
+    exact_entity_user = [("entity", date(2024, 1, 1))]
+    entity_and_abbreviation_user = [
+        ("entity", date(2024, 1, 1)),
+        ("entity", date(2024, 1, 2)),
+        ("abbreviation", date(2024, 1, 3)),
+    ]
+    assert evaluate_predicate(task_by_id[11], exact_entity_user, entity_and_abbreviation_user)
+    assert not evaluate_predicate(
+        task_by_id[11], entity_and_abbreviation_user, entity_and_abbreviation_user
+    )
+
+    human_after_cutoff = [("human being", date(2023, 1, 7))]
+    location_with_no_human = [("location", date(2022, 1, 1))]
+    assert evaluate_predicate(task_by_id[4], human_after_cutoff, location_with_no_human)
+    assert not evaluate_predicate(
+        task_by_id[4],
+        [("human being", date(2023, 1, 6))],
+        location_with_no_human,
+    )
+
+
+def test_oolong_pairs_task_structure_and_labeled_context_parser() -> None:
+    assert [task.task_id for task in OOLONG_PAIR_TASKS] == list(range(1, 21))
+    assert {task.task_id for task in OOLONG_PAIR_TASKS if task.role_a.dates} == {4, 5, 7, 9, 10}
+    parsed = parse_labeled_context(
+        "Header\n\n"
+        "Date: Sep 06, 2023 || User: 14512 || Instance: What is a tonne ? "
+        "|| Label: description and abstract concept\n"
+        "Date: Jan 14, 2024 || User: 14512 || Instance: Who was it? "
+        "|| Label: human being\n"
+        "Date: Jun 21, 2023 || User: 16295 || Instance: Where is it? "
+        "|| Label: location\n"
+    )
+
+    assert parsed == {
+        14512: [
+            ("description and abstract concept", date(2023, 9, 6)),
+            ("human being", date(2024, 1, 14)),
+        ],
+        16295: [("location", date(2023, 6, 21))],
+    }
 
 
 def test_live_cost_uses_integer_microusd_and_snapshotted_fee() -> None:

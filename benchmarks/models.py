@@ -10,11 +10,13 @@ from typing import Any, Literal, TypeAlias, cast
 
 SCHEMA_VERSION = 1
 
-ScorerKind: TypeAlias = Literal["exact_match", "numeric", "token_f1", "oolong_official"]
+ScorerKind: TypeAlias = Literal[
+    "exact_match", "numeric", "token_f1", "oolong_official", "oolong_pairs_f1"
+]
 ExecutorKind: TypeAlias = Literal["fixture", "modelrelay", "blocked"]
 RunStatus: TypeAlias = Literal["ok", "error", "timeout", "context_limit", "refusal"]
 
-_SCORERS = frozenset({"exact_match", "numeric", "token_f1", "oolong_official"})
+_SCORERS = frozenset({"exact_match", "numeric", "token_f1", "oolong_official", "oolong_pairs_f1"})
 _EXECUTORS = frozenset({"fixture", "modelrelay", "blocked"})
 _METHODS = frozenset({"droste", "direct-model", "fixture"})
 _STATUSES = frozenset({"ok", "error", "timeout", "context_limit", "refusal"})
