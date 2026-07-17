@@ -729,9 +729,42 @@ def _status_for_exception(exc: Exception) -> RunStatus:
         return "timeout"
     if "context" in text and ("limit" in text or "window" in text or "length" in text):
         return "context_limit"
+    if _is_modelrelay_oversized_payload_error(exc):
+        return "context_limit"
     if "refusal" in text or "refused" in text or "safety" in text:
         return "refusal"
     return "error"
+
+
+def _is_modelrelay_oversized_payload_error(exc: Exception) -> bool:
+    """Recognize ModelRelay's pre-transport rejection of an oversized request."""
+
+    decoder = json.JSONDecoder()
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current)
+        for offset, character in enumerate(message):
+            if character != "{":
+                continue
+            try:
+                payload, _ = decoder.raw_decode(message[offset:])
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if (
+                payload.get("layer") == "request"
+                and payload.get("cause") == "validation"
+                and payload.get("status_code") == 400
+                and payload.get("code") == "INVALID_INPUT"
+                and payload.get("message") == "invalid payload"
+                and payload.get("retryable") is False
+            ):
+                return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _policy_for_task(benchmark_id: str, task: dict[str, Any]) -> tuple[bool, str]:

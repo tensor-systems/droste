@@ -632,6 +632,43 @@ def test_http_504_is_a_typed_error_retained_in_the_score_denominator() -> None:
     assert row.mean_score == 0.5
 
 
+def test_direct_oversized_request_is_classified_as_context_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import benchmarks.live as live
+
+    manifest = load_manifest(PAPER_MANIFEST)
+    arm = next(item for item in manifest.arms if item.method == "direct-model")
+
+    class OversizedRequestClient:
+        def __init__(self, **kwargs: object) -> None:
+            self.total_usage = TokenUsage(0, 0, 0)
+
+        def responses_create(self, *args: object, **kwargs: object) -> str:
+            raise RuntimeError(
+                'root llm failed with HTTP 400: {"error":"api_error",'
+                '"request_id":"request-test","layer":"request","cause":"validation",'
+                '"status_code":400,"code":"INVALID_INPUT","message":"invalid payload",'
+                '"retryable":false}'
+            )
+
+    monkeypatch.setattr(live, "ModelRelayClient", OversizedRequestClient)
+
+    with pytest.raises(_LiveRunFailure) as caught:
+        _direct_run(
+            {"question": "question"},
+            "oversized context",
+            arm,
+            "opaque-test-key",
+            "https://example.invalid",
+        )
+
+    failure = caught.value
+    assert failure.status == "context_limit"
+    assert failure.usage == Usage()
+    assert _status_for_exception(failure) == "context_limit"
+
+
 def test_context_path_is_relative_to_selected_benchmark(tmp_path: Path) -> None:
     benchmark_root = tmp_path / "benchmarks"
     manifest_path = benchmark_root / "manifests" / "suite.json"
