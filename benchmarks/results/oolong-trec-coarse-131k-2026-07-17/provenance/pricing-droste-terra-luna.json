@@ -1,0 +1,19 @@
+{
+  "models": [
+    {
+      "input_cost_per_million_cents": 100,
+      "model_id": "gpt-5.6-luna",
+      "output_cost_per_million_cents": 600,
+      "provider": "openai"
+    },
+    {
+      "input_cost_per_million_cents": 250,
+      "model_id": "gpt-5.6-terra",
+      "output_cost_per_million_cents": 1500,
+      "provider": "openai"
+    }
+  ],
+  "platform_fee_percent": 0,
+  "price_table_version": "modelrelay-pricing-sha256:3c92ae36dcb9e498e885d213e9029e82132f00235da1c4b46b919e5e23aed61b",
+  "source": "https://api.modelrelay.ai/api/v1/pricing"
+}

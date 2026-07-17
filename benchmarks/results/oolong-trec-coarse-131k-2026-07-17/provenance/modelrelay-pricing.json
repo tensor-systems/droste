@@ -26,17 +26,17 @@
   "authoritative_snapshots": [
     {
       "arm_id": "direct-sol",
-      "path": "../../rlm-paper-v1-oolong-2026-07-17-direct-sol/_provenance/modelrelay-pricing.json",
+      "path": "pricing-direct-sol.json",
       "price_table_version": "modelrelay-pricing-sha256:cb03c5390d3bcc5233d080b9067b08896b250349c0ad084169e3534fcfc8e34c"
     },
     {
       "arm_id": "direct-terra",
-      "path": "../../rlm-paper-v1-oolong-2026-07-17-direct-terra/_provenance/modelrelay-pricing.json",
+      "path": "pricing-direct-terra.json",
       "price_table_version": "modelrelay-pricing-sha256:ceefd1c2eb37f66cde04cf07beeb958f7b0254914b3a19c107bb65ec87bb2d28"
     },
     {
       "arm_id": "droste-terra-luna",
-      "path": "../../rlm-paper-v1-oolong-2026-07-17-droste-terra-luna/_provenance/modelrelay-pricing.json",
+      "path": "pricing-droste-terra-luna.json",
       "price_table_version": "modelrelay-pricing-sha256:3c92ae36dcb9e498e885d213e9029e82132f00235da1c4b46b919e5e23aed61b"
     }
   ]
