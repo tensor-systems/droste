@@ -58,6 +58,52 @@ The `oolong_official` scorer implements the benchmark's published synth
 evaluation: exact parsed answers, comparison-phrase matching, date matching,
 and graded numeric credit of `0.75 ** absolute_error`.
 
+## Deterministic RULER S-NIAH data
+
+Materialize the 50-task, 32,768-token noise S-NIAH configuration:
+
+```bash
+uv run python -m benchmarks materialize-sniah \
+  --output benchmarks/.data/sniah-noise-words-32768-50-v1
+```
+
+This materializer performs no network or filesystem input. Top-level seed `42`
+deterministically derives one recorded seed per task; each task draws an
+adjective-noun key and value, repeats the fixed RULER noise sentence to the
+largest count that fits the token budget, and inserts the needle at a uniformly
+sampled noise-unit index. The generated `tasks.json` records the full context,
+question and answer prefix, expected value, key/value, insertion index and
+fractional depth, seed, token accounting, and provenance. Matching immutable
+context files support the existing live runner. Existing files are never
+overwritten.
+
+The algorithm is an independent implementation of Hsieh et al. (2024),
+[RULER: What's the Real Context Size of Your Long-Context Language
+Models?](https://arxiv.org/abs/2404.06654), checked against NVIDIA/RULER commit
+[`38da79d79519ef87aa46ae804f838e1eab7f86d7`](https://github.com/NVIDIA/RULER/tree/38da79d79519ef87aa46ae804f838e1eab7f86d7).
+At that commit, `niah.py` has SHA-256
+`e9cada0a7660d274fe73a1338a90a7087e17b630169f1aaf14a8d3221c6805b5`
+and `constants.py` has SHA-256
+`6296e901d495ec6200dc3f68993ea13d8282e3c0dbe1a8c47967f111105d1fde`.
+The source repository is
+[Apache-2.0 licensed](https://github.com/NVIDIA/RULER/blob/38da79d79519ef87aa46ae804f838e1eab7f86d7/LICENSE).
+Droste fetches or redistributes no RULER corpus or generated examples; the
+license check establishes the provenance of the reproduced published
+algorithm and prompt methodology.
+
+RULER accepts a caller-selected tokenizer and uses `wonderwords` adjective and
+noun files. To make regeneration offline and dependency-free, generator v1
+instead pins the in-repo word bank and `wordpunct-newline-v1` token counter.
+The split names both choices. The RLM paper v3 specifies 50 S-NIAH tasks that
+retrieve a phrase or number, but does not disambiguate its exact key/value
+configuration. This arm therefore chooses word-pair keys and values as the
+paper's phrase-shaped case. It reserves 128 output tokens and 256 model-template
+tokens inside the 32,768-token budget.
+
+The `exact_match` scorer accepts a normalized bare word-pair. The task includes
+RULER's answer prefix in the live question to request that clean value; prose
+around the value intentionally does not receive exact-match credit.
+
 ## RLM paper suite
 
 `manifests/rlm-paper-v1.json` pins the target paper revision and names the
@@ -65,16 +111,26 @@ paper's S-NIAH, BrowseComp-Plus, OOLONG, OOLONG-Pairs, and LongBench-v2 CodeQA
 task families. TAG-Bench is tracked separately in the same manifest as a
 Droste-specific follow-on rather than being presented as part of the paper.
 
-The OOLONG 131K `trec_coarse` validation slice is `ready` and has published results: immutable artifacts, a price-snapshot provenance record, and regenerated reports live under `results/oolong-trec-coarse-131k-2026-07-17/` ([#81](https://github.com/tensor-systems/droste/issues/81)).
-The other datasets remain `planned`. A planned benchmark cannot be run: it has
-no task path, and a blocked executor cannot silently degrade to a fixture or
-another provider. Dataset adapters promote each benchmark to `ready` only
-after its public source revision, split, integrity checks, and scorer are
-pinned.
+The OOLONG 131K `trec_coarse` validation slice is `ready` and has published
+results: immutable artifacts, a price-snapshot provenance record, and
+regenerated reports live under `results/oolong-trec-coarse-131k-2026-07-17/`
+([#81](https://github.com/tensor-systems/droste/issues/81)). The deterministic
+S-NIAH 32K split is also ready after materialization. Its pilot arms compare direct
+`gpt-5.6-sol`, direct `gpt-5.6-terra`, and Droste with a `gpt-5.6-terra` root
+and `gpt-5.6-luna` subcalls. The other datasets remain `planned`. A planned
+benchmark cannot be run because it has no task path. Dataset adapters promote
+each benchmark to `ready` only after source or generator provenance, split,
+integrity checks, and scorer are pinned.
 
 ## Live runs
 
-The checked-in manifest pins one public live configuration (models, reasoning efforts, budgets, concurrency) for the OOLONG arms. Live runs require a new output directory, refuse to overwrite artifacts, snapshot the endpoint's public price table, and reject additions if that snapshot changes. Published reports regenerate offline from the committed artifacts:
+The checked-in manifest pins public live configurations (models, reasoning
+efforts, budgets, concurrency) for both OOLONG and S-NIAH. Materializing or
+validating the suite makes no model calls. Live runs require an explicit run
+command and a new output directory, refuse to overwrite artifacts, snapshot
+the endpoint's public price table, and reject additions if that snapshot
+changes. The published OOLONG report regenerates offline from the committed
+artifacts:
 
 ```bash
 uv run python -m benchmarks report benchmarks/manifests/rlm-paper-v1.json benchmarks/results/oolong-trec-coarse-131k-2026-07-17/artifacts --json /tmp/regen-check.json --markdown /tmp/regen-check.md

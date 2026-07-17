@@ -9,6 +9,12 @@ from .models import load_manifest
 from .oolong import materialize_oolong
 from .report import aggregate, load_artifacts, render_markdown, summary_dict
 from .runner import run_fixture_suite
+from .sniah import (
+    DEFAULT_CONTEXT_LENGTH,
+    DEFAULT_SEED,
+    DEFAULT_TASK_COUNT,
+    materialize_sniah,
+)
 
 _ROOT = Path(__file__).resolve().parent
 _SMOKE_MANIFEST = _ROOT / "manifests" / "smoke-v1.json"
@@ -28,6 +34,16 @@ def _parser() -> argparse.ArgumentParser:
         "materialize-oolong", help="materialize the pinned public OOLONG 131K task slice"
     )
     materialize.add_argument("--output", type=Path, required=True)
+
+    materialize_sniah_parser = commands.add_parser(
+        "materialize-sniah", help="materialize deterministic noise S-NIAH tasks"
+    )
+    materialize_sniah_parser.add_argument("--output", type=Path, required=True)
+    materialize_sniah_parser.add_argument(
+        "--context-length", type=int, default=DEFAULT_CONTEXT_LENGTH
+    )
+    materialize_sniah_parser.add_argument("--task-count", type=int, default=DEFAULT_TASK_COUNT)
+    materialize_sniah_parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
 
     run = commands.add_parser("run", help="run selected live ModelRelay benchmark arms")
     run.add_argument("manifest", type=Path)
@@ -64,6 +80,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "materialize-oolong":
         result = materialize_oolong(args.output)
+        print(
+            f"materialized {result.task_count} tasks and {result.context_count} contexts; "
+            f"tasks SHA-256: {result.tasks_sha256}"
+        )
+        return 0
+    if args.command == "materialize-sniah":
+        result = materialize_sniah(
+            args.output,
+            context_length=args.context_length,
+            task_count=args.task_count,
+            seed=args.seed,
+        )
         print(
             f"materialized {result.task_count} tasks and {result.context_count} contexts; "
             f"tasks SHA-256: {result.tasks_sha256}"
