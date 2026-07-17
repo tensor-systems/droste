@@ -1,0 +1,35 @@
+{
+  "arm_id": "direct-sol",
+  "benchmark_id": "oolong",
+  "cost_microusd": 482950,
+  "droste_commit": "633954b9f1bc366d9f811c2f11b0ce2c014b1a12",
+  "error": null,
+  "iterations": 1,
+  "manifest_sha256": "edef976a55b2ef35d436d28a25d140f02c736faa30093af753ed8ce7aff82b1c",
+  "metric": "oolong_official",
+  "prediction": "Answer: description and abstract concept is less common than entity",
+  "price_table_version": "modelrelay-pricing-sha256:cb03c5390d3bcc5233d080b9067b08896b250349c0ad084169e3534fcfc8e34c",
+  "provider": "openai",
+  "reference": {
+    "answer": "['less common than']",
+    "answer_type": "ANSWER_TYPE.COMPARISON"
+  },
+  "root_model": "gpt-5.6-sol",
+  "schema_version": 1,
+  "score": 1.0,
+  "started_at": "2026-07-17T20:35:58.157335Z",
+  "status": "ok",
+  "subcall_model": null,
+  "subcalls": 0,
+  "suite_id": "rlm-paper",
+  "suite_version": "0.5.0",
+  "task_id": "17000210",
+  "usage": {
+    "root_input_tokens": 94328,
+    "root_output_tokens": 377,
+    "subcall_input_tokens": 0,
+    "subcall_output_tokens": 0,
+    "total_tokens": 94705
+  },
+  "wall_time_ms": 11081
+}
