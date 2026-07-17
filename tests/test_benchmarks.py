@@ -55,6 +55,14 @@ def test_manifest_pins_paper_tasks_and_enables_published_live_runs() -> None:
     }
     assert manifest.live_run.enabled
     assert not manifest.live_run.blockers
+    assert {arm.arm_id for arm in manifest.arms} == {
+        "direct-sol",
+        "direct-terra",
+        "droste-terra-luna",
+        "direct-sol-pairs",
+        "direct-terra-pairs",
+        "droste-terra-luna-pairs",
+    }
     assert all(arm.executor == "modelrelay" for arm in manifest.arms)
     oolong = next(item for item in manifest.benchmarks if item.benchmark_id == "oolong")
     assert oolong.status == "ready"
