@@ -21,6 +21,7 @@ from benchmarks.live import (
     _policy_for_task,
     _status_for_exception,
 )
+from benchmarks.longbench_codeqa import materialize_longbench_codeqa
 from benchmarks.models import ArtifactError, ManifestError, RunArtifact, Usage, load_manifest
 from benchmarks.oolong import materialize_oolong
 from benchmarks.report import ReportError, aggregate, load_artifacts, render_markdown
@@ -74,6 +75,17 @@ def test_manifest_pins_paper_tasks_and_published_live_arms() -> None:
     oolong = next(item for item in manifest.benchmarks if item.benchmark_id == "oolong")
     assert oolong.status == "ready"
     assert oolong.tasks_sha256 == "28abaefcbcba1d843a384115a1217ea0017201b13074c95de6feb313c40c8da4"
+    codeqa = next(
+        item for item in manifest.benchmarks if item.benchmark_id == "longbench-v2-codeqa"
+    )
+    assert codeqa.dataset == "zai-org/LongBench-v2"
+    assert codeqa.dataset_version == "2b48e494f2c7a2f0af81aae178e05c7e1dde0fe9"
+    assert codeqa.split == "train/domain=Code Repository Understanding"
+    assert codeqa.status == "ready"
+    assert codeqa.scorer == "exact_match"
+    assert codeqa.tasks_sha256 == (
+        "25f2359d3c92f648b35a9fd4189f7af89812288e56c0c88b664c3d031a22a5a5"
+    )
 
 
 def test_manifest_rejects_unknown_fields(tmp_path: Path) -> None:
@@ -135,6 +147,22 @@ def test_scorers_are_deterministic_and_normalized() -> None:
     assert numeric_score(float("nan"), float("nan")) == 0.0
     assert token_f1("alpha alpha gamma", "alpha beta") == pytest.approx(0.4)
     assert token_f1("", "") == 1.0
+
+
+@pytest.mark.parametrize(
+    "prediction",
+    ["A", " a ", "(A)", "A.", "A)", "Answer: A", "answer: (a)"],
+)
+def test_exact_match_accepts_bounded_multiple_choice_variations(prediction: str) -> None:
+    assert exact_match(prediction, "A") == 1.0
+
+
+@pytest.mark.parametrize(
+    "prediction",
+    ["B", "The answer is A", "A because the code says so", "choice A", "alpha"],
+)
+def test_exact_match_rejects_wrong_or_unbounded_multiple_choice_text(prediction: str) -> None:
+    assert exact_match(prediction, "A") == 0.0
 
 
 @pytest.mark.parametrize(
@@ -521,6 +549,103 @@ def test_materialize_sniah_cli_reports_hash(
         == 0
     )
     assert "materialized 2 tasks and 2 contexts; tasks SHA-256:" in capsys.readouterr().out
+
+
+def test_materialize_longbench_codeqa_verifies_and_projects_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import benchmarks.longbench_codeqa as module
+
+    rows = []
+    for position in range(2):
+        rows.append(
+            {
+                "row_idx": 7 + position * 3,
+                "row": {
+                    "_id": f"task-{position}",
+                    "domain": "Code Repository Understanding",
+                    "sub_domain": "Code repo QA",
+                    "difficulty": "easy" if position == 0 else "hard",
+                    "length": "short" if position == 0 else "long",
+                    "question": f"Which behavior is correct for function {position}?",
+                    "choice_A": "first behavior",
+                    "choice_B": "second behavior",
+                    "choice_C": "third behavior",
+                    "choice_D": "fourth behavior",
+                    "answer": "B",
+                    "context": f"repository context {position}",
+                },
+            }
+        )
+    payload = {
+        "num_rows_total": 2,
+        "partial": False,
+        "rows": rows,
+    }
+    monkeypatch.setattr(module, "ROW_COUNT", 2)
+    monkeypatch.setattr(
+        module,
+        "_EXPECTED_FILTERED_ROWS_SHA256",
+        hashlib.sha256(module._encode_json(rows)).hexdigest(),
+    )
+
+    result = materialize_longbench_codeqa(
+        tmp_path / "longbench-codeqa",
+        fetch=lambda: json.dumps(payload).encode(),
+    )
+
+    tasks = json.loads(result.tasks_path.read_text())
+    assert result.task_count == 2
+    assert result.context_count == 2
+    assert result.tasks_sha256 == hashlib.sha256(result.tasks_path.read_bytes()).hexdigest()
+    assert tasks[0]["reference"] == "B"
+    assert tasks[0]["choices"] == {
+        "A": "first behavior",
+        "B": "second behavior",
+        "C": "third behavior",
+        "D": "fourth behavior",
+    }
+    assert tasks[0]["question"].endswith("Answer with exactly one letter: A, B, C, or D.")
+    context_path = result.tasks_path.parent / tasks[0]["context_path"]
+    assert context_path.read_text() == "repository context 0"
+    assert hashlib.sha256(context_path.read_bytes()).hexdigest() == tasks[0]["context_sha256"]
+    with pytest.raises(BenchmarkRunError, match="refusing to overwrite"):
+        materialize_longbench_codeqa(
+            tmp_path / "longbench-codeqa",
+            fetch=lambda: json.dumps(payload).encode(),
+        )
+
+
+def test_materialize_longbench_codeqa_rejects_unverified_rows_before_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import benchmarks.longbench_codeqa as module
+
+    row = {
+        "row_idx": 7,
+        "row": {
+            "_id": "task",
+            "domain": "Code Repository Understanding",
+            "sub_domain": "Code repo QA",
+            "difficulty": "easy",
+            "length": "short",
+            "question": "Question?",
+            "choice_A": "A",
+            "choice_B": "B",
+            "choice_C": "C",
+            "choice_D": "D",
+            "answer": "A",
+            "context": "context",
+        },
+    }
+    payload = {"num_rows_total": 1, "partial": False, "rows": [row]}
+    monkeypatch.setattr(module, "ROW_COUNT", 1)
+    output = tmp_path / "longbench-codeqa"
+
+    with pytest.raises(BenchmarkRunError, match="filtered LongBench-v2 rows have SHA-256"):
+        materialize_longbench_codeqa(output, fetch=lambda: json.dumps(payload).encode())
+
+    assert not output.exists()
 
 
 def test_smoke_suite_writes_artifacts_and_deterministic_report(tmp_path: Path) -> None:

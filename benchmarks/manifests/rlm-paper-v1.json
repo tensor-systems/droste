@@ -54,12 +54,14 @@
     },
     {
       "id": "longbench-v2-codeqa",
-      "dataset": "LongBench-v2",
-      "dataset_version": "pending-pin",
-      "split": "CodeQA",
+      "dataset": "zai-org/LongBench-v2",
+      "dataset_version": "2b48e494f2c7a2f0af81aae178e05c7e1dde0fe9",
+      "split": "train/domain=Code Repository Understanding",
       "scorer": "exact_match",
+      "tasks_path": "../.data/longbench-v2-codeqa-v1/tasks.json",
+      "tasks_sha256": "25f2359d3c92f648b35a9fd4189f7af89812288e56c0c88b664c3d031a22a5a5",
       "phase": 3,
-      "status": "planned"
+      "status": "ready"
     },
     {
       "id": "tag-bench",
