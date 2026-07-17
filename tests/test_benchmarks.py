@@ -71,6 +71,9 @@ def test_manifest_pins_paper_tasks_and_published_live_arms() -> None:
         "direct-sol-sniah",
         "direct-terra-sniah",
         "droste-terra-luna-sniah",
+        "direct-sol-pairs",
+        "direct-terra-pairs",
+        "droste-terra-luna-pairs",
     }
     assert all(arm.executor == "modelrelay" for arm in manifest.arms)
     sniah = next(item for item in manifest.benchmarks if item.benchmark_id == "s-niah")
