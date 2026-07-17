@@ -82,7 +82,9 @@ Each of these follows from the mechanism above, not from benchmark claims:
   long-context reading handles alone.
 - **Embedding a bounded question-answering primitive.** Product features that
   answer questions over user data behind hard compute budgets and audit
-  traces, with no open-ended tool surface. See [Embed it](#embed-it).
+  traces. Generated code gets no open-ended tool selection — only the data
+  bindings the host configures — though execution isolation remains the
+  host's job (see [Embed it](#embed-it)).
 
 When the data fits comfortably in a context window, or the task is
 open-ended multi-step work rather than a question with an answer, use a
@@ -232,13 +234,24 @@ flowchart LR
     Subcalls --> SubcallAPI[Host /rlm/subcall]
 ```
 
-Every request must carry `protocol_version` (currently `6`) and a complete
-`budget` object; a missing or mismatched version gets a structured refusal, so
-hosts detect incompatibility instead of failing on a missing field. The full
-request contract — endpoints, operations, refusal envelopes, and compatibility
-rules — lives in [docs/architecture.md](docs/architecture.md) ("The runner
-protocol"), with per-release embedder migration notes in
-[UPGRADING.md](UPGRADING.md).
+**Runner inputs**
+
+- `protocol_version`: **required** on every request (currently `6`) — a
+  missing or mismatched version gets a structured refusal, so hosts detect
+  incompatibility instead of failing on a missing field.
+- `budget`: **required** complete six-field compute authorization object.
+- `root_endpoint` + `subcall_endpoint` + `token`: required for HTTP-backed
+  runs.
+- `operation`: `run` (default) or `preflight`; preflight resolves and checks
+  the content-free scaffold without model/provider calls or endpoint
+  credentials.
+- Optional: `subcall_concurrency` (default `5`), `root_reasoning_effort`
+  (sent unchanged on every root callback), `adapter_module` (delegate the
+  runner to a custom module's `run(request)`).
+
+Refusal envelopes, operation semantics, and the compatibility window live in
+[docs/architecture.md](docs/architecture.md) ("The runner protocol");
+per-release embedder migration notes are in [UPGRADING.md](UPGRADING.md).
 
 ### Core concepts
 
