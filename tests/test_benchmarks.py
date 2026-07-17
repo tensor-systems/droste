@@ -312,7 +312,9 @@ def test_oolong_semantic_guidance_bounds_auditable_per_record_classification() -
 def test_sniah_guidance_requires_exact_lexical_retrieval() -> None:
     assert "exact adjective-noun key" in _SNIAH_GUIDANCE
     assert "Parse the word-pair after 'is:'" in _SNIAH_GUIDANCE
-    assert "return only that value" in _SNIAH_GUIDANCE
+    assert "return exactly that bare word-pair" in _SNIAH_GUIDANCE
+    assert "no trailing punctuation or period" in _SNIAH_GUIDANCE
+    assert "other extra characters" in _SNIAH_GUIDANCE
     assert "no semantic classification or model subcall is needed" in _SNIAH_GUIDANCE
     assert _policy_for_task("s-niah", {}) == (False, _SNIAH_GUIDANCE)
 

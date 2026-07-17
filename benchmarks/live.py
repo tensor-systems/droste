@@ -45,8 +45,9 @@ _SNIAH_GUIDANCE = (
     "This is a synthetic single-needle retrieval task. Search the supplied text file in Python "
     "for the exact adjective-noun key from the question. The matching line has the form "
     "'One of the special magic words for <key> is: <value>.' Parse the word-pair after 'is:' "
-    "and return only that value, with no explanation or surrounding prose. This is exact lexical "
-    "retrieval; no semantic classification or model subcall is needed."
+    "and return exactly that bare word-pair: no trailing punctuation or period, whitespace, or "
+    "other extra characters. This is exact lexical retrieval; no semantic classification or "
+    "model subcall is needed."
 )
 
 _OOLONG_SEMANTIC_GUIDANCE = (
