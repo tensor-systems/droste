@@ -206,3 +206,184 @@ jobs:
           deno test --allow-run --allow-read --allow-write
           --allow-net=127.0.0.1 --allow-env
           examples/pyodide-host/e2e_test.ts
+
+  # --- Linux lane (GitHub-hosted ubuntu-latest) -----------------------------
+  #
+  # Required-check policy: the jobs below are an independent, non-required
+  # signal. The macOS ARM64 lane above remains the sole authoritative
+  # required lane for branch protection. Promoting these Linux jobs to
+  # required checks is a branch-protection settings change to be made after
+  # the lane has demonstrated stability over time, not part of this change.
+  #
+  # `ruff` and `public-repo hygiene` are intentionally not duplicated here:
+  # both check repository text/content (lint rules, a git-grep secret scan)
+  # and their result does not depend on the OS they run on, so a second
+  # platform adds no signal.
+
+  test-linux:
+    name: pytest (linux, py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest supported and latest stable. Keep the floor honest without
+        # multiplying jobs for every version in between.
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - name: Sync (locked)
+        # Verifiers' upstream pins currently exclude 3.14. Its markers make
+        # this a no-op there while 3.11 exercises the real optional harness.
+        run: uv sync --locked --extra verifiers
+      - name: Verify optional Verifiers policy
+        env:
+          PYTHON_VERSION: ${{ matrix.python }}
+        run: |
+          if [ "$PYTHON_VERSION" = "3.11" ]; then
+            uv run python -c 'import verifiers; import droste_verifiers'
+          else
+            uv run python -c \
+              'import importlib.util; assert importlib.util.find_spec("verifiers") is None'
+          fi
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.0.0
+        if: matrix.python == '3.11'
+        with:
+          node-version: 22.16.0
+      - name: Install pinned MCP reference server
+        if: matrix.python == '3.11'
+        run: npm ci --prefix tests/reference_mcp --ignore-scripts --no-audit --no-fund
+      - name: Tests
+        run: uv run pytest -q
+
+  build-linux:
+    name: package builds (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - name: uv build
+        run: uv build
+      - name: Wheel bundles the relay assets (#33)
+        # An embedder stages the Deno relay from the installed wheel; a wheel
+        # missing the package-data .ts files would only fail at a host's
+        # build time. deps.ts is the single Pyodide pin site.
+        run: |
+          for f in relay.ts event_channel.ts provider_duplex.ts stream.ts broker.ts events.ts offline-probe.ts deps.ts; do
+            unzip -l dist/*.whl | grep -q "droste/substrates/_relay/$f" || {
+              echo "wheel is missing droste/substrates/_relay/$f"; exit 1;
+            }
+          done
+      - name: Wheel bundles and hashes prompt packs (#103)
+        run: |
+          for f in generic-full-v1.toml generic-minimal-v1.toml generic-none-v1.toml; do
+            unzip -l dist/*.whl | grep -q "droste/prompts/packs/$f" || {
+              echo "wheel is missing droste/prompts/packs/$f"; exit 1;
+            }
+          done
+          tmp="$(mktemp -d)"
+          uv venv "$tmp/venv"
+          uv pip install --python "$tmp/venv/bin/python" dist/*.whl
+          "$tmp/venv/bin/python" - "$PWD/src/droste/prompts/packs" <<'PY'
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          from droste.prompts import (
+              load_builtin_prompt_catalog,
+              parse_prompt_pack,
+              prompt_pack_content_sha256,
+          )
+
+          source_dir = Path(sys.argv[1])
+          catalog = load_builtin_prompt_catalog()
+          assert len(catalog.bindings) == 3
+          wheel_packs = {binding.pack.pack_id: binding.pack for binding in catalog.bindings}
+          assert len(wheel_packs) == len(catalog.bindings)
+          filenames = (
+              "generic-full-v1.toml",
+              "generic-minimal-v1.toml",
+              "generic-none-v1.toml",
+          )
+          for filename in filenames:
+              source = parse_prompt_pack(
+                  tomllib.loads((source_dir / filename).read_text(encoding="utf-8")),
+                  source=str(source_dir / filename),
+              )
+              assert prompt_pack_content_sha256(source) == prompt_pack_content_sha256(
+                  wheel_packs[source.pack_id]
+              )
+          PY
+      - name: Distributions bundle the exact event ABI corpus (#144)
+        run: |
+          for f in trace-v2-execution.ndjson trace-v2-lifecycle.ndjson runner-v6-refusal.ndjson; do
+            unzip -l dist/*.whl | grep -q "droste/testing/fixtures/$f" || {
+              echo "wheel is missing droste/testing/fixtures/$f"; exit 1;
+            }
+          done
+          tmp="$(mktemp -d)"
+          uv venv "$tmp/venv"
+          uv pip install --python "$tmp/venv/bin/python" dist/*.whl
+          "$tmp/venv/bin/python" - "$PWD/src/droste/testing/fixtures" <<'PY'
+          import sys
+          from pathlib import Path
+
+          from droste.testing import (
+              runner_v6_refusal_ndjson,
+              trace_v2_execution_ndjson,
+              trace_v2_lifecycle_ndjson,
+          )
+
+          source = Path(sys.argv[1])
+          assert trace_v2_execution_ndjson() == (source / "trace-v2-execution.ndjson").read_bytes()
+          assert trace_v2_lifecycle_ndjson() == (source / "trace-v2-lifecycle.ndjson").read_bytes()
+          assert runner_v6_refusal_ndjson() == (source / "runner-v6-refusal.ndjson").read_bytes()
+          PY
+          sdist_root="$(tar tzf dist/droste-*.tar.gz | sed -n '1s#/.*##p')"
+          tar xzf dist/droste-*.tar.gz -C "$tmp"
+          cmp src/droste/testing/fixtures/trace-v2-lifecycle.ndjson \
+            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v2-lifecycle.ndjson"
+          cmp src/droste/testing/fixtures/trace-v2-execution.ndjson \
+            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v2-execution.ndjson"
+          cmp src/droste/testing/fixtures/runner-v6-refusal.ndjson \
+            "$tmp/$sdist_root/src/droste/testing/fixtures/runner-v6-refusal.ndjson"
+
+  deno-linux:
+    name: deno (linux, pyodide substrate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.x
+      - name: Cache Deno modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # npm:pyodide@0.29.4 is ~50MB of wasm; cache the whole DENO_DIR
+          # keyed on the pinned version (bump the key when the pin moves).
+          # The key already includes runner.os/arch, so this Linux job's
+          # cache entries cannot collide with the macOS lane's.
+          path: ${{ runner.temp }}/deno-cache
+          key: deno-${{ runner.os }}-${{ runner.arch }}-pyodide-0.29.4
+      - name: Substrate tests (unit + real-Pyodide integration)
+        # cdn.jsdelivr.net + write to the deno cache: the npm pyodide package
+        # unvendors stdlib sqlite3; loadPackage("sqlite3") fetches the wheel
+        # from the CDN on first run and writes it inside the pyodide npm dir
+        # (under DENO_DIR, so the cache step above persists it and the e2e
+        # step below reads it from disk with no net or write of its own).
+        env:
+          DENO_DIR: ${{ runner.temp }}/deno-cache
+        run: >-
+          deno test --allow-read --allow-env --allow-ffi
+          --allow-net=cdn.jsdelivr.net --allow-write="$DENO_DIR"
+          pyodide/
+      - name: Relay E2E (spawns the real relay.ts subprocess)
+        env:
+          DENO_DIR: ${{ runner.temp }}/deno-cache
+        run: >-
+          deno test --allow-run --allow-read --allow-write
+          --allow-net=127.0.0.1 --allow-env
+          examples/pyodide-host/e2e_test.ts
