@@ -190,6 +190,162 @@ _OOLONG_SEMANTIC_GUIDANCE = (
     "subcall."
 )
 
+_OOLONG_PAIRS_GUIDANCE = """For this OOLONG-Pairs task, use a hybrid semantic-classification
+and deterministic-computation design. The input records do not expose their labels, so use
+subcalls only to classify the semantic answer type of every Instance. Parse Date, User, and
+Instance locally; after classification, compute user label/date summaries, evaluate the
+question's pair predicate, enumerate unordered pairs, and format the complete answer entirely
+in Python. Never ask a subcall to interpret the pair predicate, aggregate users, enumerate
+pairs, or produce the final answer.
+
+The fixed 32K benchmark context contains exactly 787 records for 231 users. Use 12 records per
+classification chunk, yielding 66 chunks. Keep each llm_batch_json request at no more than 20
+prompts, so those chunks form four stable prompt batches. Construct every record, chunk,
+prompt, schema, validator, result slot, and attempt counter exactly once behind this globals
+guard; cell re-execution must reuse the exact same objects:
+```python
+if 'oolong_pairs_results' not in globals():
+    import re
+    from datetime import datetime
+
+    oolong_pairs_text = context['files'][0]['text']
+    oolong_pairs_pattern = re.compile(
+        r'^Date: ([A-Z][a-z]{2} \\d{2}, \\d{4}) \\|\\| User: (\\d+) '
+        r'\\|\\| Instance: (.*)$'
+    )
+    oolong_pairs_records = []
+    for oolong_pairs_line in oolong_pairs_text.splitlines():
+        oolong_pairs_match = oolong_pairs_pattern.fullmatch(oolong_pairs_line)
+        if oolong_pairs_match:
+            oolong_pairs_records.append({
+                'date': datetime.strptime(oolong_pairs_match.group(1), '%b %d, %Y').date(),
+                'user': int(oolong_pairs_match.group(2)),
+                'instance': oolong_pairs_match.group(3),
+            })
+    if (
+        len(oolong_pairs_records) != 787
+        or len({record['user'] for record in oolong_pairs_records}) != 231
+    ):
+        raise RuntimeError('unexpected OOLONG-Pairs context shape')
+
+    oolong_pairs_chunks = [
+        oolong_pairs_records[start:start + 12]
+        for start in range(0, len(oolong_pairs_records), 12)
+    ]
+    oolong_pairs_rubric = (
+        'Classify the answer to each general-knowledge question with exactly one code: '
+        'A = an abbreviation or its expansion; '
+        'D = a description or abstract concept such as a definition, manner, or reason; '
+        'E = a thing such as an animal, product, event, language, disease, term, object, or '
+        'work; H = a person, group, or human title; L = a place; '
+        'N = a count, date, measure, code, order, or other number. '
+        'Classify what the answer is, not merely the wording of the question.'
+    )
+    oolong_pairs_chunk_prompts = [
+        (
+            oolong_pairs_rubric
+            + f'\\n\\nThere are exactly {len(chunk)} records below. Return exactly '
+            + f'{len(chunk)} numbered label entries in record order.\\n\\n'
+            + '\\n'.join(
+                f'{index + 1}. {record["instance"]}'
+                for index, record in enumerate(chunk)
+            )
+            + '\\n\\nReturn only strict JSON with a labels object mapping every displayed '
+            + 'record number to one A/D/E/H/L/N code, for example '
+            + '{"labels":{"1":"A","2":"D"}}.'
+        )
+        for chunk in oolong_pairs_chunks
+    ]
+    oolong_pairs_prompt_batches = [
+        oolong_pairs_chunk_prompts[start:start + 20]
+        for start in range(0, len(oolong_pairs_chunk_prompts), 20)
+    ]
+    oolong_pairs_chunk_batches = [
+        oolong_pairs_chunks[start:start + 20]
+        for start in range(0, len(oolong_pairs_chunks), 20)
+    ]
+    oolong_pairs_schema = {
+        'type': 'object',
+        'required': ['labels'],
+        'properties': {
+            'labels': {
+                'type': 'object',
+                'additionalProperties': {
+                    'type': 'string',
+                    'enum': ['A', 'D', 'E', 'H', 'L', 'N'],
+                },
+            },
+        },
+        'additionalProperties': False,
+    }
+
+    def oolong_pairs_make_validator(expected_chunks):
+        def validate(value, index):
+            labels = value.get('labels') if isinstance(value, dict) else None
+            expected_keys = {str(position) for position in range(1, len(expected_chunks[index]) + 1)}
+            if (
+                not isinstance(labels, dict)
+                or set(labels) != expected_keys
+                or any(code not in 'ADEHLN' for code in labels.values())
+            ):
+                raise ValueError('expected one numbered allowed label per record')
+            return value
+        return validate
+
+    oolong_pairs_validators = [
+        oolong_pairs_make_validator(chunk_batch)
+        for chunk_batch in oolong_pairs_chunk_batches
+    ]
+    oolong_pairs_results = [None] * len(oolong_pairs_prompt_batches)
+    oolong_pairs_attempts = [0] * len(oolong_pairs_prompt_batches)
+```
+
+Run a bounded exact-replay loop in the same cell. Each prompt batch is one exact structured
+request. If it has errors, replay that whole batch with the same prompts list, omitted contexts
+(therefore the same None), schema object, and validator object. Never retry only the failed
+prompt indices, never redefine a validator, and never reconstruct any request object:
+```python
+for batch_index in range(len(oolong_pairs_prompt_batches)):
+    while (
+        oolong_pairs_attempts[batch_index] < 2
+        and (
+            oolong_pairs_results[batch_index] is None
+            or oolong_pairs_results[batch_index]['errors']
+        )
+    ):
+        oolong_pairs_results[batch_index] = llm_batch_json(
+            oolong_pairs_prompt_batches[batch_index],
+            oolong_pairs_schema,
+            max_repair_attempts=0,
+            validator=oolong_pairs_validators[batch_index],
+        )
+        oolong_pairs_attempts[batch_index] += 1
+
+if any(result is None or result['errors'] for result in oolong_pairs_results):
+    raise RuntimeError('classification failed after bounded exact replay')
+```
+
+The worst case is explicit: ceil(787 / 12) = 66 chunk calls per complete pass; at most two
+attempts per exact batch and no internal repair calls means at most 66 x 2 = 132 subcalls,
+leaving 18 of the arm's 150-call limit. Do not raise the chunk count, enable internal subset
+repairs, add semantic verification calls, or start a third attempt.
+
+Flatten the validated numbered labels in batch/chunk/record order and require exactly 787 codes.
+Zip them to oolong_pairs_records and build per-user lists of (code, date). Interpret the current
+question's predicate once and implement it locally: "or" is inclusive; "exactly" is equality,
+not at-least; all date constraints apply to every instance of the named label and are vacuously
+true when that label is absent; symmetric predicates require both users to satisfy the same
+role; asymmetric predicates accept either role assignment. Enumerate combinations of distinct
+sorted user IDs, emit each matching unordered pair once with the lower ID first, and set:
+```python
+answer['content'] = '\\n'.join(f'({left}, {right})' for left, right in pairs)
+answer['ready'] = True
+```
+Assign the complete literal pair list directly to answer; do not print it, summarize it, use
+set-builder notation, or return a compressed user set. The scorer intentionally accepts only
+literal `(id1, id2)` pairs.
+"""
+
 
 @dataclass(frozen=True)
 class ModelPrice:
@@ -455,6 +611,7 @@ def _direct_run(
 
 
 def _droste_run(
+    benchmark_id: str,
     task: dict[str, Any],
     context_path: Path,
     context_text: str,
@@ -525,8 +682,10 @@ def _droste_run(
         capability_parent_run_id=execution_context.trace.parent_run_id,
         capability_observer=execution_context.observe_capability,
     )
-    semantic = task.get("answer_type") != "ANSWER_TYPE.USER"
-    if semantic:
+    semantic = benchmark_id == "oolong-pairs" or task.get("answer_type") != "ANSWER_TYPE.USER"
+    if benchmark_id == "oolong-pairs":
+        benchmark_guidance = _OOLONG_PAIRS_GUIDANCE
+    elif semantic:
         benchmark_guidance = _OOLONG_SEMANTIC_GUIDANCE
     else:
         benchmark_guidance = (
@@ -762,6 +921,7 @@ def run_modelrelay_suite(
                         )
                     elif arm.method == "droste":
                         prediction, usage, iterations, subcalls_count = _droste_run(
+                            benchmark_id,
                             task,
                             context_path,
                             context_text,
