@@ -12,6 +12,7 @@ from dateutil import parser as date_parser
 from .models import ScorerKind
 
 _TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
+_OOLONG_PAIR_RE = re.compile(r"\(\s*(\d+)\s*,\s*(\d+)\s*\)")
 
 
 def _normalized_text(value: Any) -> str:
@@ -48,6 +49,53 @@ def token_f1(prediction: Any, reference: Any) -> float:
     precision = overlap / sum(predicted.values())
     recall = overlap / sum(expected.values())
     return 2 * precision * recall / (precision + recall) if overlap else 0.0
+
+
+def _normalized_pair(first: int, second: int) -> tuple[int, int]:
+    return (first, second) if first <= second else (second, first)
+
+
+def _oolong_prediction_pairs(prediction: Any) -> set[tuple[int, int]]:
+    if isinstance(prediction, dict) and "answer" in prediction:
+        prediction = prediction["answer"]
+    return {
+        _normalized_pair(int(match.group(1)), int(match.group(2)))
+        for match in _OOLONG_PAIR_RE.finditer(str(prediction))
+    }
+
+
+def _oolong_reference_pairs(reference: Any) -> set[tuple[int, int]]:
+    if isinstance(reference, dict):
+        reference = reference.get("pairs")
+    if not isinstance(reference, list):
+        raise ValueError("oolong_pairs_f1 reference must be a list of pairs")
+    pairs: set[tuple[int, int]] = set()
+    for index, pair in enumerate(reference):
+        if (
+            not isinstance(pair, (list, tuple))
+            or len(pair) != 2
+            or not all(isinstance(item, int) and not isinstance(item, bool) for item in pair)
+        ):
+            raise ValueError(f"oolong_pairs_f1 reference pair {index} must contain two integers")
+        pairs.add(_normalized_pair(pair[0], pair[1]))
+    return pairs
+
+
+def oolong_pairs_f1(prediction: Any, reference: Any) -> float:
+    """Score normalized, deduplicated OOLONG-Pairs output as a set of ID pairs."""
+
+    predicted = _oolong_prediction_pairs(prediction)
+    expected = _oolong_reference_pairs(reference)
+    if not predicted and not expected:
+        return 1.0
+    if not predicted or not expected:
+        return 0.0
+    overlap = len(predicted & expected)
+    if not overlap:
+        return 0.0
+    precision = overlap / len(predicted)
+    recall = overlap / len(expected)
+    return 2 * precision * recall / (precision + recall)
 
 
 _OOLONG_COMPARISONS = ("more common", "less common", "same frequency")
@@ -132,4 +180,6 @@ def score(
         return token_f1(prediction, reference)
     if kind == "oolong_official":
         return oolong_official(prediction, reference)
+    if kind == "oolong_pairs_f1":
+        return oolong_pairs_f1(prediction, reference)
     raise ValueError(f"unsupported scorer: {kind}")

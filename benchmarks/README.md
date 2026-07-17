@@ -58,6 +58,24 @@ The `oolong_official` scorer implements the benchmark's published synth
 evaluation: exact parsed answers, comparison-phrase matching, date matching,
 and graded numeric credit of `0.75 ** absolute_error`.
 
+## Pinned OOLONG-Pairs data
+
+Materialize Appendix D.1's 20 OOLONG-Pairs questions against the paper-matched
+32K-token context window at row 900:
+
+```bash
+uv run python -m benchmarks materialize-oolong-pairs \
+  --output benchmarks/.data/oolong-pairs-32k-v1
+```
+
+The materializer verifies rows 900–943, their exact task metadata, and both
+labeled and unlabeled context hashes. It uses labels only to derive answer keys,
+cross-checks pairwise enumeration against cardinality/intersection counts, and
+writes the original unlabeled row 900 context for model input. Generated task,
+context, and provenance files are gitignored and never checked in.
+The `oolong_pairs_f1` scorer parses, normalizes, and deduplicates ID pairs before
+computing set precision, recall, and F1.
+
 ## RLM paper suite
 
 `manifests/rlm-paper-v1.json` pins the target paper revision and names the

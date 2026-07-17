@@ -67,7 +67,13 @@
       "enum": ["ok", "error", "timeout", "context_limit", "refusal"]
     },
     "metric": {
-      "enum": ["exact_match", "numeric", "token_f1", "oolong_official"]
+      "enum": [
+        "exact_match",
+        "numeric",
+        "token_f1",
+        "oolong_official",
+        "oolong_pairs_f1"
+      ]
     },
     "score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
     "prediction": true,
