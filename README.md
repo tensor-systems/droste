@@ -74,8 +74,8 @@ Each of these follows from the mechanism above, not from benchmark claims:
   approximates, but `len()` and `GROUP BY` do not.
 - **Semantic judgment at scale.** "Classify/judge each of these N records":
   code selects the slices, `llm_query_batched` fans out bounded subcalls,
-  and code tallies the results. The corpus never transits the root model's
-  context window.
+  and code tallies the results. The full corpus does not have to pass
+  through the root model's context window.
 - **Mixed questions.** Answers that need exact computation *and* actual
   reading — "which plan has the highest refund rate, and what do those
   customers complain about?" — the case neither pure SQL nor pure
