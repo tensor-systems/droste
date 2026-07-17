@@ -359,6 +359,44 @@ predictions and refuses to replace an existing output directory. References
 remain deterministic outputs of the task materializer above; report generation
 never fetches either source implicitly.
 
+## Pinned BrowseComp-Plus data
+
+Install the benchmark-only Parquet reader and materialize Droste's seeded
+150-query, 1,000-document-per-query reading:
+
+```bash
+uv sync --group benchmarks
+uv run python -m benchmarks materialize-browsecomp-plus \
+  --output benchmarks/.data/browsecomp-plus-1k-seed-166001-v1
+```
+
+The query and corpus revisions are pinned independently. The materializer uses
+the benchmark's published Base64-then-XOR decoder, verifies decrypted required
+documents against the plaintext corpus, and hashes the complete decrypted
+selected-query content and plaintext corpus. Query IDs are sampled from stable
+lexicographic order with seed `166001`; each query's filler-document sample has
+an independently derived seed and includes the union of every gold and evidence
+document.
+
+Documents selected by more than one task are written once to an indexed JSONL
+pool. Each task stores its exact 1,000 IDs in pinned corpus row order, and the
+live harness assembles and hashes a context file on demand. Generated data and
+assembled context caches remain under gitignored `benchmarks/.data/`.
+
+The paper arm deliberately retains the deterministic `exact_match` scorer
+(case- and whitespace-normalized). The upstream BrowseComp-Plus leaderboard's
+Qwen3 LLM judge accepts broader semantic equivalence and is a different,
+model-dependent evaluation contract.
+
+The pinned task contexts range from about 24.1 MB to 44.4 MB (median 32.3 MB),
+or roughly 6.0M–11.1M tokens under a coarse four-bytes-per-token estimate. The
+Droste arm keeps that content external to the root prompt and searches it in
+Python. The direct arms necessarily inline it; their 12M-token authorization is
+deliberately unusual and is not evidence that the configured provider accepts
+an input that large. Before a paid pilot, preflight the provider's effective
+context window. If it is smaller, direct-arm `context_limit` artifacts are the
+honest result rather than silently truncating the benchmark.
+
 ## RLM paper suite
 
 `manifests/rlm-paper-v1.json` pins the target paper revision and names the

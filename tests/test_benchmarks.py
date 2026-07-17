@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
@@ -11,6 +12,15 @@ from pathlib import Path
 
 import pytest
 
+from benchmarks.browsecomp_plus import (
+    CANARY,
+    QUERY_IDS,
+    decrypt_string,
+    materialize_browsecomp_plus,
+    render_document,
+    sample_document_ids,
+    sample_query_ids,
+)
 from benchmarks.cli import main as benchmark_main
 from benchmarks.live import (
     _OOLONG_PAIRS_GUIDANCE,
@@ -19,6 +29,7 @@ from benchmarks.live import (
     ModelPrice,
     PricingSnapshot,
     _budget_stop_reason,
+    _context_for_task,
     _context_path,
     _cost_microusd,
     _direct_run,
@@ -100,6 +111,9 @@ def test_manifest_pins_paper_tasks_and_published_live_arms() -> None:
         "direct-sol-pairs",
         "direct-terra-pairs",
         "droste-terra-luna-pairs",
+        "direct-sol-browsecomp-plus-1k",
+        "direct-terra-browsecomp-plus-1k",
+        "droste-terra-luna-browsecomp-plus-1k",
     }
     assert all(arm.executor == "modelrelay" for arm in manifest.arms)
     sniah = next(item for item in manifest.benchmarks if item.benchmark_id == "s-niah")
@@ -113,6 +127,13 @@ def test_manifest_pins_paper_tasks_and_published_live_arms() -> None:
     oolong = next(item for item in manifest.benchmarks if item.benchmark_id == "oolong")
     assert oolong.status == "ready"
     assert oolong.tasks_sha256 == "28abaefcbcba1d843a384115a1217ea0017201b13074c95de6feb313c40c8da4"
+    browsecomp = next(
+        item for item in manifest.benchmarks if item.benchmark_id == "browsecomp-plus-1k"
+    )
+    assert browsecomp.status == "ready"
+    assert browsecomp.tasks_sha256 == (
+        "73a84c0021d55d1f44559613bd04eb28a867ceddc9aed22192af96e8551dded1"
+    )
     codeqa = next(
         item for item in manifest.benchmarks if item.benchmark_id == "longbench-v2-codeqa"
     )
@@ -193,6 +214,41 @@ def test_scorers_are_deterministic_and_normalized() -> None:
     assert numeric_score(float("nan"), float("nan")) == 0.0
     assert token_f1("alpha alpha gamma", "alpha beta") == pytest.approx(0.4)
     assert token_f1("", "") == 1.0
+
+
+def test_browsecomp_plus_decoder_matches_pinned_real_reference_values() -> None:
+    # Ciphertexts are from query 769 at the pinned dataset revision. Hashing
+    # the plaintext assertions avoids checking contamination-sensitive text in.
+    answer = decrypt_string("cV0ZluDqWdtiWp3AtNhgsKVB1N0m")
+    docid = decrypt_string("FRxNwQ==")
+
+    assert hashlib.sha256(answer.encode()).hexdigest() == (
+        "859ac8e3b962a16840bac33ffe3e07d092de5c8142aab612dd3d6d1db62684f8"
+    )
+    assert hashlib.sha256(docid.encode()).hexdigest() == (
+        "8bba5b9b846fd63c473e4c284ebea467e0b1809a389dd8998c95cab8d0ce8699"
+    )
+
+
+def test_browsecomp_plus_sampling_is_required_inclusive_and_deterministic() -> None:
+    corpus = tuple(str(value) for value in range(12))
+    first = sample_document_ids(
+        corpus, {"2", "9"}, sample_size=6, seed=17, query_id="query-a"
+    )
+
+    assert first == sample_document_ids(
+        corpus, {"9", "2"}, sample_size=6, seed=17, query_id="query-a"
+    )
+    assert len(first) == len(set(first)) == 6
+    assert {"2", "9"}.issubset(first)
+    assert first != sample_document_ids(
+        corpus, {"2", "9"}, sample_size=6, seed=17, query_id="query-b"
+    )
+    selected_queries = sample_query_ids(QUERY_IDS)
+    assert len(selected_queries) == 150
+    assert hashlib.sha256(("\n".join(selected_queries) + "\n").encode()).hexdigest() == (
+        "b0c677576bda3829747ff8bb75e811e8b23ae22ab68997fa3a33fbbc1e9a469c"
+    )
 
 
 @pytest.mark.parametrize(
@@ -905,6 +961,99 @@ def test_materialize_oolong_pairs_predictions_rejects_wrong_asset_hash(
     with pytest.raises(BenchmarkRunError, match="predictions asset has SHA-256"):
         materialize_oolong_pairs_predictions(output, fetch=lambda: b"not the pinned asset")
     assert not output.exists()
+
+
+def test_materialize_browsecomp_plus_is_byte_deterministic_and_shared(
+    tmp_path: Path,
+) -> None:
+    key = hashlib.sha256(CANARY.encode()).digest()
+
+    def encrypt(value: object) -> object:
+        if isinstance(value, str):
+            raw = value.encode()
+            return base64.b64encode(
+                bytes(byte ^ key[index % len(key)] for index, byte in enumerate(raw))
+            ).decode()
+        if isinstance(value, list):
+            return [encrypt(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                name: item if name == "query_id" else encrypt(item)
+                for name, item in value.items()
+            }
+        return value
+
+    documents = [
+        {"docid": str(index), "text": f"document text {index}", "url": f"https://d/{index}"}
+        for index in range(8)
+    ]
+    queries: dict[str, dict[str, object]] = {}
+    for index, query_id in enumerate(("10", "2", "30")):
+        queries[query_id] = {
+            "query_id": query_id,
+            "query": f"question {query_id}",
+            "answer": f"answer {query_id}",
+            "gold_docs": [documents[index]],
+            "evidence_docs": [documents[index], documents[index + 1]],
+            "negative_docs": [],
+        }
+
+    def fetch_query(query_id: str) -> bytes:
+        return json.dumps({"rows": [{"row_idx": 0, "row": encrypt(queries[query_id])}]}).encode()
+
+    kwargs = {
+        "fetch_query": fetch_query,
+        "corpus_rows": lambda: iter(documents),
+        "query_ids": tuple(queries),
+        "corpus_ids": tuple(document["docid"] for document in documents),
+        "query_sample_size": 2,
+        "document_sample_size": 5,
+        "seed": 19,
+        "fetch_workers": 1,
+        "expected_query_content_sha256": "",
+        "expected_corpus_content_sha256": "",
+    }
+    first = materialize_browsecomp_plus(tmp_path / "benchmarks" / ".data" / "first", **kwargs)
+    second = materialize_browsecomp_plus(tmp_path / "benchmarks" / ".data" / "second", **kwargs)
+
+    for name in ("tasks.json", "documents.jsonl", "documents.index.json", "provenance.json"):
+        assert (first.tasks_path.parent / name).read_bytes() == (
+            second.tasks_path.parent / name
+        ).read_bytes()
+    assert first.tasks_sha256 == hashlib.sha256(first.tasks_path.read_bytes()).hexdigest()
+    assert first.task_count == 2
+    assert first.document_count < first.task_count * 5
+
+    tasks = json.loads(first.tasks_path.read_text())
+    for task in tasks:
+        source = queries[task["id"]]
+        required = {
+            document["docid"]
+            for field in ("gold_docs", "evidence_docs")
+            for document in source[field]  # type: ignore[index, union-attr]
+        }
+        assert len(task["document_ids"]) == len(set(task["document_ids"])) == 5
+        assert required.issubset(task["document_ids"])
+
+    manifest = load_manifest(PAPER_MANIFEST)
+    benchmark = next(
+        item for item in manifest.benchmarks if item.benchmark_id == "browsecomp-plus-1k"
+    )
+    benchmark = replace(benchmark, tasks_path="../.data/first/tasks.json", status="ready")
+    manifest = replace(
+        manifest,
+        source_path=tmp_path / "benchmarks" / "manifests" / "suite.json",
+    )
+    task = tasks[0]
+    context_path, context_text = _context_for_task(manifest, benchmark, task)
+    by_id = {document["docid"]: document for document in documents}
+    expected_context = b"".join(render_document(by_id[docid]) for docid in task["document_ids"])
+
+    assert context_path.name == f"{task['context_sha256']}.txt"
+    assert context_text.encode() == expected_context
+    assert hashlib.sha256(expected_context).hexdigest() == task["context_sha256"]
+    with pytest.raises(BenchmarkRunError, match="refusing to overwrite"):
+        materialize_browsecomp_plus(first.tasks_path.parent, **kwargs)
 
 
 def test_smoke_suite_writes_artifacts_and_deterministic_report(tmp_path: Path) -> None:

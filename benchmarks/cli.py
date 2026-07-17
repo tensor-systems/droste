@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .browsecomp_plus import materialize_browsecomp_plus
 from .live import run_modelrelay_suite
 from .longbench_codeqa import materialize_longbench_codeqa
 from .models import load_manifest
@@ -36,6 +37,12 @@ def _parser() -> argparse.ArgumentParser:
         "materialize-oolong", help="materialize the pinned public OOLONG 131K task slice"
     )
     materialize.add_argument("--output", type=Path, required=True)
+
+    browsecomp = commands.add_parser(
+        "materialize-browsecomp-plus",
+        help="materialize the pinned BrowseComp-Plus 150-task, 1K-document arm",
+    )
+    browsecomp.add_argument("--output", type=Path, required=True)
 
     materialize_sniah_parser = commands.add_parser(
         "materialize-sniah", help="materialize deterministic noise S-NIAH tasks"
@@ -103,6 +110,14 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"materialized {result.task_count} tasks and {result.context_count} contexts; "
             f"tasks SHA-256: {result.tasks_sha256}"
+        )
+        return 0
+    if args.command == "materialize-browsecomp-plus":
+        result = materialize_browsecomp_plus(args.output)
+        print(
+            f"materialized {result.task_count} tasks and {result.document_count} shared "
+            f"documents; tasks SHA-256: {result.tasks_sha256}; decrypted queries SHA-256: "
+            f"{result.query_content_sha256}; corpus SHA-256: {result.corpus_content_sha256}"
         )
         return 0
     if args.command == "materialize-sniah":

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import signal
 import subprocess
+import tempfile
 import time
 import urllib.request
 from collections.abc import Collection
@@ -11,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -362,6 +365,16 @@ set-builder notation, or return a compressed user set. The scorer intentionally 
 literal `(id1, id2)` pairs.
 """
 
+_BROWSECOMP_PLUS_GUIDANCE = (
+    "This BrowseComp-Plus task contains 1,000 corpus documents in one external context file. "
+    "Use Python to search and rank the document text before making semantic subcalls; do not "
+    "copy the full corpus into a prompt. Preserve document IDs with excerpts so evidence can "
+    "be checked. Use subcalls on bounded groups of promising excerpts to resolve the multi-hop "
+    "clues, then return only the short factual answer requested by the question. The supplied "
+    "corpus is guaranteed to contain every gold and evidence document, and the semantic ready "
+    "gate requires at least one successful subcall."
+)
+
 
 @dataclass(frozen=True)
 class ModelPrice:
@@ -548,6 +561,148 @@ def _context_path(manifest: SuiteManifest, benchmark: BenchmarkSpec, task: dict[
     return path
 
 
+def _task_data_path(
+    manifest: SuiteManifest, benchmark: BenchmarkSpec, task: dict[str, Any], field: str
+) -> Path:
+    raw = task.get(field)
+    if not isinstance(raw, str) or not raw:
+        raise BenchmarkRunError(f"task {task.get('id')} has no {field}")
+    if benchmark.tasks_path is None:
+        raise BenchmarkRunError(f"benchmark {benchmark.benchmark_id} has no task path")
+    tasks_parent = (manifest.source_path.parent / benchmark.tasks_path).resolve().parent
+    path = (tasks_parent / raw).resolve()
+    benchmark_root = manifest.source_path.parent.parent.resolve()
+    if not path.is_relative_to(benchmark_root):
+        raise BenchmarkRunError(f"task data path escapes the benchmark root: {raw}")
+    return path
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+@lru_cache(maxsize=4)
+def _shared_document_index(
+    pool_path: Path,
+    index_path: Path,
+    expected_pool_sha256: str,
+    expected_index_sha256: str,
+) -> dict[str, dict[str, Any]]:
+    pool_sha256 = _file_sha256(pool_path)
+    if pool_sha256 != expected_pool_sha256:
+        raise BenchmarkRunError(
+            f"shared document pool has SHA-256 {pool_sha256}; expected {expected_pool_sha256}"
+        )
+    index_bytes = index_path.read_bytes()
+    index_sha256 = hashlib.sha256(index_bytes).hexdigest()
+    if index_sha256 != expected_index_sha256:
+        raise BenchmarkRunError(
+            f"shared document index has SHA-256 {index_sha256}; expected {expected_index_sha256}"
+        )
+    try:
+        payload = json.loads(index_bytes)
+    except json.JSONDecodeError as exc:
+        raise BenchmarkRunError(f"shared document index is invalid JSON: {exc}") from exc
+    documents = payload.get("documents") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("format_version") != 1
+        or not isinstance(documents, dict)
+    ):
+        raise BenchmarkRunError("shared document index has an unsupported shape")
+    return documents
+
+
+def _write_context_cache(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            pass
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def _context_for_task(
+    manifest: SuiteManifest, benchmark: BenchmarkSpec, task: dict[str, Any]
+) -> tuple[Path, str]:
+    if "context_path" in task:
+        path = _context_path(manifest, benchmark, task)
+        return path, path.read_text(encoding="utf-8")
+
+    from .browsecomp_plus import render_document
+
+    pool_path = _task_data_path(manifest, benchmark, task, "documents_path")
+    index_path = _task_data_path(manifest, benchmark, task, "documents_index_path")
+    pool_sha256 = task.get("documents_sha256")
+    index_sha256 = task.get("documents_index_sha256")
+    document_ids = task.get("document_ids")
+    if (
+        not isinstance(pool_sha256, str)
+        or not isinstance(index_sha256, str)
+        or not isinstance(document_ids, list)
+        or not document_ids
+        or any(not isinstance(docid, str) for docid in document_ids)
+        or len(set(document_ids)) != len(document_ids)
+    ):
+        raise BenchmarkRunError(f"task {task.get('id')} has invalid shared document metadata")
+    index = _shared_document_index(pool_path, index_path, pool_sha256, index_sha256)
+    context = bytearray()
+    with pool_path.open("rb") as pool:
+        for docid in document_ids:
+            location = index.get(docid)
+            if not isinstance(location, dict):
+                raise BenchmarkRunError(f"shared document index has no entry for {docid}")
+            offset = location.get("offset")
+            length = location.get("length")
+            line_sha256 = location.get("sha256")
+            if (
+                not isinstance(offset, int)
+                or isinstance(offset, bool)
+                or offset < 0
+                or not isinstance(length, int)
+                or isinstance(length, bool)
+                or length < 1
+                or not isinstance(line_sha256, str)
+            ):
+                raise BenchmarkRunError(f"shared document index entry {docid} is invalid")
+            pool.seek(offset)
+            line = pool.read(length)
+            if hashlib.sha256(line).hexdigest() != line_sha256:
+                raise BenchmarkRunError(f"shared document {docid} failed its content hash")
+            try:
+                document = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise BenchmarkRunError(f"shared document {docid} is invalid JSON") from exc
+            if not isinstance(document, dict) or document.get("docid") != docid:
+                raise BenchmarkRunError(f"shared document index points to the wrong record: {docid}")
+            context.extend(render_document(document))
+
+    actual = hashlib.sha256(context).hexdigest()
+    expected = task.get("context_sha256")
+    if not isinstance(expected, str) or actual != expected:
+        raise BenchmarkRunError(
+            f"task {task.get('id')} context has SHA-256 {actual}; expected {expected}"
+        )
+    cache_path = pool_path.parent / "assembled-contexts" / f"{actual}.txt"
+    if not cache_path.exists():
+        _write_context_cache(cache_path, bytes(context))
+    cached = cache_path.read_bytes()
+    if hashlib.sha256(cached).hexdigest() != actual:
+        raise BenchmarkRunError(f"assembled context cache is corrupt: {cache_path}")
+    return cache_path, cached.decode("utf-8")
+
+
 @contextmanager
 def _task_timeout(seconds: float) -> Iterator[None]:
     if not hasattr(signal, "setitimer"):
@@ -582,6 +737,8 @@ def _status_for_exception(exc: Exception) -> RunStatus:
 def _policy_for_task(benchmark_id: str, task: dict[str, Any]) -> tuple[bool, str]:
     if benchmark_id == "s-niah":
         return False, _SNIAH_GUIDANCE
+    if benchmark_id == "browsecomp-plus-1k":
+        return True, _BROWSECOMP_PLUS_GUIDANCE
     if benchmark_id == "longbench-v2-codeqa":
         return True, _LONGBENCH_CODEQA_GUIDANCE
     if benchmark_id == "oolong-pairs":
@@ -908,8 +1065,7 @@ def run_modelrelay_suite(
     estimated_arm_cost: dict[str, int] = {}
 
     for task in tasks:
-        context_path = _context_path(manifest, benchmark, task)
-        context_text = context_path.read_text(encoding="utf-8")
+        context_path, context_text = _context_for_task(manifest, benchmark, task)
         for arm in arms:
             assert arm.model is not None and arm.limits is not None
             budget_stop = _budget_stop_reason(
