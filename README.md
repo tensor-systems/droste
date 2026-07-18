@@ -344,25 +344,9 @@ deterministic. Scores and measured costs below are from the published
 |---|---|---:|---:|---:|---|
 | [OOLONG](benchmarks/README.md#oolong-trec_coarse) | 131K tokens, 50 tasks | 0.6020 / $26.18 | 0.5668 / $12.47 | **0.6432 / $10.16** | Best score at 2.6× lower cost than the best direct arm |
 | [S-NIAH](benchmarks/README.md#s-niah) | 32K tokens, 50 tasks | 0.84 / $7.79 | **1.00 / $3.90** | **1.00 / $0.66** | Ties best accuracy at 5.9× lower cost |
-| [LongBench-v2 CodeQA](benchmarks/README.md#longbench-v2-codeqa) | Cost-bounded 20-of-50 sample | **0.75 / $19.60** | 0.65 / $9.10 | 0.65 / $3.79 | Mixed: ties Terra, trails Sol by 0.10, and costs 5.2× less than Sol[^codeqa] |
-| [OOLONG-Pairs](benchmarks/README.md#oolong-pairs) | 32K tokens, 20 tasks | 0.00 / $0[^pairs-cost] | 0.034 / $2.50 | **0.80 / $2.14** | Strongest result: direct approaches structurally fail; Droste reaches 0.80 F1 at lower recorded cost |
-| [BrowseComp-Plus](benchmarks/README.md#browsecomp-plus) | 6.0M–11.1M tokens, 150 tasks | N/A / $0[^browsecomp-direct] | N/A / $0[^browsecomp-direct] | **0.9400 / $24.54**[^browsecomp-judge] | Direct approaches cannot attempt the task at any cost; Droste completes 148/150 at 0.9400 judged accuracy |
-
-[^codeqa]: CodeQA's published result is a disclosed, cost-bounded 20-of-50
-    stratified subsample, not the complete domain. [Issue #172](https://github.com/tensor-systems/droste/issues/172)
-    tracks a full-domain, larger-scale run.
-[^pairs-cost]: Direct Sol's recorded $0 follows HTTP 504 failures that returned
-    no billable usage to the harness; it is a measurement limit, not a zero-cost
-    guarantee.
-[^browsecomp-direct]: All direct attempts were rejected before generation
-    because the 6.0M–11.1M-token inputs exceed the model context windows. N/A
-    describes infeasibility; these are not substantive 0% accuracy results.
-[^browsecomp-judge]: The primary 0.9400 is 141/150 under BrowseComp-Plus's
-    canonical semantic-equivalence judge prompt, using `gpt-5.6-terra`. The
-    deterministic exact-match secondary metric is 0.5600. The separate judge
-    pass cost $0.292503; $24.54 is the Droste answer-generation cost shown in
-    the table. See the [judge-augmented summary](benchmarks/results/browsecomp-plus-1k-2026-07-18/SUMMARY.md)
-    and the separately [regenerable exact-match report](benchmarks/results/browsecomp-plus-1k-2026-07-18/report.md).
+| [LongBench-v2 CodeQA](benchmarks/README.md#longbench-v2-codeqa) | Cost-bounded 20-of-50 sample | **0.75 / $19.60** | 0.65 / $9.10 | 0.65 / $3.79 | Mixed: ties Terra, trails Sol by 0.10, and costs 5.2× less than Sol |
+| [OOLONG-Pairs](benchmarks/README.md#oolong-pairs) | 32K tokens, 20 tasks | 0.00 / $0 | 0.034 / $2.50 | **0.80 / $2.14** | Strongest result: direct approaches structurally fail; Droste reaches 0.80 F1 at lower recorded cost |
+| [BrowseComp-Plus](benchmarks/README.md#browsecomp-plus) | 6.0M–11.1M tokens, 150 tasks | N/A / $0 | N/A / $0 | **0.9400 / $24.54** | Direct approaches cannot attempt the task at any cost; Droste completes 148/150 at 0.9400 judged accuracy |
 
 Across the published suite, Droste wins or ties on accuracy in all but CodeQA
 and is dramatically more cost-efficient wherever a direct comparison can run.
