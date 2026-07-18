@@ -119,17 +119,9 @@ droste-terra-luna tied direct-terra's 0.6500 mean score and trailed direct-sol's
 sweep. With one 20-task sample, the two-task score difference from direct-sol
 is the observed result, not evidence of a population-level separation.
 
-In [*Recursive Language Models* (Zhang, Kraska, and Khattab, 2025;
-arXiv:2512.24601)](https://arxiv.org/abs/2512.24601), Table 1 evaluates CodeQA
-across the full 23K–4.2M-token range: its GPT-5 direct baseline, with no
-fine-tuning, scores 24.0%, far below this capped sample's 75.0% direct-sol
-score, and several CodeQA entries are flagged for partial context-limit
-failures. The contrast shows that this cost-bounded sample tests an easier
-regime than the scale where the paper demonstrates the clearest gap between
-direct and recursive approaches; this result therefore likely understates,
-rather than contradicts, RLM's advantage on CodeQA-style tasks at the scale the
-paper evaluates. [Issue #172](https://github.com/tensor-systems/droste/issues/172)
-tracks a full-domain, larger-scale run.
+This result is intentionally capped to bound evaluation cost.
+[Issue #172](https://github.com/tensor-systems/droste/issues/172) tracks a
+full-domain, larger-scale run.
 
 The tasks come from
 [`zai-org/LongBench-v2`](https://huggingface.co/datasets/zai-org/LongBench-v2/tree/2b48e494f2c7a2f0af81aae178e05c7e1dde0fe9),
@@ -234,13 +226,7 @@ thesis at its most extreme: direct approaches do not merely underperform; the
 problem is structurally outside their input regime, while Droste completes
 148/150 tasks and reaches 0.9400 semantic-judge accuracy for $24.54. The two
 tasks without predictions count as incorrect, so this is 141 correct answers
-out of all 150 scheduled tasks. The paper reports 88.0%–91.3% on
-BrowseComp-Plus; this run is 2.7 percentage points above the top of that range,
-although it uses a 150-task sample rather than the paper's full evaluation.
-The paper's range was judged by Qwen3-32B, while this result was judged by
-`gpt-5.6-terra`; judge-model leniency could account for part of the observed
-gap. Treat the comparison as directionally informative, not a strictly
-controlled methodology match.
+out of all 150 scheduled tasks.
 
 BrowseComp-Plus's official methodology uses an LLM judge for semantic
 equivalence. A `gpt-5.6-terra` pass through ModelRelay applied its canonical

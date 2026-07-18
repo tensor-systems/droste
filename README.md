@@ -346,13 +346,11 @@ deterministic. Scores and measured costs below are from the published
 | [S-NIAH](benchmarks/README.md#s-niah) | 32K tokens, 50 tasks | 0.84 / $7.79 | **1.00 / $3.90** | **1.00 / $0.66** | Ties best accuracy at 5.9× lower cost |
 | [LongBench-v2 CodeQA](benchmarks/README.md#longbench-v2-codeqa) | Cost-bounded 20-of-50 sample | **0.75 / $19.60** | 0.65 / $9.10 | 0.65 / $3.79 | Mixed: ties Terra, trails Sol by 0.10, and costs 5.2× less than Sol[^codeqa] |
 | [OOLONG-Pairs](benchmarks/README.md#oolong-pairs) | 32K tokens, 20 tasks | 0.00 / $0[^pairs-cost] | 0.034 / $2.50 | **0.80 / $2.14** | Strongest result: direct approaches structurally fail; Droste reaches 0.80 F1 at lower recorded cost |
-| [BrowseComp-Plus](benchmarks/README.md#browsecomp-plus) | 6.0M–11.1M tokens, 150 tasks | N/A / $0[^browsecomp-direct] | N/A / $0[^browsecomp-direct] | **0.9400 / $24.54**[^browsecomp-judge] | Direct approaches cannot attempt the task; Droste's judged accuracy is above the paper's reported 88.0%–91.3% range |
+| [BrowseComp-Plus](benchmarks/README.md#browsecomp-plus) | 6.0M–11.1M tokens, 150 tasks | N/A / $0[^browsecomp-direct] | N/A / $0[^browsecomp-direct] | **0.9400 / $24.54**[^browsecomp-judge] | Direct approaches cannot attempt the task at any cost; Droste completes 148/150 at 0.9400 judged accuracy |
 
-[^codeqa]: CodeQA's capped sample tests an easier regime than the full
-    23K–4.2M-token range in the RLM paper, where the direct baseline scores far
-    lower and some entries have partial context-limit failures. The capped
-    result likely understates, rather than contradicts, the recursive advantage
-    at the scale evaluated by the paper.
+[^codeqa]: CodeQA's published result is a disclosed, cost-bounded 20-of-50
+    stratified subsample, not the complete domain. [Issue #172](https://github.com/tensor-systems/droste/issues/172)
+    tracks a full-domain, larger-scale run.
 [^pairs-cost]: Direct Sol's recorded $0 follows HTTP 504 failures that returned
     no billable usage to the harness; it is a measurement limit, not a zero-cost
     guarantee.
@@ -365,10 +363,6 @@ deterministic. Scores and measured costs below are from the published
     pass cost $0.292503; $24.54 is the Droste answer-generation cost shown in
     the table. See the [judge-augmented summary](benchmarks/results/browsecomp-plus-1k-2026-07-18/SUMMARY.md)
     and the separately [regenerable exact-match report](benchmarks/results/browsecomp-plus-1k-2026-07-18/report.md).
-    The paper's range was judged by Qwen3-32B, while this result was judged by
-    `gpt-5.6-terra`; judge-model leniency could explain part of the gap. Along
-    with the 150-task sample size, that makes the comparison directionally
-    informative rather than a strictly controlled methodology match.
 
 Across the published suite, Droste wins or ties on accuracy in all but CodeQA
 and is dramatically more cost-efficient wherever a direct comparison can run.

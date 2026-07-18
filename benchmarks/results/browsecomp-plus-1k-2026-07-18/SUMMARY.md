@@ -25,10 +25,3 @@ punctuation, typography, spelling variants, and correct answers expressed with
 additional detail. The direct arms have no accuracy score: all 300 attempts
 were guaranteed `context_limit` rejections before generation, not substantive
 0% results.
-
-The 0.9400 result is 2.7 percentage points above the top of the paper's reported
-88.0%–91.3% BrowseComp-Plus range. The paper's range was judged by Qwen3-32B,
-while this result was judged by `gpt-5.6-terra`; judge-model leniency could
-account for part of the observed gap. This is also a 150-task sample rather
-than the paper's full evaluation. Treat the comparison as directionally
-informative, not a strictly controlled methodology match.
