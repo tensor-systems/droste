@@ -370,6 +370,22 @@ uv run python -m benchmarks materialize-browsecomp-plus \
   --output benchmarks/.data/browsecomp-plus-1k-seed-166001-v1
 ```
 
+The pinned `rlm-paper-v1.json` manifest declares S-NIAH, BrowseComp-Plus,
+OOLONG, OOLONG-Pairs, and LongBench-v2 CodeQA `ready`, so the four sibling task
+sets must also be materialized before running or reporting BrowseComp-Plus,
+even when only the BrowseComp-Plus task ids are selected:
+
+```bash
+uv run python -m benchmarks materialize-sniah \
+  --output benchmarks/.data/sniah-noise-words-32768-50-v1
+uv run python -m benchmarks materialize-oolong \
+  --output benchmarks/.data/oolong-trec-coarse-131k-v1
+uv run python -m benchmarks materialize-oolong-pairs \
+  --output benchmarks/.data/oolong-pairs-32k-v1
+uv run python -m benchmarks materialize-longbench-codeqa \
+  --output benchmarks/.data/longbench-v2-codeqa-20-v1
+```
+
 The query and corpus revisions are pinned independently. The materializer uses
 the benchmark's published Base64-then-XOR decoder, verifies decrypted required
 documents against the plaintext corpus, and hashes the complete decrypted
