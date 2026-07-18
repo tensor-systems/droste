@@ -10,6 +10,7 @@ import pytest
 from benchmarks.cli import main as benchmark_main
 from benchmarks.live import (
     _OOLONG_SEMANTIC_GUIDANCE,
+    _SNIAH_GUIDANCE,
     ModelPrice,
     PricingSnapshot,
     _budget_stop_reason,
@@ -17,6 +18,7 @@ from benchmarks.live import (
     _cost_microusd,
     _direct_run,
     _LiveRunFailure,
+    _policy_for_task,
     _status_for_exception,
 )
 from benchmarks.models import ArtifactError, ManifestError, RunArtifact, Usage, load_manifest
@@ -24,6 +26,12 @@ from benchmarks.oolong import materialize_oolong
 from benchmarks.report import ReportError, aggregate, load_artifacts, render_markdown
 from benchmarks.runner import BenchmarkRunError, run_fixture_suite
 from benchmarks.scoring import exact_match, numeric_score, oolong_official, token_f1
+from benchmarks.sniah import (
+    NOISE_SENTENCE,
+    RULER_COMMIT,
+    generate_task,
+    materialize_sniah,
+)
 from droste.protocols.llm_client import TokenUsage
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,7 +39,7 @@ SMOKE_MANIFEST = ROOT / "benchmarks" / "manifests" / "smoke-v1.json"
 PAPER_MANIFEST = ROOT / "benchmarks" / "manifests" / "rlm-paper-v1.json"
 
 
-def test_manifest_pins_paper_tasks_and_enables_published_live_runs() -> None:
+def test_manifest_pins_paper_tasks_and_published_live_arms() -> None:
     manifest = load_manifest(PAPER_MANIFEST)
 
     assert manifest.paper is not None
@@ -46,7 +54,23 @@ def test_manifest_pins_paper_tasks_and_enables_published_live_runs() -> None:
     }
     assert manifest.live_run.enabled
     assert not manifest.live_run.blockers
+    assert {arm.arm_id for arm in manifest.arms} == {
+        "direct-sol",
+        "direct-terra",
+        "droste-terra-luna",
+        "direct-sol-sniah",
+        "direct-terra-sniah",
+        "droste-terra-luna-sniah",
+    }
     assert all(arm.executor == "modelrelay" for arm in manifest.arms)
+    sniah = next(item for item in manifest.benchmarks if item.benchmark_id == "s-niah")
+    assert sniah.status == "ready"
+    assert sniah.dataset_version == (
+        "droste-native-generator-v1/ruler-38da79d79519ef87aa46ae804f838e1eab7f86d7"
+    )
+    assert sniah.tasks_sha256 == (
+        "62b1e267fedc723349b4233b5d8929b6ffa1a822155056ec96e20dbc90ae2990"
+    )
     oolong = next(item for item in manifest.benchmarks if item.benchmark_id == "oolong")
     assert oolong.status == "ready"
     assert oolong.tasks_sha256 == "28abaefcbcba1d843a384115a1217ea0017201b13074c95de6feb313c40c8da4"
@@ -105,6 +129,8 @@ def test_manifest_validates_any_declared_model_value(tmp_path: Path, model: obje
 
 def test_scorers_are_deterministic_and_normalized() -> None:
     assert exact_match("  ALPHA\n", "alpha") == 1.0
+    assert exact_match("  QUIET-ANCHOR\n", "quiet-anchor") == 1.0
+    assert exact_match("The answer is quiet-anchor", "quiet-anchor") == 0.0
     assert numeric_score("3.145", 3.14, tolerance=0.01) == 1.0
     assert numeric_score(float("nan"), float("nan")) == 0.0
     assert token_f1("alpha alpha gamma", "alpha beta") == pytest.approx(0.4)
@@ -283,6 +309,16 @@ def test_oolong_semantic_guidance_bounds_auditable_per_record_classification() -
     ) in guidance
 
 
+def test_sniah_guidance_requires_exact_lexical_retrieval() -> None:
+    assert "exact adjective-noun key" in _SNIAH_GUIDANCE
+    assert "Parse the word-pair after 'is:'" in _SNIAH_GUIDANCE
+    assert "return exactly that bare word-pair" in _SNIAH_GUIDANCE
+    assert "no trailing punctuation or period" in _SNIAH_GUIDANCE
+    assert "other extra characters" in _SNIAH_GUIDANCE
+    assert "no semantic classification or model subcall is needed" in _SNIAH_GUIDANCE
+    assert _policy_for_task("s-niah", {}) == (False, _SNIAH_GUIDANCE)
+
+
 def test_direct_late_failure_preserves_accounted_usage_and_cost(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -411,6 +447,82 @@ def test_materialize_oolong_validates_and_deduplicates_contexts(
         materialize_oolong(tmp_path / "oolong", fetch=lambda: json.dumps({"rows": rows}).encode())
 
 
+def test_generate_sniah_mirrors_noise_prompt_and_controlled_position() -> None:
+    task = generate_task(
+        context_length=1024,
+        seed=7,
+        task_id="sniah-test",
+        depth=0.5,
+    )
+
+    assert task["ruler_commit"] == RULER_COMMIT
+    assert task["haystack_type"] == "noise"
+    assert task["needle_type"] == "words"
+    assert task["needle"] == (
+        f"One of the special magic words for {task['needle_key']} is: {task['needle_value']}."
+    )
+    assert task["context"].count(NOISE_SENTENCE) == task["haystack_repetitions"]
+    assert task["context"].count(task["needle"]) == 1
+    assert task["needle_index"] == task["haystack_repetitions"] // 2
+    assert task["position"] == 0.5
+    assert task["query"] in task["question"]
+    assert task["answer_prefix"] in task["question"]
+    assert task["reference"] == task["needle_value"]
+    assert task["total_tokens"] <= task["context_length"]
+
+
+def test_materialize_sniah_is_byte_identical_on_regeneration(tmp_path: Path) -> None:
+    first = materialize_sniah(tmp_path / "first", context_length=2048, task_count=5, seed=42)
+    second = materialize_sniah(tmp_path / "second", context_length=2048, task_count=5, seed=42)
+
+    assert first.tasks_sha256 == second.tasks_sha256
+    assert first.tasks_path.read_bytes() == second.tasks_path.read_bytes()
+    assert first.task_count == second.task_count == 5
+    assert first.context_count == second.context_count == 5
+    first_contexts = {
+        path.name: path.read_bytes() for path in (tmp_path / "first" / "contexts").iterdir()
+    }
+    second_contexts = {
+        path.name: path.read_bytes() for path in (tmp_path / "second" / "contexts").iterdir()
+    }
+    assert first_contexts == second_contexts
+    with pytest.raises(BenchmarkRunError, match="refusing to overwrite"):
+        materialize_sniah(tmp_path / "first", context_length=2048, task_count=5, seed=42)
+
+
+def test_default_sniah_generation_matches_manifest_hash(tmp_path: Path) -> None:
+    result = materialize_sniah(tmp_path / "configured")
+    manifest = load_manifest(PAPER_MANIFEST)
+    benchmark = next(item for item in manifest.benchmarks if item.benchmark_id == "s-niah")
+
+    assert result.task_count == result.context_count == 50
+    assert result.tasks_sha256 == benchmark.tasks_sha256
+
+
+def test_materialize_sniah_cli_reports_hash(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "sniah"
+
+    assert (
+        benchmark_main(
+            [
+                "materialize-sniah",
+                "--output",
+                str(output),
+                "--context-length",
+                "1024",
+                "--task-count",
+                "2",
+                "--seed",
+                "9",
+            ]
+        )
+        == 0
+    )
+    assert "materialized 2 tasks and 2 contexts; tasks SHA-256:" in capsys.readouterr().out
+
+
 def test_smoke_suite_writes_artifacts_and_deterministic_report(tmp_path: Path) -> None:
     manifest = load_manifest(SMOKE_MANIFEST)
     output = tmp_path / "artifacts"
@@ -473,6 +585,42 @@ def test_report_selected_subset_still_requires_every_selected_arm(tmp_path: Path
         match="artifact set is incomplete; missing: smoke-exact--fixture-direct--normalization",
     ):
         load_artifacts(output, manifest, task_ids=["normalization"])
+
+
+def test_report_missing_other_ready_tasks_names_materializer(tmp_path: Path) -> None:
+    benchmark_root = tmp_path / "benchmarks"
+    manifest_path = benchmark_root / "manifests" / "suite.json"
+    sniah_tasks = benchmark_root / ".data" / "sniah-noise-words-32768-50-v1" / "tasks.json"
+    sniah_tasks.parent.mkdir(parents=True)
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text("{}")
+    sniah_tasks.write_text('[{"id": "normalization", "reference": "Beta"}]')
+
+    manifest = load_manifest(SMOKE_MANIFEST)
+    sniah = replace(
+        manifest.benchmarks[0],
+        benchmark_id="s-niah",
+        tasks_path="../.data/sniah-noise-words-32768-50-v1/tasks.json",
+    )
+    oolong = replace(
+        manifest.benchmarks[1],
+        benchmark_id="oolong",
+        tasks_path="../.data/oolong-trec-coarse-131k-v1/tasks.json",
+    )
+    manifest = replace(manifest, benchmarks=(sniah, oolong), source_path=manifest_path)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "selected-sniah-artifact.json").write_text("{}")
+
+    with pytest.raises(ReportError) as caught:
+        load_artifacts(artifacts, manifest, task_ids=["normalization"])
+
+    assert str(caught.value) == (
+        "cannot load declared tasks for benchmark 'oolong': run "
+        "`python -m benchmarks materialize-oolong "
+        "--output benchmarks/.data/oolong-trec-coarse-131k-v1` first"
+    )
+    assert isinstance(caught.value.__cause__, FileNotFoundError)
 
 
 @pytest.mark.parametrize(

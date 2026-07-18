@@ -1,0 +1,25 @@
+{
+  "record_type": "deterministic_generator_provenance",
+  "generator": {
+    "path": "../../../sniah.py",
+    "sha256": "f2245b09f7b88caae8e47c7e6daf05ad07d92356b64ab669fd83c6488bf20407",
+    "version": "droste-native-generator-v1"
+  },
+  "configuration": {
+    "context_length": 32768,
+    "haystack_type": "noise",
+    "needle_key": "words",
+    "needle_value": "words",
+    "seed": 42,
+    "task_count": 50,
+    "tokenizer": "wordpunct-newline-v1"
+  },
+  "materialized_tasks_sha256": "62b1e267fedc723349b4233b5d8929b6ffa1a822155056ec96e20dbc90ae2990",
+  "methodology": {
+    "paper": "Hsieh et al. (2024), RULER: What's the Real Context Size of Your Long-Context Language Models?",
+    "paper_url": "https://arxiv.org/abs/2404.06654",
+    "ruler_commit": "38da79d79519ef87aa46ae804f838e1eab7f86d7",
+    "ruler_commit_url": "https://github.com/NVIDIA/RULER/tree/38da79d79519ef87aa46ae804f838e1eab7f86d7"
+  },
+  "note": "S-NIAH is generated locally and deterministically from the cited RULER methodology. No external dataset is fetched or redistributed, so there is no dataset revision hash or dataset-license record. The reproducibility authorities are the generator code and hash, seed, complete configuration, materialized task hash, and pinned RULER commit recorded here."
+}

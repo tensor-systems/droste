@@ -1,0 +1,32 @@
+{
+  "arm_id": "droste-terra-luna-sniah",
+  "benchmark_id": "s-niah",
+  "cost_microusd": 11175,
+  "droste_commit": "7f223b457a3a2ba991250d99ed787338b682378c",
+  "error": null,
+  "iterations": 2,
+  "manifest_sha256": "67f7d6494c783e7d24cb9b44634d2a9656d42a5c278ba50362c4135c8e78d563",
+  "metric": "exact_match",
+  "prediction": "rapid-fjord",
+  "price_table_version": "modelrelay-pricing-sha256:3c92ae36dcb9e498e885d213e9029e82132f00235da1c4b46b919e5e23aed61b",
+  "provider": "openai",
+  "reference": "rapid-fjord",
+  "root_model": "gpt-5.6-terra",
+  "schema_version": 1,
+  "score": 1.0,
+  "started_at": "2026-07-17T23:34:11.796364Z",
+  "status": "ok",
+  "subcall_model": "gpt-5.6-luna",
+  "subcalls": 0,
+  "suite_id": "rlm-paper",
+  "suite_version": "0.2.0",
+  "task_id": "sniah-046",
+  "usage": {
+    "root_input_tokens": 2802,
+    "root_output_tokens": 278,
+    "subcall_input_tokens": 0,
+    "subcall_output_tokens": 0,
+    "total_tokens": 3080
+  },
+  "wall_time_ms": 3772
+}

@@ -41,6 +41,15 @@ from .scoring import score
 
 _PRICING_URL = "https://api.modelrelay.ai/api/v1/pricing"
 
+_SNIAH_GUIDANCE = (
+    "This is a synthetic single-needle retrieval task. Search the supplied text file in Python "
+    "for the exact adjective-noun key from the question. The matching line has the form "
+    "'One of the special magic words for <key> is: <value>.' Parse the word-pair after 'is:' "
+    "and return exactly that bare word-pair: no trailing punctuation or period, whitespace, or "
+    "other extra characters. This is exact lexical retrieval; no semantic classification or "
+    "model subcall is needed."
+)
+
 _OOLONG_SEMANTIC_GUIDANCE = (
     "For this OOLONG aggregation task, labels are latent semantic classes: records do not "
     "contain literal labels. Parse the record lines deterministically and, when the question "
@@ -407,6 +416,18 @@ def _status_for_exception(exc: Exception) -> RunStatus:
     return "error"
 
 
+def _policy_for_task(benchmark_id: str, task: dict[str, Any]) -> tuple[bool, str]:
+    if benchmark_id == "s-niah":
+        return False, _SNIAH_GUIDANCE
+    if task.get("answer_type") != "ANSWER_TYPE.USER":
+        return True, _OOLONG_SEMANTIC_GUIDANCE
+    return False, (
+        "This OOLONG task asks for an exact statistic over explicit Date, User, and "
+        "Instance fields. Parse the record lines and aggregate the requested field in "
+        "Python; the caller intentionally did not set the semantic-subcall policy hint."
+    )
+
+
 def _direct_run(
     task: dict[str, Any], context_text: str, arm: ArmSpec, api_key: str, base_url: str
 ) -> tuple[str, Usage, int, int]:
@@ -455,6 +476,7 @@ def _direct_run(
 
 
 def _droste_run(
+    benchmark_id: str,
     task: dict[str, Any],
     context_path: Path,
     context_text: str,
@@ -525,15 +547,7 @@ def _droste_run(
         capability_parent_run_id=execution_context.trace.parent_run_id,
         capability_observer=execution_context.observe_capability,
     )
-    semantic = task.get("answer_type") != "ANSWER_TYPE.USER"
-    if semantic:
-        benchmark_guidance = _OOLONG_SEMANTIC_GUIDANCE
-    else:
-        benchmark_guidance = (
-            "This OOLONG task asks for an exact statistic over explicit Date, User, and "
-            "Instance fields. Parse the record lines and aggregate the requested field in "
-            "Python; the caller intentionally did not set the semantic-subcall policy hint."
-        )
+    semantic, benchmark_guidance = _policy_for_task(benchmark_id, task)
     try:
         result = run_rlm(
             str(task["question"]),
@@ -762,6 +776,7 @@ def run_modelrelay_suite(
                         )
                     elif arm.method == "droste":
                         prediction, usage, iterations, subcalls_count = _droste_run(
+                            benchmark_id,
                             task,
                             context_path,
                             context_text,
