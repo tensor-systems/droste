@@ -587,6 +587,42 @@ def test_report_selected_subset_still_requires_every_selected_arm(tmp_path: Path
         load_artifacts(output, manifest, task_ids=["normalization"])
 
 
+def test_report_missing_other_ready_tasks_names_materializer(tmp_path: Path) -> None:
+    benchmark_root = tmp_path / "benchmarks"
+    manifest_path = benchmark_root / "manifests" / "suite.json"
+    sniah_tasks = benchmark_root / ".data" / "sniah-noise-words-32768-50-v1" / "tasks.json"
+    sniah_tasks.parent.mkdir(parents=True)
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text("{}")
+    sniah_tasks.write_text('[{"id": "normalization", "reference": "Beta"}]')
+
+    manifest = load_manifest(SMOKE_MANIFEST)
+    sniah = replace(
+        manifest.benchmarks[0],
+        benchmark_id="s-niah",
+        tasks_path="../.data/sniah-noise-words-32768-50-v1/tasks.json",
+    )
+    oolong = replace(
+        manifest.benchmarks[1],
+        benchmark_id="oolong",
+        tasks_path="../.data/oolong-trec-coarse-131k-v1/tasks.json",
+    )
+    manifest = replace(manifest, benchmarks=(sniah, oolong), source_path=manifest_path)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "selected-sniah-artifact.json").write_text("{}")
+
+    with pytest.raises(ReportError) as caught:
+        load_artifacts(artifacts, manifest, task_ids=["normalization"])
+
+    assert str(caught.value) == (
+        "cannot load declared tasks for benchmark 'oolong': run "
+        "`python -m benchmarks materialize-oolong "
+        "--output benchmarks/.data/oolong-trec-coarse-131k-v1` first"
+    )
+    assert isinstance(caught.value.__cause__, FileNotFoundError)
+
+
 @pytest.mark.parametrize(
     ("task_ids", "message"),
     [(["unknown"], "unknown task ids: unknown"), (["integer", "integer"], "duplicate task ids")],

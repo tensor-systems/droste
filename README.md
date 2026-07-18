@@ -399,9 +399,9 @@ tasks, three arms, and one repetition on 2026-07-17
 
 | Arm | Root model | Subcall model | Exact-match accuracy | Cost | Tokens |
 |---|---|---|---:|---:|---:|
-| direct-sol | gpt-5.6-sol | — | 84% | $7.791160 | 1,556,242 |
-| direct-terra | gpt-5.6-terra | — | 100% | $3.895694 | 1,556,249 |
-| droste-terra-luna | gpt-5.6-terra | gpt-5.6-luna | 100% | $0.659419 | 190,253 |
+| direct-sol-sniah | gpt-5.6-sol | — | 84% | $7.791160 | 1,556,242 |
+| direct-terra-sniah | gpt-5.6-terra | — | 100% | $3.895694 | 1,556,249 |
+| droste-terra-luna-sniah | gpt-5.6-terra | gpt-5.6-luna | 100% | $0.659419 | 190,253 |
 
 The direct arms place the complete prompt in one model call. The droste arm
 runs this engine with a `gpt-5.6-terra` root delegating to `gpt-5.6-luna`

@@ -139,8 +139,19 @@ artifacts:
 uv run python -m benchmarks report benchmarks/manifests/rlm-paper-v1-oolong-2026-07-17.json benchmarks/results/oolong-trec-coarse-131k-2026-07-17/artifacts --json /tmp/regen-check.json --markdown /tmp/regen-check.md
 ```
 
-After materializing the ready task sets above, the published S-NIAH reports
-regenerate from the committed artifacts with the 50 S-NIAH task ids selected:
+The pinned S-NIAH snapshot declares both OOLONG and S-NIAH `ready`, so both
+task sets must be materialized before regenerating the S-NIAH report, even when
+only the S-NIAH task ids are selected:
+
+```bash
+uv run python -m benchmarks materialize-oolong \
+  --output benchmarks/.data/oolong-trec-coarse-131k-v1
+uv run python -m benchmarks materialize-sniah \
+  --output benchmarks/.data/sniah-noise-words-32768-50-v1
+```
+
+The published S-NIAH reports then regenerate from the committed artifacts with
+the 50 S-NIAH task ids selected:
 
 ```bash
 task_args=()

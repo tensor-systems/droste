@@ -12,6 +12,17 @@ from .models import ArtifactError, RunArtifact, SuiteManifest, reject_json_const
 from .runner import BenchmarkRunError, load_tasks, task_tolerance, validate_task_ids
 from .scoring import score
 
+_MATERIALIZE_COMMANDS = {
+    "oolong": (
+        "python -m benchmarks materialize-oolong "
+        "--output benchmarks/.data/oolong-trec-coarse-131k-v1"
+    ),
+    "s-niah": (
+        "python -m benchmarks materialize-sniah "
+        "--output benchmarks/.data/sniah-noise-words-32768-50-v1"
+    ),
+}
+
 
 class ReportError(RuntimeError):
     """Artifacts cannot be combined into a trustworthy report."""
@@ -57,14 +68,20 @@ def load_artifacts(
     benchmarks = {benchmark.benchmark_id: benchmark for benchmark in manifest.benchmarks}
     arms = {arm.arm_id: arm for arm in manifest.arms}
     tasks: dict[tuple[str, str], dict[str, Any]] = {}
-    try:
-        for benchmark in manifest.benchmarks:
-            if benchmark.status != "ready":
-                continue
+    for benchmark in manifest.benchmarks:
+        if benchmark.status != "ready":
+            continue
+        try:
             for task in load_tasks(manifest, benchmark):
                 tasks[(benchmark.benchmark_id, task["id"])] = task
-    except BenchmarkRunError as exc:
-        raise ReportError(f"cannot load declared tasks: {exc}") from exc
+        except (BenchmarkRunError, OSError) as exc:
+            message = f"cannot load declared tasks for benchmark {benchmark.benchmark_id!r}"
+            materialize_command = _MATERIALIZE_COMMANDS.get(benchmark.benchmark_id)
+            if isinstance(exc, FileNotFoundError) and materialize_command is not None:
+                message += f": run `{materialize_command}` first"
+            else:
+                message += f": {exc}"
+            raise ReportError(message) from exc
     try:
         selected_task_ids = validate_task_ids(
             task_ids, {declared_task_id for _, declared_task_id in tasks}
