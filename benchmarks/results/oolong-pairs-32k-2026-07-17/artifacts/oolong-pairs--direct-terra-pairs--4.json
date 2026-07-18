@@ -1,0 +1,32 @@
+{
+  "arm_id": "direct-terra-pairs",
+  "benchmark_id": "oolong-pairs",
+  "cost_microusd": 154410,
+  "droste_commit": "8296104fe090457e3d87df2bb27f28ed7dd22d0f",
+  "error": null,
+  "iterations": 1,
+  "manifest_sha256": "d086ecc5d4daa0878df10c2a7dc691ddc98dd70a30f1a0d40b472c80c251cae6",
+  "metric": "oolong_pairs_f1",
+  "prediction_sha256": "d655b6d6322bc179761c59775e675259c94ae1f799610b5f3bf277866c29a732",
+  "price_table_version": "modelrelay-pricing-sha256:ceefd1c2eb37f66cde04cf07beeb958f7b0254914b3a19c107bb65ec87bb2d28",
+  "provider": "openai",
+  "reference_sha256": "be4b26e4f17bc34958f4ce52a6e4cb5333c1671f9bec37d804fc24a583b50ab1",
+  "root_model": "gpt-5.6-terra",
+  "schema_version": 1,
+  "score": 0.0006323110970597534,
+  "started_at": "2026-07-18T01:53:18.035329Z",
+  "status": "ok",
+  "subcall_model": null,
+  "subcalls": 0,
+  "suite_id": "rlm-paper",
+  "suite_version": "0.3.0",
+  "task_id": "4",
+  "usage": {
+    "root_input_tokens": 23094,
+    "root_output_tokens": 6445,
+    "subcall_input_tokens": 0,
+    "subcall_output_tokens": 0,
+    "total_tokens": 29539
+  },
+  "wall_time_ms": 72889
+}

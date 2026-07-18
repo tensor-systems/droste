@@ -1,0 +1,41 @@
+{
+  "aggregates": [
+    {
+      "arm_id": "direct-sol-pairs",
+      "attempted": 20,
+      "benchmark_id": "oolong-pairs",
+      "cost_microusd": 0,
+      "mean_score": 0.0,
+      "metric": "oolong_pairs_f1",
+      "successful": 0,
+      "total_tokens": 0,
+      "wall_time_ms": 2203911
+    },
+    {
+      "arm_id": "direct-terra-pairs",
+      "attempted": 20,
+      "benchmark_id": "oolong-pairs",
+      "cost_microusd": 2497269,
+      "mean_score": 0.03405689164521188,
+      "metric": "oolong_pairs_f1",
+      "successful": 14,
+      "total_tokens": 435842,
+      "wall_time_ms": 1796893
+    },
+    {
+      "arm_id": "droste-terra-luna-pairs",
+      "attempted": 20,
+      "benchmark_id": "oolong-pairs",
+      "cost_microusd": 2141592,
+      "mean_score": 0.8017241352482982,
+      "metric": "oolong_pairs_f1",
+      "successful": 20,
+      "total_tokens": 767642,
+      "wall_time_ms": 604852
+    }
+  ],
+  "manifest_sha256": "d086ecc5d4daa0878df10c2a7dc691ddc98dd70a30f1a0d40b472c80c251cae6",
+  "schema_version": 1,
+  "suite_id": "rlm-paper",
+  "suite_version": "0.3.0"
+}

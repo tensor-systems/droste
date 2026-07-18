@@ -15,8 +15,6 @@
     "status",
     "metric",
     "score",
-    "prediction",
-    "reference",
     "usage",
     "cost_microusd",
     "wall_time_ms",
@@ -53,6 +51,40 @@
           "price_table_version": { "type": "string", "minLength": 1 }
         }
       }
+    },
+    {
+      "oneOf": [
+        {
+          "required": ["prediction"],
+          "properties": {
+            "prediction_sha256": { "const": null }
+          }
+        },
+        {
+          "required": ["prediction_sha256"],
+          "not": { "required": ["prediction"] },
+          "properties": {
+            "prediction_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+          }
+        }
+      ]
+    },
+    {
+      "oneOf": [
+        {
+          "required": ["reference"],
+          "properties": {
+            "reference_sha256": { "const": null }
+          }
+        },
+        {
+          "required": ["reference_sha256"],
+          "not": { "required": ["reference"] },
+          "properties": {
+            "reference_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+          }
+        }
+      ]
     }
   ],
   "properties": {
@@ -67,11 +99,19 @@
       "enum": ["ok", "error", "timeout", "context_limit", "refusal"]
     },
     "metric": {
-      "enum": ["exact_match", "numeric", "token_f1", "oolong_official"]
+      "enum": [
+        "exact_match",
+        "numeric",
+        "token_f1",
+        "oolong_official",
+        "oolong_pairs_f1"
+      ]
     },
     "score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
     "prediction": true,
     "reference": true,
+    "prediction_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+    "reference_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
     "usage": {
       "type": "object",
       "additionalProperties": false,

@@ -1,0 +1,32 @@
+{
+  "arm_id": "droste-terra-luna-pairs",
+  "benchmark_id": "oolong-pairs",
+  "cost_microusd": 95349,
+  "droste_commit": "8296104fe090457e3d87df2bb27f28ed7dd22d0f",
+  "error": null,
+  "iterations": 3,
+  "manifest_sha256": "d086ecc5d4daa0878df10c2a7dc691ddc98dd70a30f1a0d40b472c80c251cae6",
+  "metric": "oolong_pairs_f1",
+  "prediction_sha256": "720bd4725515e0a903350cd92a66066d11b606e00e4a2d5ee55af903cd767b42",
+  "price_table_version": "modelrelay-pricing-sha256:3c92ae36dcb9e498e885d213e9029e82132f00235da1c4b46b919e5e23aed61b",
+  "provider": "openai",
+  "reference_sha256": "2f626bc9324b129808b48796895ab88fbaa3a63d9644625ced2cb4330d3a8864",
+  "root_model": "gpt-5.6-terra",
+  "schema_version": 1,
+  "score": 0.8332576101771922,
+  "started_at": "2026-07-18T02:32:02.937981Z",
+  "status": "ok",
+  "subcall_model": "gpt-5.6-luna",
+  "subcalls": 66,
+  "suite_id": "rlm-paper",
+  "suite_version": "0.3.0",
+  "task_id": "18",
+  "usage": {
+    "root_input_tokens": 10449,
+    "root_output_tokens": 1730,
+    "subcall_input_tokens": 21616,
+    "subcall_output_tokens": 3610,
+    "total_tokens": 37405
+  },
+  "wall_time_ms": 30044
+}

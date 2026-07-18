@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from collections import defaultdict
@@ -8,7 +9,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .models import ArtifactError, RunArtifact, SuiteManifest, reject_json_constant
+from .models import (
+    ArtifactError,
+    RunArtifact,
+    SuiteManifest,
+    canonical_json_bytes,
+    reject_json_constant,
+)
+from .oolong_pairs import PREDICTIONS_MATERIALIZE_COMMAND, PREDICTIONS_PATH
 from .runner import BenchmarkRunError, load_tasks, task_tolerance, validate_task_ids
 from .scoring import score
 
@@ -25,7 +33,12 @@ _MATERIALIZE_COMMANDS = {
         "python -m benchmarks materialize-longbench-codeqa "
         "--output benchmarks/.data/longbench-v2-codeqa-20-v1"
     ),
+    "oolong-pairs": (
+        "python -m benchmarks materialize-oolong-pairs "
+        "--output benchmarks/.data/oolong-pairs-32k-v1"
+    ),
 }
+_LEAN_PREDICTIONS_BENCHMARK_ID = "oolong-pairs"
 
 
 class ReportError(RuntimeError):
@@ -72,6 +85,33 @@ def load_artifacts(
     benchmarks = {benchmark.benchmark_id: benchmark for benchmark in manifest.benchmarks}
     arms = {arm.arm_id: arm for arm in manifest.arms}
     tasks: dict[tuple[str, str], dict[str, Any]] = {}
+    materialized_predictions: dict[str, Any] | None = None
+
+    def load_materialized_predictions() -> dict[str, Any]:
+        nonlocal materialized_predictions
+        if materialized_predictions is not None:
+            return materialized_predictions
+        try:
+            value = json.loads(PREDICTIONS_PATH.read_text(), parse_constant=reject_json_constant)
+        except FileNotFoundError as exc:
+            raise ReportError(
+                "lean OOLONG-Pairs artifacts require materialized predictions; run "
+                f"`{PREDICTIONS_MATERIALIZE_COMMAND}`"
+            ) from exc
+        except (json.JSONDecodeError, ValueError, OSError) as exc:
+            raise ReportError(
+                f"cannot load materialized OOLONG-Pairs predictions from {PREDICTIONS_PATH}: {exc}"
+            ) from exc
+        if not isinstance(value, dict):
+            raise ReportError(
+                f"materialized OOLONG-Pairs predictions in {PREDICTIONS_PATH} must be an object"
+            )
+        materialized_predictions = {
+            f"{_LEAN_PREDICTIONS_BENCHMARK_ID}--{key}": prediction
+            for key, prediction in value.items()
+        }
+        return materialized_predictions
+
     for benchmark in manifest.benchmarks:
         if benchmark.status != "ready":
             continue
@@ -131,14 +171,42 @@ def load_artifacts(
             raise ReportError(
                 f"artifact {path} names undeclared task {artifact.benchmark_id}/{artifact.task_id}"
             )
-        if artifact.reference != task["reference"] or type(artifact.reference) is not type(
-            task["reference"]
-        ):
-            raise ReportError(f"artifact {path} reference does not match the declared task")
+        if artifact.has_inline_reference:
+            if artifact.reference != task["reference"] or type(artifact.reference) is not type(
+                task["reference"]
+            ):
+                raise ReportError(f"artifact {path} reference does not match the declared task")
+        else:
+            reference_bytes = canonical_json_bytes(task["reference"])
+            if artifact.reference_sha256 != hashlib.sha256(reference_bytes).hexdigest():
+                raise ReportError(f"artifact {path} reference does not match the declared task")
+        prediction = artifact.prediction
+        if not artifact.has_inline_prediction:
+            if artifact.benchmark_id != _LEAN_PREDICTIONS_BENCHMARK_ID:
+                raise ReportError(
+                    f"lean artifacts for benchmark {artifact.benchmark_id!r} have no "
+                    "registered predictions materializer"
+                )
+            if artifact.status == "ok":
+                predictions = load_materialized_predictions()
+                prediction_key = artifact.artifact_id
+                if prediction_key not in predictions:
+                    raise ReportError(
+                        f"materialized OOLONG-Pairs predictions are missing {prediction_key}"
+                    )
+                prediction = predictions[prediction_key]
+            else:
+                prediction = None
+            prediction_bytes = canonical_json_bytes(prediction)
+            if artifact.prediction_sha256 != hashlib.sha256(prediction_bytes).hexdigest():
+                expected_source = (
+                    "the materialized value" if artifact.status == "ok" else "canonical JSON null"
+                )
+                raise ReportError(f"artifact {path} prediction does not match {expected_source}")
         if artifact.status == "ok":
             expected_score = score(
                 benchmark.scorer,
-                artifact.prediction,
+                prediction,
                 task["reference"],
                 tolerance=task_tolerance(task, benchmark),
             )

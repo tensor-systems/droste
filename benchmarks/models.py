@@ -4,22 +4,25 @@ import hashlib
 import json
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, TypeAlias, cast
 
 SCHEMA_VERSION = 1
 
-ScorerKind: TypeAlias = Literal["exact_match", "numeric", "token_f1", "oolong_official"]
+ScorerKind: TypeAlias = Literal[
+    "exact_match", "numeric", "token_f1", "oolong_official", "oolong_pairs_f1"
+]
 ExecutorKind: TypeAlias = Literal["fixture", "modelrelay", "blocked"]
 RunStatus: TypeAlias = Literal["ok", "error", "timeout", "context_limit", "refusal"]
 
-_SCORERS = frozenset({"exact_match", "numeric", "token_f1", "oolong_official"})
+_SCORERS = frozenset({"exact_match", "numeric", "token_f1", "oolong_official", "oolong_pairs_f1"})
 _EXECUTORS = frozenset({"fixture", "modelrelay", "blocked"})
 _METHODS = frozenset({"droste", "direct-model", "fixture"})
 _STATUSES = frozenset({"ok", "error", "timeout", "context_limit", "refusal"})
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
+_MISSING = object()
 
 
 class ManifestError(ValueError):
@@ -34,6 +37,18 @@ def reject_json_constant(value: str) -> None:
     """Reject Python's non-standard NaN and Infinity JSON extensions."""
 
     raise ValueError(f"non-standard JSON numeric constant: {value}")
+
+
+def canonical_json_bytes(value: Any) -> bytes:
+    """Encode a benchmark value for stable content hashing."""
+
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def canonical_json_sha256(value: Any) -> str:
+    """Hash a benchmark value using the artifact contract's canonical JSON."""
+
+    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
 
 
 def _expect_mapping(value: Any, path: str) -> dict[str, Any]:
@@ -485,8 +500,12 @@ class RunArtifact:
     status: RunStatus
     metric: ScorerKind
     score: float | None
-    prediction: Any
-    reference: Any
+    # A sentinel distinguishes an absent lean field from an inline JSON null. This
+    # matters because null (and other falsy values such as "") are valid predictions.
+    prediction: Any = _MISSING
+    reference: Any = _MISSING
+    prediction_sha256: str | None = None
+    reference_sha256: str | None = None
     usage: Usage = Usage()
     cost_microusd: int = 0
     wall_time_ms: int = 0
@@ -531,13 +550,48 @@ class RunArtifact:
             raise ArtifactError("paid artifacts must name price_table_version")
         if (self.provider is None) != (self.root_model is None):
             raise ArtifactError("provider and root_model must be recorded together")
+        for name in ("prediction_sha256", "reference_sha256"):
+            value = getattr(self, name)
+            if value is not None and not _SHA256_RE.fullmatch(value):
+                raise ArtifactError(f"{name} must be a lowercase SHA-256 digest or null")
+        self._validate_value_representation(
+            "prediction",
+            self.prediction,
+            self.prediction_sha256,
+        )
+        self._validate_value_representation(
+            "reference",
+            self.reference,
+            self.reference_sha256,
+        )
+
+    @staticmethod
+    def _validate_value_representation(
+        name: str,
+        inline_value: Any,
+        sha256: str | None,
+    ) -> None:
+        has_inline_value = inline_value is not _MISSING
+        has_hash_marker = sha256 is not None
+        if has_inline_value and has_hash_marker:
+            raise ArtifactError(f"{name} must be inline or hash-only, never both")
+        if not has_inline_value and not has_hash_marker:
+            raise ArtifactError(f"{name} must be inline or represented by SHA-256")
+
+    @property
+    def has_inline_prediction(self) -> bool:
+        return self.prediction is not _MISSING
+
+    @property
+    def has_inline_reference(self) -> bool:
+        return self.reference is not _MISSING
 
     @property
     def artifact_id(self) -> str:
         return f"{self.benchmark_id}--{self.arm_id}--{self.task_id}"
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "schema_version": SCHEMA_VERSION,
             "suite_id": self.suite_id,
             "suite_version": self.suite_version,
@@ -548,8 +602,8 @@ class RunArtifact:
             "status": self.status,
             "metric": self.metric,
             "score": self.score,
-            "prediction": self.prediction,
-            "reference": self.reference,
+            "prediction_sha256": self.prediction_sha256,
+            "reference_sha256": self.reference_sha256,
             "usage": self.usage.to_dict(),
             "cost_microusd": self.cost_microusd,
             "wall_time_ms": self.wall_time_ms,
@@ -563,6 +617,11 @@ class RunArtifact:
             "started_at": self.started_at,
             "droste_commit": self.droste_commit,
         }
+        if self.has_inline_prediction:
+            result["prediction"] = self.prediction
+        if self.has_inline_reference:
+            result["reference"] = self.reference
+        return result
 
     @classmethod
     def from_dict(cls, value: Any) -> RunArtifact:
@@ -582,6 +641,8 @@ class RunArtifact:
             "score",
             "prediction",
             "reference",
+            "prediction_sha256",
+            "reference_sha256",
             "usage",
             "cost_microusd",
             "wall_time_ms",
@@ -598,7 +659,13 @@ class RunArtifact:
         unknown = sorted(set(data) - expected_fields)
         if unknown:
             raise ArtifactError(f"artifact has unknown fields: {', '.join(unknown)}")
-        missing = sorted(expected_fields - set(data))
+        conditionally_optional_fields = {
+            "prediction",
+            "reference",
+            "prediction_sha256",
+            "reference_sha256",
+        }
+        missing = sorted(expected_fields - conditionally_optional_fields - set(data))
         if missing:
             raise ArtifactError(f"artifact is missing fields: {', '.join(missing)}")
         if data.get("schema_version") != SCHEMA_VERSION:
@@ -659,8 +726,10 @@ class RunArtifact:
             status=cast(RunStatus, status),
             metric=cast(ScorerKind, metric),
             score=float(score) if score is not None else None,
-            prediction=data.get("prediction"),
-            reference=data.get("reference"),
+            prediction=data["prediction"] if "prediction" in data else _MISSING,
+            reference=data["reference"] if "reference" in data else _MISSING,
+            prediction_sha256=optional_string("prediction_sha256"),
+            reference_sha256=optional_string("reference_sha256"),
             usage=usage,
             cost_microusd=nonnegative_int("cost_microusd"),
             wall_time_ms=nonnegative_int("wall_time_ms"),
@@ -674,3 +743,17 @@ class RunArtifact:
             started_at=optional_string("started_at"),
             droste_commit=required_string("droste_commit"),
         )
+
+
+def to_lean_artifact(artifact: RunArtifact) -> RunArtifact:
+    """Return the reproducible hash-only form of a full run artifact."""
+
+    if not artifact.has_inline_prediction or not artifact.has_inline_reference:
+        raise ArtifactError("only a fully inline artifact can be converted to lean form")
+    return replace(
+        artifact,
+        prediction=_MISSING,
+        reference=_MISSING,
+        prediction_sha256=canonical_json_sha256(artifact.prediction),
+        reference_sha256=canonical_json_sha256(artifact.reference),
+    )

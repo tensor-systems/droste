@@ -80,7 +80,13 @@
           "dataset_version": { "type": "string", "minLength": 1 },
           "split": { "type": "string", "minLength": 1 },
           "scorer": {
-            "enum": ["exact_match", "numeric", "token_f1", "oolong_official"]
+            "enum": [
+              "exact_match",
+              "numeric",
+              "token_f1",
+              "oolong_official",
+              "oolong_pairs_f1"
+            ]
           },
           "tasks_path": { "type": "string", "minLength": 1 },
           "tasks_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite_id": "rlm-paper",
-  "suite_version": "0.7.0",
+  "suite_version": "0.8.0",
   "paper": {
     "title": "Recursive Language Models",
     "revision": "arXiv:2512.24601v3",
@@ -46,11 +46,13 @@
     {
       "id": "oolong-pairs",
       "dataset": "OOLONG-Pairs",
-      "dataset_version": "pending-pin",
-      "split": "paper-v3",
-      "scorer": "token_f1",
+      "dataset_version": "f0d59eaf0febf130664cfceb710436c8e3216b2b",
+      "split": "validation/trec_coarse/context_len=32768/oolong-pairs-20/context_window_row=900",
+      "scorer": "oolong_pairs_f1",
+      "tasks_path": "../.data/oolong-pairs-32k-v1/tasks.json",
+      "tasks_sha256": "169a2aaddc8603128f672d32f9aa8a2e0565974d91b6468b7431654dd81bde40",
       "phase": 1,
-      "status": "planned"
+      "status": "ready"
     },
     {
       "id": "longbench-v2-codeqa",
@@ -203,6 +205,72 @@
         "wall_ms": 900000,
         "root_output_tokens": 4096,
         "subcall_output_tokens": 1024,
+        "concurrency": 8
+      }
+    },
+    {
+      "id": "direct-sol-pairs",
+      "method": "direct-model",
+      "executor": "modelrelay",
+      "model": {
+        "provider": "openai",
+        "root_model": "gpt-5.6-sol",
+        "subcall_model": null,
+        "root_reasoning_effort": "medium",
+        "subcall_reasoning_effort": null,
+        "temperature": null
+      },
+      "limits": {
+        "tokens": 200000,
+        "subcalls": 0,
+        "depth": 0,
+        "wall_ms": 900000,
+        "root_output_tokens": 65536,
+        "subcall_output_tokens": 2048,
+        "concurrency": 1
+      }
+    },
+    {
+      "id": "direct-terra-pairs",
+      "method": "direct-model",
+      "executor": "modelrelay",
+      "model": {
+        "provider": "openai",
+        "root_model": "gpt-5.6-terra",
+        "subcall_model": null,
+        "root_reasoning_effort": "medium",
+        "subcall_reasoning_effort": null,
+        "temperature": null
+      },
+      "limits": {
+        "tokens": 200000,
+        "subcalls": 0,
+        "depth": 0,
+        "wall_ms": 900000,
+        "root_output_tokens": 65536,
+        "subcall_output_tokens": 2048,
+        "concurrency": 1
+      }
+    },
+    {
+      "id": "droste-terra-luna-pairs",
+      "method": "droste",
+      "executor": "modelrelay",
+      "model": {
+        "provider": "openai",
+        "root_model": "gpt-5.6-terra",
+        "subcall_model": "gpt-5.6-luna",
+        "root_reasoning_effort": "medium",
+        "subcall_reasoning_effort": "none",
+        "temperature": null
+      },
+      "limits": {
+        "tokens": 2000000,
+        "subcalls": 150,
+        "depth": 1,
+        "wall_ms": 900000,
+        "root_output_tokens": 65536,
+        "subcall_output_tokens": 2048,
         "concurrency": 8
       }
     }

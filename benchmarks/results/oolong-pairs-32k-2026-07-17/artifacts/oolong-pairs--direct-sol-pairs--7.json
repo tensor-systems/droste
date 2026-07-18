@@ -1,0 +1,32 @@
+{
+  "arm_id": "direct-sol-pairs",
+  "benchmark_id": "oolong-pairs",
+  "cost_microusd": 0,
+  "droste_commit": "8296104fe090457e3d87df2bb27f28ed7dd22d0f",
+  "error": "root llm failed with HTTP 504: error code: 504",
+  "iterations": 1,
+  "manifest_sha256": "d086ecc5d4daa0878df10c2a7dc691ddc98dd70a30f1a0d40b472c80c251cae6",
+  "metric": "oolong_pairs_f1",
+  "prediction_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+  "price_table_version": "modelrelay-pricing-sha256:cb03c5390d3bcc5233d080b9067b08896b250349c0ad084169e3534fcfc8e34c",
+  "provider": "openai",
+  "reference_sha256": "2a469ce5eeeb79abdf4ccb5e87c0fa92374592be01547d8f7c4df928928e14b5",
+  "root_model": "gpt-5.6-sol",
+  "schema_version": 1,
+  "score": null,
+  "started_at": "2026-07-18T01:10:55.572495Z",
+  "status": "error",
+  "subcall_model": null,
+  "subcalls": 0,
+  "suite_id": "rlm-paper",
+  "suite_version": "0.3.0",
+  "task_id": "7",
+  "usage": {
+    "root_input_tokens": 0,
+    "root_output_tokens": 0,
+    "subcall_input_tokens": 0,
+    "subcall_output_tokens": 0,
+    "total_tokens": 0
+  },
+  "wall_time_ms": 110132
+}
