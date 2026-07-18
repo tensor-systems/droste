@@ -105,7 +105,7 @@ table, and reject additions if that snapshot changes. The OOLONG report
 regenerates offline from the committed artifacts:
 
 ```bash
-uv run python -m benchmarks report benchmarks/manifests/rlm-paper-v1.json benchmarks/results/oolong-trec-coarse-131k-2026-07-17/artifacts --json /tmp/regen-check.json --markdown /tmp/regen-check.md
+uv run python -m benchmarks report benchmarks/manifests/rlm-paper-v0.5.0-oolong.json benchmarks/results/oolong-trec-coarse-131k-2026-07-17/artifacts --json /tmp/regen-check.json --markdown /tmp/regen-check.md
 ```
 
 The OOLONG-Pairs report regenerates from the committed artifacts with all 20
@@ -115,7 +115,7 @@ task IDs selected:
 task_args=()
 for task_id in {1..20}; do task_args+=(--task-id "$task_id"); done
 uv run python -m benchmarks report \
-  benchmarks/manifests/rlm-paper-v1.json \
+  benchmarks/manifests/rlm-paper-v0.3.0-oolong-pairs.json \
   benchmarks/results/oolong-pairs-32k-2026-07-17/artifacts \
   "${task_args[@]}" \
   --json /tmp/oolong-pairs-report.json \
@@ -125,6 +125,12 @@ cmp benchmarks/results/oolong-pairs-32k-2026-07-17/report.json \
 cmp benchmarks/results/oolong-pairs-32k-2026-07-17/report.md \
   /tmp/oolong-pairs-report.md
 ```
+
+These result-specific manifests are exact snapshots of the configurations that
+produced the immutable artifacts. The current `rlm-paper-v1.json` manifest is
+the additive union of both live benchmark configurations and therefore has a
+different SHA-256; reports continue to reject artifacts whose recorded suite
+version or manifest hash differs from the selected snapshot.
 
 When enabling a public configuration, include `--max-cost-microusd <amount>` in
 the run command. That optional integer micro-USD cap includes existing
