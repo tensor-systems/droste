@@ -778,6 +778,46 @@ def test_report_missing_other_ready_tasks_names_materializer(tmp_path: Path) -> 
     assert isinstance(caught.value.__cause__, FileNotFoundError)
 
 
+def test_report_missing_longbench_codeqa_tasks_names_materializer(tmp_path: Path) -> None:
+    benchmark_root = tmp_path / "benchmarks"
+    manifest_path = benchmark_root / "manifests" / "suite.json"
+    oolong_tasks = benchmark_root / ".data" / "oolong-trec-coarse-131k-v1" / "tasks.json"
+    oolong_tasks.parent.mkdir(parents=True)
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text("{}")
+    oolong_tasks.write_text('[{"id": "normalization", "reference": "Beta"}]')
+
+    manifest = load_manifest(SMOKE_MANIFEST)
+    oolong = replace(
+        manifest.benchmarks[0],
+        benchmark_id="oolong",
+        tasks_path="../.data/oolong-trec-coarse-131k-v1/tasks.json",
+    )
+    longbench_codeqa = replace(
+        manifest.benchmarks[1],
+        benchmark_id="longbench-v2-codeqa",
+        tasks_path="../.data/longbench-v2-codeqa-20-v1/tasks.json",
+    )
+    manifest = replace(
+        manifest,
+        benchmarks=(oolong, longbench_codeqa),
+        source_path=manifest_path,
+    )
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "selected-longbench-codeqa-artifact.json").write_text("{}")
+
+    with pytest.raises(ReportError) as caught:
+        load_artifacts(artifacts, manifest, task_ids=["normalization"])
+
+    assert str(caught.value) == (
+        "cannot load declared tasks for benchmark 'longbench-v2-codeqa': run "
+        "`python -m benchmarks materialize-longbench-codeqa "
+        "--output benchmarks/.data/longbench-v2-codeqa-20-v1` first"
+    )
+    assert isinstance(caught.value.__cause__, FileNotFoundError)
+
+
 @pytest.mark.parametrize(
     ("task_ids", "message"),
     [(["unknown"], "unknown task ids: unknown"), (["integer", "integer"], "duplicate task ids")],

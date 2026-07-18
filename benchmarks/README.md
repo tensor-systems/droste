@@ -200,8 +200,19 @@ uv run python -m benchmarks report \
   --markdown /tmp/sniah-regen-check.md
 ```
 
-After materializing the ready task sets, the published CodeQA reports
-regenerate from the committed artifacts with all 20 CodeQA task IDs selected:
+The pinned LongBench-v2 CodeQA snapshot declares both OOLONG and LongBench-v2
+CodeQA `ready`, so both task sets must be materialized before regenerating the
+CodeQA report, even when only the CodeQA task ids are selected:
+
+```bash
+uv run python -m benchmarks materialize-oolong \
+  --output benchmarks/.data/oolong-trec-coarse-131k-v1
+uv run python -m benchmarks materialize-longbench-codeqa \
+  --output benchmarks/.data/longbench-v2-codeqa-20-v1
+```
+
+The published CodeQA reports then regenerate from the committed artifacts with
+all 20 CodeQA task IDs selected:
 
 ```bash
 task_ids=(
