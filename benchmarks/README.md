@@ -219,7 +219,7 @@ task_ids=(
 task_args=()
 for task_id in "${task_ids[@]}"; do task_args+=(--task-id "$task_id"); done
 uv run python -m benchmarks report \
-  benchmarks/manifests/rlm-paper-v1-longbench-v2-codeqa-2026-07-17.json \
+  benchmarks/manifests/longbench-v2-codeqa-2026-07-17.json \
   benchmarks/results/longbench-v2-codeqa-20-2026-07-17/artifacts \
   "${task_args[@]}" \
   --json /tmp/longbench-codeqa-regen.json \
