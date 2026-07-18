@@ -452,6 +452,18 @@ droste-terra-luna tied direct-terra's 0.6500 mean score and trailed direct-sol's
 sweep. With one 20-task sample, the two-task score difference from direct-sol
 is the observed result, not evidence of a population-level separation.
 
+In [*Recursive Language Models* (Zhang, Kraska, and Khattab, 2025;
+arXiv:2512.24601)](https://arxiv.org/abs/2512.24601), Table 1 evaluates CodeQA
+across the full 23K–4.2M-token range: its GPT-5 direct baseline, with no
+fine-tuning, scores 24.0%, far below this capped sample's 75.0% direct-sol
+score, and several CodeQA entries are flagged for partial context-limit
+failures. The contrast shows that this cost-bounded sample tests an easier
+regime than the scale where the paper demonstrates the clearest gap between
+direct and recursive approaches; this result therefore likely understates,
+rather than contradicts, RLM's advantage on CodeQA-style tasks at the scale the
+paper evaluates. [Issue #172](https://github.com/tensor-systems/droste/issues/172)
+tracks a full-domain, larger-scale run once funded.
+
 The tasks come from
 [`zai-org/LongBench-v2`](https://huggingface.co/datasets/zai-org/LongBench-v2/tree/2b48e494f2c7a2f0af81aae178e05c7e1dde0fe9),
 Apache-2.0, at pinned revision
