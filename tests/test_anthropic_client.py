@@ -536,6 +536,7 @@ def test_fanout_batch_preserves_usage_failure_and_original_cause(monkeypatch) ->
         TokenUsage(2, 1, 5, exact=True),
         TokenUsage(7, 3, 19, exact=True),
     )
+    assert failure.value.result.errors == ({"index": 1, "error": "malformed anthropic output"},)
     assert type(failure.value.cause) is RuntimeError
     with pytest.raises(RuntimeError, match="malformed anthropic output"):
         subcall.llm_batch(["ok", "bad"])

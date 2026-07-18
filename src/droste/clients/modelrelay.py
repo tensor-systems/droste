@@ -44,6 +44,7 @@ from ..protocols.subcall_client import (
     SubcallClient,
     SubcallQueryResult,
     fail_fast_subcall_batch,
+    structured_subcall_errors,
 )
 from .errors import http_error_excerpt, redact_secrets
 from .openai_compat import (
@@ -625,17 +626,11 @@ class ModelRelaySubcallClient(SubcallClient):
         contexts: list[str] | None = None,
     ) -> SubcallBatchResult:
         value = self._run_batch(prompts, contexts)
-        structured: list[dict[str, object]] = []
-        for idx, err in enumerate(value.errors):
-            if err is None:
-                continue
-            item: dict[str, object] = {"index": idx, "error": str(err)}
-            if isinstance(err, BatchItemError):
-                details = err.details.to_dict()
-                if details:
-                    item["details"] = details
-            structured.append(item)
-        return SubcallBatchResult(value.results, tuple(structured), value.usage)
+        return SubcallBatchResult(
+            value.results,
+            structured_subcall_errors(value.errors),
+            value.usage,
+        )
 
     def _run_batch(self, prompts: list[str], contexts: list[str] | None) -> _NativeBatchResult:
         if contexts is None:

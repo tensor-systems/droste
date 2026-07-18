@@ -52,6 +52,7 @@ from ..protocols.subcall_client import (
     SubcallClient,
     SubcallQueryResult,
     fail_fast_subcall_batch,
+    structured_subcall_errors,
 )
 from .errors import http_error_excerpt
 from .useragent import USER_AGENT
@@ -557,12 +558,11 @@ class OpenAICompatSubcallClient(SubcallClient):
         contexts: list[str] | None = None,
     ) -> SubcallBatchResult:
         value = self._run_batch(prompts, contexts)
-        structured = [
-            {"index": idx, "error": str(err)}
-            for idx, err in enumerate(value.errors)
-            if err is not None
-        ]
-        return SubcallBatchResult(value.results, tuple(structured), value.usage)
+        return SubcallBatchResult(
+            value.results,
+            structured_subcall_errors(value.errors),
+            value.usage,
+        )
 
     def _run_batch(self, prompts: list[str], contexts: list[str] | None) -> _CompatBatchResult:
         if contexts is None:

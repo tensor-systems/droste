@@ -15,6 +15,7 @@ from droste.capabilities import (
     CapabilityStatus,
     subcall_registrations,
 )
+from droste.exceptions import BatchItemError, BatchItemErrorDetails
 from droste.execution.broker_budget import BrokerBudget
 from droste.execution.budget import (
     Budget,
@@ -25,6 +26,7 @@ from droste.execution.budget import (
 from droste.execution.context import create_execution_context
 from droste.protocols.llm_client import LLMUsageFailure, TokenUsage
 from droste.protocols.subcall_client import (
+    SubcallBatchFailure,
     SubcallBatchResult,
     SubcallQueryResult,
     fail_fast_subcall_batch,
@@ -340,6 +342,47 @@ def test_failed_batch_preserves_known_sibling_usage_through_broker() -> None:
     resolved = context.stats.resolved_usage(0).as_dict()
     assert resolved["kind"] == "partial"
     assert resolved["subcall"]["total_tokens"] == 24
+
+
+def test_fail_fast_batch_carries_all_public_errors_and_original_first_cause() -> None:
+    first = BatchItemError(
+        "first failed",
+        BatchItemErrorDetails(request_id="req-1", retryable=True),
+    )
+    later = ValueError("later failed")
+
+    with pytest.raises(SubcallBatchFailure) as failure:
+        fail_fast_subcall_batch(
+            ("", "ok", ""),
+            (first, None, later),
+            (
+                TokenUsage.unavailable(),
+                TokenUsage(1, 1, 2, exact=True),
+                TokenUsage.unavailable(),
+            ),
+        )
+
+    assert failure.value.cause is first
+    assert failure.value.result.errors == (
+        {
+            "index": 0,
+            "error": "first failed",
+            "details": {"request_id": "req-1", "retryable": True},
+        },
+        {"index": 2, "error": "later failed"},
+    )
+
+
+def test_fail_fast_batch_rejects_misaligned_error_slots() -> None:
+    with pytest.raises(ValueError, match="errors must align with results"):
+        fail_fast_subcall_batch(
+            ("one", "two"),
+            (None,),
+            (
+                TokenUsage(1, 1, 2, exact=True),
+                TokenUsage(1, 1, 2, exact=True),
+            ),
+        )
 
 
 def test_batch_reservation_rejects_the_whole_vector_before_dispatch() -> None:

@@ -11,6 +11,7 @@ from .subcall_client import (
     SubcallQueryResult,
     SubcallUsageProvider,
     fail_fast_subcall_batch,
+    structured_subcall_errors,
 )
 
 __all__ = [
@@ -29,5 +30,6 @@ __all__ = [
     "SubcallOutputTokenLimitProvider",
     "SubcallQueryResult",
     "fail_fast_subcall_batch",
+    "structured_subcall_errors",
     "SubcallUsageProvider",
 ]

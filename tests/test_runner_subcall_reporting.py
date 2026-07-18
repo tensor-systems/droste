@@ -455,6 +455,29 @@ def test_llm_batch_raises_lowest_index_error_unwrapped() -> None:
     assert raised.value.__cause__.__cause__ is None
 
 
+def test_http_fail_fast_batch_carries_every_error_in_index_order() -> None:
+    client, _ = _client()
+
+    class _Boom(RuntimeError):
+        pass
+
+    def _request(payload: dict[str, Any]) -> SubcallQueryResult:
+        prompt = payload["prompt"]
+        if prompt in ("p2", "p4"):
+            raise _Boom(f"boom {prompt}")
+        return SubcallQueryResult("ok", TokenUsage(1, 1, 2, exact=True))
+
+    client._request = _request  # type: ignore[method-assign]
+    with pytest.raises(SubcallBatchFailure) as failure:
+        client.llm_batch_with_usage([f"p{i}" for i in range(5)])
+
+    assert str(failure.value.cause) == "boom p2"
+    assert failure.value.result.errors == (
+        {"index": 2, "error": "boom p2"},
+        {"index": 4, "error": "boom p4"},
+    )
+
+
 def test_http_fanout_batch_preserves_usage_failure_and_original_cause() -> None:
     client, _ = _client()
 
@@ -473,6 +496,7 @@ def test_http_fanout_batch_preserves_usage_failure_and_original_cause() -> None:
         TokenUsage(2, 1, 5, exact=True),
         TokenUsage(7, 3, 19, exact=True),
     )
+    assert failure.value.result.errors == ({"index": 1, "error": "malformed HTTP output"},)
     assert type(failure.value.cause) is RuntimeError
     with pytest.raises(RuntimeError, match="malformed HTTP output"):
         client.llm_batch(["ok", "bad"])

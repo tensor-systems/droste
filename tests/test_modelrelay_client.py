@@ -701,6 +701,54 @@ def test_all_failed_native_batch_has_attempts_but_no_success_evidence(stub_nativ
     assert context.stats.total_tokens == 0
 
 
+def test_native_fail_fast_batch_carries_all_indexed_errors_and_details(stub_native):
+    context = create_execution_context()
+    client = ModelRelaySubcallClient(
+        model="sub-model",
+        context=context,
+        base_url=stub_native.base_url,
+        api_key="mr_sk_t",
+    )
+    stub_native.batch_error_fields = {
+        "request_id": "req-item-9",
+        "layer": "gateway",
+        "retryable": True,
+    }
+
+    with pytest.raises(SubcallBatchFailure) as failure:
+        client.llm_batch_with_usage(["fail", "fail"])
+
+    assert isinstance(failure.value.cause, BatchItemError)
+    assert failure.value.result.errors == (
+        {
+            "index": 0,
+            "error": "llm_batch item 0 failed (PROVIDER_ERROR): provider exploded",
+            "details": {
+                "request_id": "req-item-9",
+                "batch_id": "batch-stub-1",
+                "item_id": "0",
+                "layer": "gateway",
+                "status_code": 502,
+                "code": "PROVIDER_ERROR",
+                "retryable": True,
+            },
+        },
+        {
+            "index": 1,
+            "error": "llm_batch item 1 failed (PROVIDER_ERROR): provider exploded",
+            "details": {
+                "request_id": "req-item-9",
+                "batch_id": "batch-stub-1",
+                "item_id": "1",
+                "layer": "gateway",
+                "status_code": 502,
+                "code": "PROVIDER_ERROR",
+                "retryable": True,
+            },
+        },
+    )
+
+
 def test_failed_batch_item_never_trusts_a_zero_valued_usage_object(stub_native):
     context = create_execution_context()
     client = ModelRelaySubcallClient(

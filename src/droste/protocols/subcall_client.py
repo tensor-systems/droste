@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ..exceptions import BatchItemError
 from .llm_client import TokenUsage
 from .subcall_capacity import SubcallInputCapacity
 
@@ -64,6 +65,24 @@ class SubcallBatchFailure(RuntimeError):
         self.cause = cause
 
 
+def structured_subcall_errors(
+    errors: tuple[Exception | None, ...],
+) -> tuple[dict[str, Any], ...]:
+    """Project ordered item exceptions into the public batch-error shape."""
+
+    structured: list[dict[str, Any]] = []
+    for index, error in enumerate(errors):
+        if error is None:
+            continue
+        item: dict[str, Any] = {"index": index, "error": str(error)}
+        if isinstance(error, BatchItemError):
+            details = error.details.to_dict()
+            if details:
+                item["details"] = details
+        structured.append(item)
+    return tuple(structured)
+
+
 def fail_fast_subcall_batch(
     results: tuple[str, ...],
     errors: tuple[Exception | None, ...],
@@ -71,7 +90,9 @@ def fail_fast_subcall_batch(
 ) -> SubcallBatchResult:
     """Build a typed batch result or preserve it beside the first item error."""
 
-    result = SubcallBatchResult(results, (), usage)
+    if len(errors) != len(results):
+        raise ValueError("subcall batch errors must align with results")
+    result = SubcallBatchResult(results, structured_subcall_errors(errors), usage)
     for error in errors:
         if error is not None:
             raise SubcallBatchFailure(result, error) from None

@@ -212,9 +212,14 @@ evidence with that status rather than leaving the model to interpret prefixes.
   unanchored and never mutate or persist markers in canonical messages or
   trajectory records.
 - Fail-fast usage-aware batches raise `SubcallBatchFailure` with the collected
-  `SubcallBatchResult`; broker registrations record its per-item usage before
-  re-raising the original item error. Plain `llm_batch` must still expose that
-  original exception type, and adapters must not directly mutate token stats.
+  `SubcallBatchResult`; the carried result must retain every failed slot as an
+  ordered indexed public error, including allowlisted `BatchItemError` details,
+  while `cause` remains the original lowest-index failure. Use the shared
+  exception-to-public-error projector for fail-fast and batch-with-errors paths
+  so their representations cannot drift. Broker registrations record per-item
+  usage before re-raising the original item error; plain `llm_batch` must still
+  expose that original exception type, and adapters must not directly mutate
+  token stats.
 - Fan-out batch collectors must catch `LLMUsageFailure` before the generic
   exception branch, copy its usage into the matching item slot, and store its
   original cause. ModelRelay native-batch structural failures after dispatch
