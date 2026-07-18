@@ -172,6 +172,12 @@ artifacts, dataset and selection provenance, and regenerated reports live under
 Its three arms compare direct `gpt-5.6-sol`, direct `gpt-5.6-terra`, and Droste
 with a `gpt-5.6-terra` root and `gpt-5.6-luna` subcalls.
 
+OOLONG-Pairs is `ready` and has published results: immutable artifacts,
+dataset and materializer provenance, and regenerated reports live under
+[`results/oolong-pairs-32k-2026-07-17/`](results/oolong-pairs-32k-2026-07-17/).
+Its three arms compare direct `gpt-5.6-sol`, direct `gpt-5.6-terra`, and Droste
+with a `gpt-5.6-terra` root and `gpt-5.6-luna` subcalls.
+
 The other datasets remain `planned`. A planned benchmark cannot be run because
 it has no task path. Dataset adapters promote each benchmark to `ready` only
 after source or generator provenance, split, integrity checks, and scorer are
@@ -180,7 +186,8 @@ pinned.
 ## Live runs
 
 The checked-in manifest pins public live configurations (models, reasoning
-efforts, budgets, concurrency) for OOLONG, S-NIAH, and LongBench-v2 CodeQA.
+efforts, budgets, concurrency) for OOLONG, S-NIAH, LongBench-v2 CodeQA, and
+OOLONG-Pairs.
 Materializing or validating the suite makes no model calls. Live runs require
 an explicit run command and a new output directory, refuse to overwrite
 artifacts, snapshot the endpoint's public price table, and reject additions if
@@ -253,6 +260,24 @@ uv run python -m benchmarks report \
   "${task_args[@]}" \
   --json /tmp/longbench-codeqa-regen.json \
   --markdown /tmp/longbench-codeqa-regen.md
+```
+
+The OOLONG-Pairs report regenerates from the committed artifacts with all 20
+task IDs selected:
+
+```bash
+task_args=()
+for task_id in {1..20}; do task_args+=(--task-id "$task_id"); done
+uv run python -m benchmarks report \
+  benchmarks/manifests/rlm-paper-v1.json \
+  benchmarks/results/oolong-pairs-32k-2026-07-17/artifacts \
+  "${task_args[@]}" \
+  --json /tmp/oolong-pairs-report.json \
+  --markdown /tmp/oolong-pairs-report.md
+cmp benchmarks/results/oolong-pairs-32k-2026-07-17/report.json \
+  /tmp/oolong-pairs-report.json
+cmp benchmarks/results/oolong-pairs-32k-2026-07-17/report.md \
+  /tmp/oolong-pairs-report.md
 ```
 
 When enabling a public configuration, include `--max-cost-microusd <amount>` in
