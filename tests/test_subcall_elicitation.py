@@ -8,6 +8,8 @@
   violation that keeps (not wipes) the accumulated answer content.
 """
 
+import json
+from dataclasses import asdict
 from typing import Any
 
 from droste import (
@@ -22,7 +24,7 @@ from droste import (
 from droste.loop.rlm import EMPTY_OUTPUT_NUDGE
 from droste.prompts import TIPS_PROFILES, SystemPromptBuilder
 from droste.protocols.environment import ExecutionResult
-from droste.protocols.llm_client import TokenUsage
+from droste.protocols.llm_client import CACHE_ANCHOR_MARKER, TokenUsage
 from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
 from droste_runner.runner import RunnerEnvironment, describe_context
 
@@ -687,6 +689,54 @@ answer['ready'] = False
     assert [record.attempt_kind for record in result.trajectory] == ["initial", "terminal"]
     assert "single terminal finalization attempt" in llm.calls[1][-1]["content"]
     assert "Draft answer so far:\nred,blue" in llm.calls[2][-1]["content"]
+
+
+def test_real_loop_repairs_and_finalization_keep_trajectory_marker_free() -> None:
+    incomplete = """```python
+prompts = ['classify red blue', 'classify green yellow']
+schema = {'type': 'object', 'required': ['label'], 'properties': {'label': {'type': 'string'}}}
+batch_result = llm_batch_json(prompts, schema, max_repair_attempts=0)
+retained_labels = [value['label'] for value in batch_result['values'] if value]
+answer['ready'] = True
+```"""
+    llm = RecordingLLMClient(
+        _responses(
+            "Return Python, please.",
+            "```python\nraise ValueError('repair me')\n```",
+            incomplete,
+            "```python\nanswer['content'] = ','.join(retained_labels)\n```",
+            "Best-effort classification from repaired persistent state.",
+        )
+    )
+    subcalls = SyntheticClassificationSubcalls([['{"label":"red,blue"}', "not json"]])
+
+    result = run_rlm(
+        question="Assign labels to four synthetic records.",
+        environment=MockEnvironment(),
+        root_llm=llm,
+        subcalls=subcalls,
+        config=RLMConfig(
+            budget=Budget(subcalls=3),
+            policy_hints=PolicyHints(semantic=True),
+        ),
+    )
+
+    assert result.answer == "Best-effort classification from repaired persistent state."
+    assert result.extracted is True
+    assert [record.attempt_kind for record in result.trajectory] == [
+        "initial",
+        "repair",
+        "terminal",
+    ]
+    assert len(llm.calls) == 5
+    assert [any(CACHE_ANCHOR_MARKER in message for message in call) for call in llm.calls] == [
+        True,
+        True,
+        True,
+        True,
+        False,
+    ]
+    assert CACHE_ANCHOR_MARKER not in json.dumps([asdict(record) for record in result.trajectory])
 
 
 def test_terminal_finalization_root_failure_is_observable_without_changing_policy() -> None:

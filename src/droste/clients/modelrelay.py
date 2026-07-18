@@ -359,9 +359,11 @@ class ModelRelayClient:
     def total_usage(self) -> TokenUsage:
         with self._accounting_lock:
             return TokenUsage(
-                self._total_usage.prompt_tokens,
-                self._total_usage.completion_tokens,
-                self._total_usage.total_tokens,
+                prompt_tokens=self._total_usage.prompt_tokens,
+                completion_tokens=self._total_usage.completion_tokens,
+                total_tokens=self._total_usage.total_tokens,
+                cache_read_tokens=self._total_usage.cache_read_tokens,
+                cache_creation_tokens=self._total_usage.cache_creation_tokens,
             )
 
     @property
@@ -377,9 +379,13 @@ class ModelRelayClient:
     def _account_usage(self, usage: TokenUsage) -> None:
         with self._accounting_lock:
             self._total_usage = TokenUsage(
-                self._total_usage.prompt_tokens + usage.prompt_tokens,
-                self._total_usage.completion_tokens + usage.completion_tokens,
-                self._total_usage.total_tokens + usage.total_tokens,
+                prompt_tokens=self._total_usage.prompt_tokens + usage.prompt_tokens,
+                completion_tokens=self._total_usage.completion_tokens + usage.completion_tokens,
+                total_tokens=self._total_usage.total_tokens + usage.total_tokens,
+                cache_read_tokens=self._total_usage.cache_read_tokens + usage.cache_read_tokens,
+                cache_creation_tokens=(
+                    self._total_usage.cache_creation_tokens + usage.cache_creation_tokens
+                ),
             )
 
     def _payload(
@@ -496,9 +502,11 @@ class ModelRelaySubcallClient(SubcallClient):
     def total_usage(self) -> TokenUsage:
         with self._lock:
             return TokenUsage(
-                self._total_usage.prompt_tokens,
-                self._total_usage.completion_tokens,
-                self._total_usage.total_tokens,
+                prompt_tokens=self._total_usage.prompt_tokens,
+                completion_tokens=self._total_usage.completion_tokens,
+                total_tokens=self._total_usage.total_tokens,
+                cache_read_tokens=self._total_usage.cache_read_tokens,
+                cache_creation_tokens=self._total_usage.cache_creation_tokens,
             )
 
     def _increment_calls(self, count: int = 1) -> None:
@@ -511,9 +519,13 @@ class ModelRelaySubcallClient(SubcallClient):
         with self._lock:
             self._context.record_subcall_usage(usage)
             self._total_usage = TokenUsage(
-                self._total_usage.prompt_tokens + usage.prompt_tokens,
-                self._total_usage.completion_tokens + usage.completion_tokens,
-                self._total_usage.total_tokens + usage.total_tokens,
+                prompt_tokens=self._total_usage.prompt_tokens + usage.prompt_tokens,
+                completion_tokens=self._total_usage.completion_tokens + usage.completion_tokens,
+                total_tokens=self._total_usage.total_tokens + usage.total_tokens,
+                cache_read_tokens=self._total_usage.cache_read_tokens + usage.cache_read_tokens,
+                cache_creation_tokens=(
+                    self._total_usage.cache_creation_tokens + usage.cache_creation_tokens
+                ),
             )
 
     def _increment_successful_calls(self, count: int = 1) -> None:

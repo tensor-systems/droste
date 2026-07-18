@@ -32,6 +32,7 @@ Dependency-free by design: urllib only, like the rest of the engine.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -43,7 +44,11 @@ from typing import Any
 from ..execution.budget import DEFAULT_SUBCALL_OUTPUT_TOKENS
 from ..execution.config import DEFAULT_SUBCALL_CONCURRENCY, validate_subcall_concurrency
 from ..execution.context import ExecutionContext
-from ..protocols.llm_client import CACHE_ANCHOR_MARKER, TokenUsage
+from ..protocols.llm_client import (
+    CACHE_ANCHOR_MARKER,
+    TokenUsage,
+    strip_cache_anchor_markers,
+)
 from ..protocols.subcall_client import SubcallClient
 from .errors import http_error_excerpt
 from .useragent import USER_AGENT
@@ -57,6 +62,8 @@ DEFAULT_TIMEOUT_SECONDS = 120.0
 
 #: Anthropic key prefix — the fact the CLI's provider detection keys off.
 ANTHROPIC_KEY_PREFIX = "sk-ant-"
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_anthropic_base_url(base_url: str | None = None) -> str:
@@ -85,7 +92,7 @@ def _clean_content_blocks(content: Any) -> Any:
 def _mark_content(content: Any) -> tuple[Any, bool]:
     """Attach one ephemeral breakpoint to content when its shape permits."""
     content = _clean_content_blocks(content)
-    if isinstance(content, str):
+    if isinstance(content, str) and content:
         return (
             [
                 {
@@ -105,6 +112,10 @@ def _mark_content(content: Any) -> tuple[Any, bool]:
                     "cache_control": {"type": "ephemeral"},
                 }
                 return content, True
+    logger.warning(
+        "Anthropic cache anchor was not applied: unsupported or empty content shape (%s)",
+        type(content).__name__,
+    )
     return content, False
 
 
@@ -118,19 +129,21 @@ def _system_blocks(content: Any) -> list[Any]:
 
 def _lift_system(
     messages: list[dict[str, Any]],
-) -> tuple[list[Any], list[dict[str, Any]]]:
+) -> tuple[str | list[Any], list[dict[str, Any]]]:
     """Split ``role: system`` messages out into the top-level ``system`` field.
 
     The runner passes the system prompt as ``messages[0]``; Anthropic rejects
     a system role inside ``messages``. Multiple system messages concatenate.
     """
-    system_parts: list[Any] = []
+    system_contents: list[Any] = []
+    system_uses_blocks = False
     rest: list[dict[str, Any]] = []
     cache_controls = 0
-    for message in messages:
+    clean_messages = strip_cache_anchor_markers(messages)
+    for message, outbound in zip(messages, clean_messages, strict=True):
         anchored = bool(message.get(CACHE_ANCHOR_MARKER))
-        outbound = {key: value for key, value in message.items() if key != CACHE_ANCHOR_MARKER}
         content = outbound.get("content")
+        marked = False
         if anchored and cache_controls < 4:
             content, marked = _mark_content(content)
             cache_controls += int(marked)
@@ -138,14 +151,23 @@ def _lift_system(
             content = _clean_content_blocks(content)
         outbound["content"] = content
         if str(message.get("role", "")).lower() == "system":
-            blocks = _system_blocks(content)
-            if blocks:
-                if system_parts:
-                    system_parts.append({"type": "text", "text": "\n\n"})
-                system_parts.extend(blocks)
+            system_contents.append(content)
+            system_uses_blocks = system_uses_blocks or marked or isinstance(content, list)
         else:
             rest.append(outbound)
-    return system_parts, rest
+    if not system_uses_blocks:
+        return "\n\n".join(
+            content for content in system_contents if isinstance(content, str) and content
+        ), rest
+
+    system_blocks: list[Any] = []
+    for content in system_contents:
+        blocks = _system_blocks(content)
+        if blocks:
+            if system_blocks:
+                system_blocks.append({"type": "text", "text": "\n\n"})
+            system_blocks.extend(blocks)
+    return system_blocks, rest
 
 
 def _text_from_content(data: Any, *, label: str) -> str:

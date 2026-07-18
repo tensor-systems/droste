@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -13,6 +14,8 @@ from droste import (
     AnthropicSubcallClient,
     create_execution_context,
 )
+from droste.clients.anthropic import _mark_content
+from droste.loop.step import call_root
 from droste.protocols.llm_client import CACHE_ANCHOR_MARKER
 from droste_cli.main import main
 
@@ -195,8 +198,84 @@ def test_system_message_lifted_to_top_level(stub):
         model="claude-test",
     )
     sent = stub.requests[0]
-    assert sent["system"] == [{"type": "text", "text": "be terse"}]
+    assert sent["system"] == "be terse"
     assert [m["role"] for m in sent["messages"]] == ["user", "assistant"]
+
+
+def test_unanchored_system_stays_string_when_user_is_cache_anchored(stub):
+    client = AnthropicClient(model="claude-test", base_url=stub.base_url, api_key="sk-ant-k")
+
+    client.responses_create(
+        [
+            {"role": "system", "content": "be terse"},
+            {"role": "user", "content": "q", CACHE_ANCHOR_MARKER: True},
+        ],
+        model="claude-test",
+    )
+
+    assert stub.requests[0]["system"] == "be terse"
+    assert stub.requests[0]["messages"][0]["content"] == [
+        {
+            "type": "text",
+            "text": "q",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+def test_nonanchored_list_content_strips_caller_cache_control(stub):
+    content = [
+        {
+            "type": "text",
+            "text": "q",
+            "cache_control": {"type": "caller-selected"},
+        }
+    ]
+    client = AnthropicClient(model="claude-test", base_url=stub.base_url, api_key="sk-ant-k")
+
+    client.responses_create(
+        [{"role": "system", "content": "system"}, {"role": "user", "content": content}],
+        model="claude-test",
+    )
+
+    assert stub.requests[0]["messages"][0]["content"] == [{"type": "text", "text": "q"}]
+    assert content[0]["cache_control"] == {"type": "caller-selected"}
+
+
+def test_call_root_does_not_mutate_list_content_across_anthropic_handoff(stub):
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": [{"type": "text", "text": "q"}]},
+    ]
+    original = deepcopy(messages)
+    client = AnthropicClient(model="claude-test", base_url=stub.base_url, api_key="sk-ant-k")
+
+    _response, _usage, error = call_root(
+        client,
+        messages,  # type: ignore[arg-type]
+        model="claude-test",
+        context=create_execution_context(),
+    )
+
+    assert error is None
+    assert messages == original
+    assert stub.requests[0]["messages"][0]["content"] == [
+        {
+            "type": "text",
+            "text": "q",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+@pytest.mark.parametrize("content", [None, "", 0, [], ["text"]])
+def test_unmarkable_cache_anchor_emits_warning(content, caplog):
+    caplog.set_level("WARNING", logger="droste.clients.anthropic")
+
+    _cleaned, marked = _mark_content(content)
+
+    assert marked is False
+    assert "cache anchor was not applied" in caplog.text
 
 
 def test_cache_anchors_become_at_most_four_ephemeral_blocks(stub):

@@ -3,7 +3,9 @@ the fix for it silently swallowing failures (found via a real user report:
 raw debug `print()` output was shown as a final answer with zero trace of why
 the synthesis call that should have replaced it never ran)."""
 
-from droste import RLMConfig
+from typing import Any
+
+from droste import AnthropicClient, RLMConfig
 from droste.execution import create_execution_context
 from droste.loop.rlm import _extract_final_answer
 from droste.loop.trajectory import EXECUTION_STATUS_SUCCESS, IterationRecord
@@ -145,3 +147,37 @@ def test_extract_fallback_success_has_no_error():
     text, error = _extract(responses)
     assert error is None
     assert text == "A proper synthesized answer."
+
+
+def test_extract_fallback_anthropic_system_uses_legacy_string_wire_form(monkeypatch):
+    payloads: list[dict[str, Any]] = []
+    client = AnthropicClient(model="claude-test", api_key="sk-ant-test")
+
+    def complete(payload: dict[str, Any]) -> dict[str, Any]:
+        payloads.append(payload)
+        return {
+            "content": [{"type": "text", "text": "A synthesized answer."}],
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+
+    monkeypatch.setattr(client._transport, "complete", complete)
+    pack = resolve_prompt_pack(
+        model="",
+        profile="full",
+        engine_catalog=load_builtin_prompt_catalog(),
+    ).pack
+
+    text, error = _extract_final_answer(
+        "test",
+        "partial draft",
+        _TRAJECTORY,
+        client,
+        RLMConfig(root_model="claude-test"),
+        create_execution_context(),
+        pack,
+    )
+
+    assert error is None
+    assert text == "A synthesized answer."
+    assert isinstance(payloads[0]["system"], str)
+    assert "cache_control" not in payloads[0]["system"]

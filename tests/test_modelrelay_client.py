@@ -25,7 +25,7 @@ from droste.clients.modelrelay import (
 )
 from droste.environments import RunnerEnvironment
 from droste.execution.context import create_execution_context
-from droste.protocols.llm_client import CACHE_ANCHOR_MARKER
+from droste.protocols.llm_client import CACHE_ANCHOR_MARKER, TokenUsage
 from droste.structured import _StructuredBatchEvidence, bind_structured_batch, structured_batch
 
 
@@ -348,6 +348,34 @@ def test_root_request_count_accumulates_across_calls(stub_native):
         client.responses_create([{"role": "user", "content": "q"}], model="")
 
     assert client.root_requests_issued == 3
+
+
+def test_usage_accumulators_preserve_cache_breakdown_across_folds() -> None:
+    usages = [
+        TokenUsage(11, 2, 13, cache_read_tokens=7, cache_creation_tokens=3),
+        TokenUsage(17, 5, 22, cache_read_tokens=13, cache_creation_tokens=2),
+    ]
+    expected = TokenUsage(
+        prompt_tokens=28,
+        completion_tokens=7,
+        total_tokens=35,
+        cache_read_tokens=20,
+        cache_creation_tokens=5,
+    )
+
+    root = ModelRelayClient(model="root-model", api_key="mr_sk_t")
+    for usage in usages:
+        root._account_usage(usage)
+    assert root.total_usage == expected
+
+    subcall = ModelRelaySubcallClient(
+        model="sub-model",
+        context=create_execution_context(),
+        api_key="mr_sk_t",
+    )
+    for usage in usages:
+        subcall._account_usage(usage)
+    assert subcall.total_usage == expected
 
 
 def test_root_request_count_is_thread_safe(stub_native):
