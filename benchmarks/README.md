@@ -104,6 +104,31 @@ The `exact_match` scorer accepts a normalized bare word-pair. The task includes
 RULER's answer prefix in the live question to request that clean value; prose
 around the value intentionally does not receive exact-match credit.
 
+## Pinned LongBench-v2 CodeQA data
+
+Materialize the public Code Repository Understanding domain's disclosed
+20-of-50 cost-bounded subsample:
+
+```bash
+uv run python -m benchmarks materialize-longbench-codeqa \
+  --output benchmarks/.data/longbench-v2-codeqa-20-v1
+```
+
+The materializer downloads the 50 rows in that domain from
+`zai-org/LongBench-v2` at revision
+`2b48e494f2c7a2f0af81aae178e05c7e1dde0fe9`, verifies the pinned source
+projection, and writes the fixed 20-task selection plus content-addressed
+contexts. The dataset is Apache-2.0 licensed. Existing files are never
+overwritten.
+
+This is not a result over the complete 50-task domain. The cost-bounded sample
+contains 8 short, 7 medium, and 5 long tasks, split into 8 easy and 12 hard
+tasks. Within each length/difficulty stratum, the materializer sorts task IDs
+and selects centered evenly spaced positions using `floor((2i+1)n/(2k))`.
+The full-domain cost was disproportionate for this run; one pilot task alone
+cost $3.30. The rule makes the reduced scope explicit and reproducible rather
+than selecting tasks from model outcomes.
+
 ## RLM paper suite
 
 `manifests/rlm-paper-v1.json` pins the target paper revision and names the
@@ -113,33 +138,37 @@ Droste-specific follow-on rather than being presented as part of the paper.
 
 The OOLONG 131K `trec_coarse` validation slice is `ready` and has published
 results: immutable artifacts, a price-snapshot provenance record, and
-regenerated reports live under `results/oolong-trec-coarse-131k-2026-07-17/`
+regenerated reports live under
+[`results/oolong-trec-coarse-131k-2026-07-17/`](results/oolong-trec-coarse-131k-2026-07-17/)
 ([#81](https://github.com/tensor-systems/droste/issues/81)).
 
 The deterministic S-NIAH 32K split is `ready` and has published results:
 immutable artifacts, generator provenance, and regenerated reports live under
 [`results/sniah-32k-2026-07-17/`](results/sniah-32k-2026-07-17/). Its three
 arms compare direct `gpt-5.6-sol`, direct `gpt-5.6-terra`, and Droste with a
-`gpt-5.6-terra` root and `gpt-5.6-luna` subcalls. The other datasets remain
-`planned`. A planned benchmark cannot be run because it has no
-task path. Dataset adapters promote each benchmark to `ready` only after source
-or generator provenance, split, integrity checks, and scorer are pinned.
+`gpt-5.6-terra` root and `gpt-5.6-luna` subcalls.
 
-LongBench-v2 CodeQA is explicitly a cost-bounded 20-of-50 subsample, not a
-full-domain result. It contains 8 short, 7 medium, and 5 long tasks, split into
-8 easy and 12 hard tasks. Within each length/difficulty stratum, the
-materializer sorts task IDs and selects centered evenly spaced positions using
-`floor((2i+1)n/(2k))`, making the scope fixed and reproducible.
+LongBench-v2 CodeQA is also `ready` and has published results: immutable
+artifacts, dataset and selection provenance, and regenerated reports live under
+[`results/longbench-v2-codeqa-20-2026-07-17/`](results/longbench-v2-codeqa-20-2026-07-17/).
+Its three arms compare direct `gpt-5.6-sol`, direct `gpt-5.6-terra`, and Droste
+with a `gpt-5.6-terra` root and `gpt-5.6-luna` subcalls.
+
+The other datasets remain `planned`. A planned benchmark cannot be run because
+it has no task path. Dataset adapters promote each benchmark to `ready` only
+after source or generator provenance, split, integrity checks, and scorer are
+pinned.
 
 ## Live runs
 
 The checked-in manifest pins public live configurations (models, reasoning
-efforts, budgets, concurrency) for both OOLONG and S-NIAH. Materializing or
+efforts, budgets, concurrency) for OOLONG, S-NIAH, and LongBench-v2 CodeQA. Materializing or
 validating the suite makes no model calls. Live runs require an explicit run
 command and a new output directory, refuse to overwrite artifacts, snapshot
 the endpoint's public price table, and reject additions if that snapshot
-changes. The published OOLONG report regenerates offline from the committed
-artifacts:
+changes.
+
+The published OOLONG report regenerates offline from its committed artifacts:
 
 ```bash
 uv run python -m benchmarks report benchmarks/manifests/rlm-paper-v1-oolong-2026-07-17.json benchmarks/results/oolong-trec-coarse-131k-2026-07-17/artifacts --json /tmp/regen-check.json --markdown /tmp/regen-check.md
@@ -168,6 +197,32 @@ uv run python -m benchmarks report \
   "${task_args[@]}" \
   --json /tmp/sniah-regen-check.json \
   --markdown /tmp/sniah-regen-check.md
+```
+
+After materializing the ready task sets, the published CodeQA reports
+regenerate from the committed artifacts with all 20 CodeQA task IDs selected:
+
+```bash
+task_ids=(
+  66ebd3ba5a08c7b9b35e0446 66ec3644821e116aacb1c312
+  66ece545821e116aacb1dd77 66f1dac1821e116aacb27df1
+  66f39ac5821e116aacb2da81 66f3ad93821e116aacb2e29f
+  66f3c219821e116aacb2eb4e 66f3cb88821e116aacb2eeb9
+  66f3e318821e116aacb2f9d1 66f530ce821e116aacb32f09
+  66f908e3bb02136c067c4992 66fa3843bb02136c067c655d
+  66fa542bbb02136c067c686d 66fa700bbb02136c067c6c06
+  66fa788abb02136c067c6d75 66fa7c81bb02136c067c6e09
+  66faa0f5bb02136c067c722c 66fcf80dbb02136c067c928e
+  66fcfb5fbb02136c067c93ae 6708a096bb02136c067d1789
+)
+task_args=()
+for task_id in "${task_ids[@]}"; do task_args+=(--task-id "$task_id"); done
+uv run python -m benchmarks report \
+  benchmarks/manifests/rlm-paper-v1.json \
+  benchmarks/results/longbench-v2-codeqa-20-2026-07-17/artifacts \
+  "${task_args[@]}" \
+  --json /tmp/longbench-codeqa-regen.json \
+  --markdown /tmp/longbench-codeqa-regen.md
 ```
 
 When enabling a public configuration, include `--max-cost-microusd <amount>` in

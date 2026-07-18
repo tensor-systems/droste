@@ -338,7 +338,9 @@ The repository ships a [versioned benchmark harness](benchmarks/README.md):
 immutable per-task artifacts, deterministic scorers, and reports that
 regenerate byte-for-byte from committed evidence, offline.
 
-The OOLONG `trec_coarse` slice from the
+### OOLONG `trec_coarse`
+
+The published OOLONG result is a slice from the
 [RLM paper suite](benchmarks/manifests/rlm-paper-v1.json): 131K-token
 contexts, 50 tasks, three arms, one repetition, run 2026-07-17
 ([report](benchmarks/results/oolong-trec-coarse-131k-2026-07-17/report.md) ·
@@ -388,6 +390,8 @@ contain only per-task predictions, gold labels, scores, and usage.
 report-regeneration command, the materialization command, and the live-run
 procedure (new output directory, immutable artifacts, explicit cost cap).
 
+### S-NIAH
+
 The adjacent S-NIAH result is the single needle-in-a-haystack retrieval task
 from the RULER methodology of
 [Hsieh et al. (2024)](https://arxiv.org/abs/2404.06654). This
@@ -418,6 +422,48 @@ and redistributes no dataset or generated examples. There is consequently no
 external dataset revision, dataset citation, or dataset-license section for
 this result. The provenance record instead pins the generator hash, seed,
 configuration, materialized-task hash, and RULER commit.
+
+### LongBench-v2 CodeQA
+
+This published result is code-repository-understanding multiple-choice QA over
+real long-context codebases. The run used 20 tasks, three arms, and one
+repetition on 2026-07-17
+([report](benchmarks/results/longbench-v2-codeqa-20-2026-07-17/report.md) ·
+[raw artifacts](benchmarks/results/longbench-v2-codeqa-20-2026-07-17/artifacts) ·
+[provenance](benchmarks/results/longbench-v2-codeqa-20-2026-07-17/PROVENANCE.md)).
+
+| Arm | Root model | Subcall model | Mean score | Successful | Cost | Tokens |
+|---|---|---|---:|---:|---:|---:|
+| direct-sol | gpt-5.6-sol | — | 0.7500 | 18/20 | $19.597640 | 3,910,423 |
+| direct-terra | gpt-5.6-terra | — | 0.6500 | 17/20 | $9.096737 | 3,627,983 |
+| droste-terra-luna | gpt-5.6-terra | gpt-5.6-luna | 0.6500 | 20/20 | $3.793057 | 1,348,775 |
+
+The direct arms place the complete codebase context in one model call. The
+droste arm runs this engine with a `gpt-5.6-terra` root delegating to
+`gpt-5.6-luna` subcalls (root reasoning `medium`, subcall reasoning `none`).
+All 60 scheduled task–arm attempts remain in the committed artifacts, including
+the two unsuccessful direct-sol attempts and three unsuccessful direct-terra
+attempts. Costs are measured in integer micro-USD from the price snapshot used
+by each run.
+
+droste-terra-luna tied direct-terra's 0.6500 mean score and trailed direct-sol's
+0.7500 by 10 percentage points, while costing 2.4× less than direct-terra and
+5.2× less than direct-sol. This is a mixed, cost-favorable result, not a clean
+sweep. With one 20-task sample, the two-task score difference from direct-sol
+is the observed result, not evidence of a population-level separation.
+
+The tasks come from
+[`zai-org/LongBench-v2`](https://huggingface.co/datasets/zai-org/LongBench-v2/tree/2b48e494f2c7a2f0af81aae178e05c7e1dde0fe9),
+Apache-2.0, at pinned revision
+`2b48e494f2c7a2f0af81aae178e05c7e1dde0fe9`, filtered to the 50-task
+`Code Repository Understanding` domain. The published run is explicitly a
+disclosed, cost-bounded 20-of-50 stratified subsample, not the complete domain:
+8 short, 7 medium, and 5 long tasks, comprising 8 easy and 12 hard tasks. The
+full-domain cost was disproportionate for this run—one pilot task alone cost
+$3.30—so the harness fixes centered, evenly spaced selections within each
+length/difficulty stratum before model outcomes are observed. The
+[materializer](benchmarks/longbench_codeqa.py), manifest task hash, selection
+rule, and offline report-regeneration command are public.
 
 A zero-cost smoke run checks the artifact and reporting path without making
 network calls:
