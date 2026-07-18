@@ -20,6 +20,19 @@ DATASET_SPLIT = "train"
 DOMAIN_FILTER = "Code Repository Understanding"
 ROW_COUNT = 50
 
+# This benchmark intentionally materializes a disclosed 20-of-50 cost-bounded
+# subsample, not the complete domain. Within each length/difficulty stratum,
+# sort by task id and take centered evenly spaced positions. The allocation
+# preserves all three length buckets and approximates the source difficulty mix.
+SUBSAMPLE_COUNTS = {
+    ("short", "easy"): 4,
+    ("short", "hard"): 4,
+    ("medium", "easy"): 2,
+    ("medium", "hard"): 5,
+    ("long", "easy"): 2,
+    ("long", "hard"): 3,
+}
+
 _FILTER_PARAMS = {
     "dataset": DATASET_ID,
     "config": DATASET_CONFIG,
@@ -163,6 +176,35 @@ def _question_with_choices(row: dict[str, Any]) -> str:
     )
 
 
+def _subsample_rows(
+    validated: list[tuple[int, dict[str, Any]]],
+) -> list[tuple[int, dict[str, Any]]]:
+    selected_ids: set[str] = set()
+    for stratum, count in SUBSAMPLE_COUNTS.items():
+        candidates = sorted(
+            (row for _, row in validated if (row["length"], row["difficulty"]) == stratum),
+            key=lambda row: row["_id"],
+        )
+        if len(candidates) < count:
+            length, difficulty = stratum
+            raise BenchmarkRunError(
+                f"LongBench-v2 {length}/{difficulty} stratum has {len(candidates)} rows; "
+                f"cannot select {count}"
+            )
+        size = len(candidates)
+        for position in range(count):
+            index = ((2 * position + 1) * size) // (2 * count)
+            selected_ids.add(candidates[index]["_id"])
+
+    expected_count = sum(SUBSAMPLE_COUNTS.values())
+    selected = [item for item in validated if item[1]["_id"] in selected_ids]
+    if len(selected) != expected_count:
+        raise BenchmarkRunError(
+            f"LongBench-v2 subsample selected {len(selected)} tasks; expected {expected_count}"
+        )
+    return selected
+
+
 def materialize_longbench_codeqa(
     output_dir: Path,
     *,
@@ -170,7 +212,7 @@ def materialize_longbench_codeqa(
 ) -> MaterializedLongBenchCodeQA:
     """Materialize the pinned LongBench-v2 code-repository multiple-choice tasks."""
 
-    validated = _validated_rows(fetch())
+    validated = _subsample_rows(_validated_rows(fetch()))
     tasks: list[dict[str, Any]] = []
     contexts: dict[str, bytes] = {}
     for row_index, row in validated:

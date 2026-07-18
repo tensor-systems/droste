@@ -125,6 +125,12 @@ arms compare direct `gpt-5.6-sol`, direct `gpt-5.6-terra`, and Droste with a
 task path. Dataset adapters promote each benchmark to `ready` only after source
 or generator provenance, split, integrity checks, and scorer are pinned.
 
+LongBench-v2 CodeQA is explicitly a cost-bounded 20-of-50 subsample, not a
+full-domain result. It contains 8 short, 7 medium, and 5 long tasks, split into
+8 easy and 12 hard tasks. Within each length/difficulty stratum, the
+materializer sorts task IDs and selects centered evenly spaced positions using
+`floor((2i+1)n/(2k))`, making the scope fixed and reproducible.
+
 ## Live runs
 
 The checked-in manifest pins public live configurations (models, reasoning

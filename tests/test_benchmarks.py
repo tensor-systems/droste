@@ -80,11 +80,13 @@ def test_manifest_pins_paper_tasks_and_published_live_arms() -> None:
     )
     assert codeqa.dataset == "zai-org/LongBench-v2"
     assert codeqa.dataset_version == "2b48e494f2c7a2f0af81aae178e05c7e1dde0fe9"
-    assert codeqa.split == "train/domain=Code Repository Understanding"
+    assert codeqa.split == (
+        "train/domain=Code Repository Understanding/20-of-50-cost-bounded-subsample"
+    )
     assert codeqa.status == "ready"
     assert codeqa.scorer == "exact_match"
     assert codeqa.tasks_sha256 == (
-        "25f2359d3c92f648b35a9fd4189f7af89812288e56c0c88b664c3d031a22a5a5"
+        "d796fbcf741fbfc516903afd929e1e5aa6e64ded85445acbf950e638303ab5f5"
     )
 
 
@@ -585,6 +587,11 @@ def test_materialize_longbench_codeqa_verifies_and_projects_tasks(
     monkeypatch.setattr(module, "ROW_COUNT", 2)
     monkeypatch.setattr(
         module,
+        "SUBSAMPLE_COUNTS",
+        {("short", "easy"): 1, ("long", "hard"): 1},
+    )
+    monkeypatch.setattr(
+        module,
         "_EXPECTED_FILTERED_ROWS_SHA256",
         hashlib.sha256(module._encode_json(rows)).hexdigest(),
     )
@@ -614,6 +621,29 @@ def test_materialize_longbench_codeqa_verifies_and_projects_tasks(
             tmp_path / "longbench-codeqa",
             fetch=lambda: json.dumps(payload).encode(),
         )
+
+
+def test_longbench_codeqa_subsample_uses_centered_even_spacing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import benchmarks.longbench_codeqa as module
+
+    validated = [
+        (
+            position,
+            {
+                "_id": f"task-{position}",
+                "difficulty": "easy",
+                "length": "short",
+            },
+        )
+        for position in range(6)
+    ]
+    monkeypatch.setattr(module, "SUBSAMPLE_COUNTS", {("short", "easy"): 4})
+
+    selected = module._subsample_rows(validated)
+
+    assert [row["_id"] for _, row in selected] == ["task-0", "task-2", "task-3", "task-5"]
 
 
 def test_materialize_longbench_codeqa_rejects_unverified_rows_before_writing(

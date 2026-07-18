@@ -48,7 +48,7 @@ def _parser() -> argparse.ArgumentParser:
 
     materialize_codeqa = commands.add_parser(
         "materialize-longbench-codeqa",
-        help="materialize the pinned LongBench-v2 code-repository QA tasks",
+        help="materialize the pinned LongBench-v2 CodeQA 20-task cost-bounded subsample",
     )
     materialize_codeqa.add_argument("--output", type=Path, required=True)
 
