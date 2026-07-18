@@ -616,6 +616,7 @@ def _extract_final_answer(
             messages,
             model=cfg.root_model or "",
             context=context,
+            cache_anchors=None,
         )
         if root_error is not None:
             return "", root_error

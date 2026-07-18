@@ -44,7 +44,7 @@ from typing import Any
 from ..execution.budget import DEFAULT_SUBCALL_OUTPUT_TOKENS
 from ..execution.config import DEFAULT_SUBCALL_CONCURRENCY, validate_subcall_concurrency
 from ..execution.context import ExecutionContext
-from ..protocols.llm_client import TokenUsage
+from ..protocols.llm_client import TokenUsage, strip_cache_anchor_markers
 from ..protocols.subcall_client import SubcallClient
 from .errors import http_error_excerpt
 from .useragent import USER_AGENT
@@ -349,7 +349,7 @@ class OpenAICompatClient:
             raise ValueError("model is required")
         payload: dict[str, Any] = {
             "model": resolved_model,
-            "messages": messages,
+            "messages": strip_cache_anchor_markers(messages),
         }
         # Only send temperature when explicitly set — modern models
         # (gpt-5.x, opus-4.x) reject the parameter outright.

@@ -13,7 +13,18 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.15.5)
 
-No changes yet.
+### Anthropic root usage now includes prompt-cache tokens
+
+`TokenUsage` adds trailing, defaulted `cache_read_tokens` and
+`cache_creation_tokens` fields. Anthropic clients populate those fields and
+include both values in `prompt_tokens` and `total_tokens`, because Anthropic's
+reported `input_tokens` excludes cached input. BYOK Anthropic embedders that
+bill or display root usage should use the inclusive prompt and total values;
+the cache fields are an optional observability breakdown. Existing positional
+three-field construction remains compatible. The cache breakdown is currently
+available only on the raw BYOK `TokenUsage` object; `ExecutionStats`, trace
+events, and `RLMResult` continue to expose inclusive totals only. Trace ABI v2
+and runner protocol v6 event and trajectory schemas are unchanged.
 
 ## 0.15.5 (from 0.15.4)
 

@@ -12,7 +12,7 @@ from typing import Any
 from droste.clients.errors import http_error_excerpt, redact_secrets
 from droste.clients.useragent import USER_AGENT
 from droste.execution.config import DEFAULT_SUBCALL_CONCURRENCY, validate_subcall_concurrency
-from droste.protocols.llm_client import TokenUsage
+from droste.protocols.llm_client import TokenUsage, strip_cache_anchor_markers
 from droste.protocols.subcall_capacity import SubcallInputCapacity
 from droste.protocols.subcall_client import SubcallClient
 
@@ -319,7 +319,7 @@ class RootLLMClient:
         # 0.0 default breaks the root call for no benefit.
         temp = self._temperature if self._temperature is not None else temperature
         payload: dict[str, Any] = {
-            "messages": messages,
+            "messages": strip_cache_anchor_markers(messages),
             "model": resolved_model,
             "max_output_tokens": max_output_tokens,
             "stop": self._stop,

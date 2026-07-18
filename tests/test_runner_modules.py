@@ -9,7 +9,7 @@ from typing import Any
 
 from droste.environments import RunnerEnvironment
 from droste.loop.trajectory import IterationRecord
-from droste.protocols.llm_client import TokenUsage
+from droste.protocols.llm_client import CACHE_ANCHOR_MARKER, TokenUsage
 from droste_runner import runner
 from droste_runner.http_clients import HTTPSubcallClient, RootLLMClient
 from droste_runner.protocol import (
@@ -164,8 +164,14 @@ def test_root_client_includes_explicit_reasoning_effort(monkeypatch) -> None:
         reasoning_effort="none",
     )
 
-    assert client.responses_create([], model="") == "ok"
+    assert (
+        client.responses_create(
+            [{"role": "user", "content": "q", CACHE_ANCHOR_MARKER: True}], model=""
+        )
+        == "ok"
+    )
     assert captured["reasoning_effort"] == "none"
+    assert CACHE_ANCHOR_MARKER not in json.dumps(captured)
 
 
 def test_catalog_aware_worker_entrypoint_owns_exception_attribution() -> None:
