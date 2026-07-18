@@ -495,6 +495,12 @@ run used one 32,768-token context, 20 tasks, three arms, and one repetition on
 | direct-terra-pairs | gpt-5.6-terra | — | 0.034057 | 14/20 | $2.497269 | 435,842 |
 | droste-terra-luna-pairs | gpt-5.6-terra | gpt-5.6-luna | 0.801724 | 20/20 | $2.141592 | 767,642 |
 
+The `$0.000000` recorded for direct-sol's HTTP 504 failures is a measurement
+limit, not a zero-cost guarantee: because no response arrived, the harness
+received no usage to bill, although provider generation may already have
+started. By contrast, an HTTP 400 `context_limit` rejection occurs before
+generation and is genuinely free.
+
 The direct arms place the complete context in one model call. The Droste arm
 uses a `gpt-5.6-terra` root with `gpt-5.6-luna` subcalls (root reasoning
 `medium`, subcall reasoning `none`). Its design is deliberately hybrid:
