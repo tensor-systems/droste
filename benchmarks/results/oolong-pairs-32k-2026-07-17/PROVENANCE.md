@@ -31,3 +31,5 @@ run is preserved as
 [`rlm-paper-v0.3.0-oolong-pairs.json`](../../manifests/rlm-paper-v0.3.0-oolong-pairs.json)
 so report regeneration retains strict suite-version and manifest-hash checks
 after later additive suite changes.
+
+For convenience, the complete directory is mirrored as [`oolong-pairs-32k-2026-07-17.tar.gz`](https://github.com/tensor-systems/droste/releases/download/benchmark-data/oolong-pairs-32k-2026-07-17/oolong-pairs-32k-2026-07-17.tar.gz) (SHA-256 `6aa129b1df692948a8c2961bfe049cbf68353f0aebff8a26d63b968b1abaa89f`); this mirror does not replace the git-committed artifacts, which remain the verifiable source of truth.
