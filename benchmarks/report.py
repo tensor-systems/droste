@@ -33,6 +33,10 @@ _MATERIALIZE_COMMANDS = {
         "python -m benchmarks materialize-longbench-codeqa "
         "--output benchmarks/.data/longbench-v2-codeqa-20-v1"
     ),
+    "oolong-pairs": (
+        "python -m benchmarks materialize-oolong-pairs "
+        "--output benchmarks/.data/oolong-pairs-32k-v1"
+    ),
 }
 
 

@@ -116,9 +116,7 @@ def test_manifest_pins_paper_tasks_and_published_live_arms() -> None:
     assert codeqa.tasks_sha256 == (
         "d796fbcf741fbfc516903afd929e1e5aa6e64ded85445acbf950e638303ab5f5"
     )
-    oolong_pairs = next(
-        item for item in manifest.benchmarks if item.benchmark_id == "oolong-pairs"
-    )
+    oolong_pairs = next(item for item in manifest.benchmarks if item.benchmark_id == "oolong-pairs")
     assert oolong_pairs.status == "ready"
     assert oolong_pairs.scorer == "oolong_pairs_f1"
     assert oolong_pairs.tasks_sha256 == (
@@ -1035,6 +1033,46 @@ def test_report_missing_longbench_codeqa_tasks_names_materializer(tmp_path: Path
         "cannot load declared tasks for benchmark 'longbench-v2-codeqa': run "
         "`python -m benchmarks materialize-longbench-codeqa "
         "--output benchmarks/.data/longbench-v2-codeqa-20-v1` first"
+    )
+    assert isinstance(caught.value.__cause__, FileNotFoundError)
+
+
+def test_report_missing_oolong_pairs_tasks_names_materializer(tmp_path: Path) -> None:
+    benchmark_root = tmp_path / "benchmarks"
+    manifest_path = benchmark_root / "manifests" / "suite.json"
+    oolong_tasks = benchmark_root / ".data" / "oolong-trec-coarse-131k-v1" / "tasks.json"
+    oolong_tasks.parent.mkdir(parents=True)
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text("{}")
+    oolong_tasks.write_text('[{"id": "normalization", "reference": "Beta"}]')
+
+    manifest = load_manifest(SMOKE_MANIFEST)
+    oolong = replace(
+        manifest.benchmarks[0],
+        benchmark_id="oolong",
+        tasks_path="../.data/oolong-trec-coarse-131k-v1/tasks.json",
+    )
+    oolong_pairs = replace(
+        manifest.benchmarks[1],
+        benchmark_id="oolong-pairs",
+        tasks_path="../.data/oolong-pairs-32k-v1/tasks.json",
+    )
+    manifest = replace(
+        manifest,
+        benchmarks=(oolong, oolong_pairs),
+        source_path=manifest_path,
+    )
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "selected-oolong-pairs-artifact.json").write_text("{}")
+
+    with pytest.raises(ReportError) as caught:
+        load_artifacts(artifacts, manifest, task_ids=["normalization"])
+
+    assert str(caught.value) == (
+        "cannot load declared tasks for benchmark 'oolong-pairs': run "
+        "`python -m benchmarks materialize-oolong-pairs "
+        "--output benchmarks/.data/oolong-pairs-32k-v1` first"
     )
     assert isinstance(caught.value.__cause__, FileNotFoundError)
 

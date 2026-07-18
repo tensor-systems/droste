@@ -211,7 +211,7 @@ Each published artifact set retains the exact run-era manifest named by its
 manifest SHA-256. The OOLONG report regenerates offline with its snapshot:
 
 ```bash
-uv run python -m benchmarks report benchmarks/manifests/rlm-paper-v1-oolong-2026-07-17.json benchmarks/results/oolong-trec-coarse-131k-2026-07-17/artifacts --json /tmp/regen-check.json --markdown /tmp/regen-check.md
+uv run python -m benchmarks report benchmarks/manifests/oolong-2026-07-17.json benchmarks/results/oolong-trec-coarse-131k-2026-07-17/artifacts --json /tmp/regen-check.json --markdown /tmp/regen-check.md
 ```
 
 The pinned S-NIAH snapshot declares both OOLONG and S-NIAH `ready`, so both
@@ -232,7 +232,7 @@ the 50 S-NIAH task ids selected:
 task_args=()
 for id in {000..049}; do task_args+=(--task-id "sniah-$id"); done
 uv run python -m benchmarks report \
-  benchmarks/manifests/rlm-paper-v1-sniah-2026-07-17.json \
+  benchmarks/manifests/sniah-2026-07-17.json \
   benchmarks/results/sniah-32k-2026-07-17/artifacts \
   "${task_args[@]}" \
   --json /tmp/sniah-regen-check.json \
@@ -276,14 +276,27 @@ uv run python -m benchmarks report \
   --markdown /tmp/longbench-codeqa-regen.md
 ```
 
-The OOLONG-Pairs report regenerates from the committed artifacts with all 20
-task IDs selected:
+The pinned OOLONG-Pairs snapshot declares both OOLONG and OOLONG-Pairs `ready`,
+so both benchmark task sets and the lean-artifact predictions must be
+materialized before report regeneration:
+
+```bash
+uv run python -m benchmarks materialize-oolong \
+  --output benchmarks/.data/oolong-trec-coarse-131k-v1
+uv run python -m benchmarks materialize-oolong-pairs \
+  --output benchmarks/.data/oolong-pairs-32k-v1
+uv run python -m benchmarks materialize-oolong-pairs-predictions \
+  --output benchmarks/.data/oolong-pairs-32k-2026-07-17-predictions
+```
+
+The OOLONG-Pairs report then regenerates from the committed artifacts with all
+20 task IDs selected:
 
 ```bash
 task_args=()
 for task_id in {1..20}; do task_args+=(--task-id "$task_id"); done
 uv run python -m benchmarks report \
-  benchmarks/manifests/rlm-paper-v0.3.0-oolong-pairs.json \
+  benchmarks/manifests/oolong-pairs-2026-07-17.json \
   benchmarks/results/oolong-pairs-32k-2026-07-17/artifacts \
   "${task_args[@]}" \
   --json /tmp/oolong-pairs-report.json \

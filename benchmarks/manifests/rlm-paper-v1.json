@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite_id": "rlm-paper",
-  "suite_version": "0.7.0",
+  "suite_version": "0.8.0",
   "paper": {
     "title": "Recursive Language Models",
     "revision": "arXiv:2512.24601v3",

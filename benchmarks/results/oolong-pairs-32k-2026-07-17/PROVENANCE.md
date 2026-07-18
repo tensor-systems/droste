@@ -29,7 +29,7 @@ markers instead of duplicating the full predictions and references. The
 adjacent reports are deterministic aggregations of those artifacts; no dataset
 context or materialized task file is redistributed in this result directory.
 The exact suite manifest used for this run is preserved as
-[`rlm-paper-v0.3.0-oolong-pairs.json`](../../manifests/rlm-paper-v0.3.0-oolong-pairs.json)
+[`oolong-pairs-2026-07-17.json`](../../manifests/oolong-pairs-2026-07-17.json)
 so report regeneration retains strict suite-version and manifest-hash checks
 after later additive suite changes.
 
