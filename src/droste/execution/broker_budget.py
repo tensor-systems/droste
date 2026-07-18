@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +11,7 @@ from ..capabilities import (
     CapabilityCall,
     CapabilityCheckpoint,
     CapabilityError,
+    CapabilityErrorCode,
     CapabilityKind,
     CapabilityMetadata,
     CapabilityMetric,
@@ -22,6 +24,8 @@ from .budget import (
     BudgetRequest,
     conservative_token_estimate,
 )
+
+InferenceSettlementCallback = Callable[[bool], None]
 
 
 def _batch_size(call: CapabilityCall) -> int:
@@ -55,26 +59,19 @@ def capability_budget_request(call: CapabilityCall, ledger: BudgetLedger) -> Bud
 
 def _actual_request(
     call: CapabilityCall,
-    result: Any,
-    error: CapabilityError | None,
     reserved: BudgetRequest,
-) -> BudgetRequest:
+    checkpoint: CapabilityCheckpoint,
+) -> tuple[BudgetRequest, bool]:
     if call.capability_id.kind is not CapabilityKind.INFERENCE:
-        return BudgetRequest()
+        return BudgetRequest(), False
     count = _batch_size(call)
-    if error is not None:
-        # A handler attempt may have reached a provider without returning
-        # trusted usage. Charge the complete reservation rather than guessing.
-        return BudgetRequest(tokens=reserved.tokens, subcalls=count)
-    input_tokens = conservative_token_estimate(_call_payload(call))
-    return BudgetRequest(
-        tokens=input_tokens
-        + min(
-            conservative_token_estimate(thaw_value(result)),
-            max(0, reserved.tokens - input_tokens),
-        ),
-        subcalls=count,
-    )
+    exact = count == 0 or checkpoint.subcalls == count
+    if exact:
+        return BudgetRequest(tokens=checkpoint.tokens, subcalls=count), True
+    # Without a complete per-item checkpoint, a handler may have reached a
+    # provider without returning trustworthy usage. Visible output cannot
+    # account for hidden reasoning, so retain the full fail-closed reservation.
+    return BudgetRequest(tokens=reserved.tokens, subcalls=count), False
 
 
 def _reservation(request: BudgetRequest) -> CapabilityReservation:
@@ -91,6 +88,23 @@ class BrokerBudget:
     """The one budget authority composed into a capability broker."""
 
     ledger: BudgetLedger
+    on_inference_settlement: InferenceSettlementCallback | None = None
+
+    def bind_inference_settlement_callback(self, callback: InferenceSettlementCallback) -> None:
+        """Bind the run's mandatory usage-completeness accounting callback."""
+
+        if not callable(callback):
+            raise TypeError("inference settlement callback must be callable")
+        if self.on_inference_settlement is not None and self.on_inference_settlement != callback:
+            raise ValueError("inference settlement callback is already bound")
+        self.on_inference_settlement = callback
+
+    def _record_inference_settlement(self, call: CapabilityCall, exact: bool) -> None:
+        if (
+            call.capability_id.kind is CapabilityKind.INFERENCE
+            and self.on_inference_settlement is not None
+        ):
+            self.on_inference_settlement(exact)
 
     def admit(self, call: CapabilityCall) -> CapabilityAdmission | CapabilityError:
         request = capability_budget_request(call, self.ledger)
@@ -119,10 +133,16 @@ class BrokerBudget:
     def checkpoint(
         self, call: CapabilityCall, cumulative: CapabilityCheckpoint
     ) -> CapabilityCheckpoint:
-        committed = self.ledger.checkpoint(
-            call.call_id,
-            BudgetRequest(tokens=cumulative.tokens, subcalls=cumulative.subcalls),
-        )
+        requested = BudgetRequest(tokens=cumulative.tokens, subcalls=cumulative.subcalls)
+        reserved = self.ledger.reservation(call.call_id).request
+        if requested.tokens > reserved.tokens or requested.subcalls > reserved.subcalls:
+            # A provider usage report is an observed fact, not new authority.
+            # Keep an overrun in the controller's terminal checkpoint without
+            # incrementally committing it. Final settlement will pass the
+            # actual total to BudgetLedger.commit(), which closes the
+            # reservation and raises BudgetExhausted with the real amount.
+            return cumulative
+        committed = self.ledger.checkpoint(call.call_id, requested)
         return CapabilityCheckpoint(tokens=committed.tokens, subcalls=committed.subcalls)
 
     def settle(
@@ -134,17 +154,44 @@ class BrokerBudget:
         *,
         attempted: bool,
     ) -> CapabilityMetadata:
+        del result
         if not attempted:
             self.ledger.release(call.call_id)
             return CapabilityMetadata()
         reserved = self.ledger.reservation(call.call_id).request
-        inferred = _actual_request(call, result, error, reserved)
-        actual = BudgetRequest(
-            tokens=max(inferred.tokens, checkpoint.tokens),
-            subcalls=max(inferred.subcalls, checkpoint.subcalls),
-            depth=inferred.depth,
+        actual, exact = _actual_request(call, reserved, checkpoint)
+        if (
+            call.capability_id.kind is CapabilityKind.INFERENCE
+            and error is not None
+            and error.code == CapabilityErrorCode.DEADLINE_EXCEEDED
+        ):
+            # The controller owns the finalization cutoff. If its deadline
+            # wins, a late handler result cannot establish complete provider
+            # usage even when the ledger's clock has not independently crossed
+            # the reservation deadline yet.
+            actual = reserved
+            exact = False
+        try:
+            committed = self.ledger.commit(call.call_id, actual)
+        except BudgetExhausted as exc:
+            # commit() closes the reservation before surfacing an overrun.
+            # Exact token usage remains a complete provider fact even though it
+            # exceeded authorization; wall/fallback overruns remain partial.
+            self._record_inference_settlement(
+                call,
+                exact and exc.resource == "tokens",
+            )
+            raise
+        self._record_inference_settlement(call, exact)
+        settlement_metric = (
+            CapabilityMetric(
+                "token_settlement_exact" if exact else "token_settlement_fallback",
+                1,
+                "count",
+            )
+            if call.capability_id.kind is CapabilityKind.INFERENCE
+            else None
         )
-        committed = self.ledger.commit(call.call_id, actual)
         return CapabilityMetadata(
             budget_delta=tuple(
                 CapabilityMetric(
@@ -163,4 +210,5 @@ class BrokerBudget:
                 )
                 if amount
             )
+            + ((settlement_metric,) if settlement_metric is not None else ())
         )

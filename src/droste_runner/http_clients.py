@@ -7,14 +7,21 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from typing import Any
 
 from droste.clients.errors import http_error_excerpt, redact_secrets
 from droste.clients.useragent import USER_AGENT
 from droste.execution.config import DEFAULT_SUBCALL_CONCURRENCY, validate_subcall_concurrency
-from droste.protocols.llm_client import TokenUsage, strip_cache_anchor_markers
+from droste.protocols.llm_client import LLMUsageFailure, TokenUsage, strip_cache_anchor_markers
 from droste.protocols.subcall_capacity import SubcallInputCapacity
-from droste.protocols.subcall_client import SubcallClient
+from droste.protocols.subcall_client import (
+    SubcallBatchFailure,
+    SubcallBatchResult,
+    SubcallClient,
+    SubcallQueryResult,
+    fail_fast_subcall_batch,
+)
 
 from .protocol import RootResponseMetadata
 
@@ -25,6 +32,36 @@ _redact_secrets = redact_secrets
 _http_error_excerpt = http_error_excerpt
 
 _SUBCALL_STREAM_ACCEPT = 'application/x-ndjson; profile="responses-stream/v2"'
+
+
+def _token_usage(payload: object) -> TokenUsage:
+    if not isinstance(payload, dict):
+        return TokenUsage.unavailable()
+
+    def token_count(name: str) -> int | None:
+        value = payload.get(name)
+        return (
+            value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+        )
+
+    input_tokens = token_count("input_tokens")
+    output_tokens = token_count("output_tokens")
+    total_tokens = token_count("total_tokens")
+    if (
+        input_tokens is None
+        or output_tokens is None
+        or total_tokens is None
+        or total_tokens < input_tokens + output_tokens
+    ):
+        return TokenUsage.unavailable()
+    return TokenUsage(input_tokens, output_tokens, total_tokens, exact=True)
+
+
+@dataclass(frozen=True, slots=True)
+class _HTTPBatchResult:
+    results: tuple[str, ...]
+    errors: tuple[Exception | None, ...]
+    usage: tuple[TokenUsage, ...]
 
 
 class HTTPSubcallClient(SubcallClient):
@@ -91,31 +128,10 @@ class HTTPSubcallClient(SubcallClient):
         with self._seq_lock:
             self._context.record_subcall_successes()
 
-    def _record_usage(self, payload: object) -> None:
-        if not isinstance(payload, dict):
-            return
+    def _record_usage(self, payload: object) -> TokenUsage:
+        return _token_usage(payload)
 
-        def _token_count(name: str) -> int:
-            value = payload.get(name, 0)
-            return (
-                value
-                if isinstance(value, int) and not isinstance(value, bool) and value >= 0
-                else 0
-            )
-
-        input_tokens = _token_count("input_tokens")
-        output_tokens = _token_count("output_tokens")
-        total_tokens = _token_count("total_tokens") or input_tokens + output_tokens
-        with self._seq_lock:
-            self._context.record_subcall_usage(
-                TokenUsage(
-                    prompt_tokens=input_tokens,
-                    completion_tokens=output_tokens,
-                    total_tokens=total_tokens,
-                )
-            )
-
-    def _request(self, payload: dict[str, Any]) -> str:
+    def _request(self, payload: dict[str, Any]) -> SubcallQueryResult:
         body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             self._endpoint,
@@ -134,11 +150,13 @@ class HTTPSubcallClient(SubcallClient):
                 if "application/x-ndjson" not in content_type.lower():
                     raw = resp.read().decode("utf-8")
                     data = json.loads(raw)
-                    result = data.get("result")
+                    usage = self._record_usage(
+                        data.get("usage") if isinstance(data, dict) else None
+                    )
+                    result = data.get("result") if isinstance(data, dict) else None
                     if not isinstance(result, str):
-                        raise RuntimeError("missing subcall result")
-                    self._record_usage(data.get("usage"))
-                    return result
+                        raise LLMUsageFailure(usage, RuntimeError("missing subcall result"))
+                    return SubcallQueryResult(result, usage)
 
                 parts: list[str] = []
                 completed = False
@@ -173,8 +191,11 @@ class HTTPSubcallClient(SubcallClient):
                             completion_content = event["content"]
                 if not completed:
                     raise RuntimeError("llm_query stream ended without a completion event")
-                self._record_usage(completion_usage)
-                return completion_content if completion_has_content else "".join(parts)
+                usage = self._record_usage(completion_usage)
+                return SubcallQueryResult(
+                    completion_content if completion_has_content else "".join(parts),
+                    usage,
+                )
         except urllib.error.HTTPError as exc:
             status = getattr(exc, "code", 0)
             excerpt = _http_error_excerpt(exc)
@@ -186,6 +207,12 @@ class HTTPSubcallClient(SubcallClient):
             raise RuntimeError(f"llm_query failed: {exc}") from exc
 
     def llm_query(self, prompt: str, context: str = "") -> str:
+        try:
+            return self.llm_query_with_usage(prompt, context).result
+        except LLMUsageFailure as exc:
+            raise exc.cause from exc
+
+    def llm_query_with_usage(self, prompt: str, context: str = "") -> SubcallQueryResult:
         if context:
             prompt = f"{context}\n\n{prompt}"
         self._increment_calls()
@@ -201,47 +228,64 @@ class HTTPSubcallClient(SubcallClient):
             payload["model"] = self._model
         if self._reasoning_effort:
             payload["reasoning_effort"] = self._reasoning_effort
-        result = self._request(payload)
-        if result.strip():
+        value = self._request(payload)
+        if value.result.strip():
             self._increment_successful_calls()
-        return result
+        return value
 
     def llm_batch(self, prompts: list[str], contexts: list[str] | None = None) -> list[str]:
-        results, errors = self._run_batch(prompts, contexts)
-        for err in errors:
-            if err is not None:
-                raise err
-        return results
+        try:
+            return list(self.llm_batch_with_usage(prompts, contexts).results)
+        except SubcallBatchFailure as exc:
+            raise exc.cause from exc
+
+    def llm_batch_with_usage(
+        self, prompts: list[str], contexts: list[str] | None = None
+    ) -> SubcallBatchResult:
+        value = self._run_batch(prompts, contexts)
+        return fail_fast_subcall_batch(value.results, value.errors, value.usage)
 
     def llm_batch_with_errors(
         self,
         prompts: list[str],
         contexts: list[str] | None = None,
     ) -> tuple[list[str], list[dict[str, object]]]:
-        results, errors = self._run_batch(prompts, contexts)
-        structured = [
-            {"index": idx, "error": str(err)} for idx, err in enumerate(errors) if err is not None
-        ]
-        return results, structured
+        try:
+            value = self.llm_batch_with_errors_and_usage(prompts, contexts)
+        except SubcallBatchFailure as exc:
+            raise exc.cause from exc
+        return list(value.results), [dict(item) for item in value.errors]
 
-    def _run_batch(
-        self, prompts: list[str], contexts: list[str] | None
-    ) -> tuple[list[str], list[Exception | None]]:
+    def llm_batch_with_errors_and_usage(
+        self,
+        prompts: list[str],
+        contexts: list[str] | None = None,
+    ) -> SubcallBatchResult:
+        value = self._run_batch(prompts, contexts)
+        structured = [
+            {"index": idx, "error": str(err)}
+            for idx, err in enumerate(value.errors)
+            if err is not None
+        ]
+        return SubcallBatchResult(value.results, tuple(structured), value.usage)
+
+    def _run_batch(self, prompts: list[str], contexts: list[str] | None) -> _HTTPBatchResult:
         if contexts is None:
             contexts = [""] * len(prompts)
         if len(contexts) != len(prompts):
             raise ValueError("contexts length must match prompts length")
         results: list[str] = [""] * len(prompts)
         errors: list[Exception | None] = [None] * len(prompts)
+        usage = [TokenUsage.unavailable() for _ in prompts]
         if not prompts:
-            return results, errors
+            return _HTTPBatchResult(tuple(results), tuple(errors), tuple(usage))
         if len(prompts) > 50:
             raise ValueError("llm_batch prompt count exceeds max 50")
 
-        def _run_one(idx: int, prompt: str, ctx: str) -> str:
+        def _run_one(idx: int, prompt: str, ctx: str) -> SubcallQueryResult:
             if idx > 0:
                 time.sleep(0.05)
-            return self.llm_query(prompt, ctx)
+            return self.llm_query_with_usage(prompt, ctx)
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -253,10 +297,15 @@ class HTTPSubcallClient(SubcallClient):
             for future in as_completed(futures):
                 idx = futures[future]
                 try:
-                    results[idx] = future.result()
+                    value = future.result()
+                    results[idx] = value.result
+                    usage[idx] = value.usage
+                except LLMUsageFailure as exc:
+                    usage[idx] = exc.usage
+                    errors[idx] = exc.cause
                 except Exception as exc:
                     errors[idx] = exc
-        return results, errors
+        return _HTTPBatchResult(tuple(results), tuple(errors), tuple(usage))
 
 
 class RootLLMClient:
@@ -354,9 +403,13 @@ class RootLLMClient:
         except Exception as exc:
             raise RuntimeError(f"root llm failed: {exc}") from exc
         data = json.loads(raw)
-        result = data.get("result")
+        usage = _token_usage(data.get("usage") if isinstance(data, dict) else None)
+        result = data.get("result") if isinstance(data, dict) else None
         if not isinstance(result, str):
-            raise RuntimeError("missing root result")
+            error = RuntimeError("missing root result")
+            if return_usage:
+                raise LLMUsageFailure(usage, error) from None
+            raise error
         self.response_metadata = RootResponseMetadata(
             provider=str(data.get("provider") or ""),
             response_id=str(data.get("response_id") or ""),
@@ -364,16 +417,5 @@ class RootLLMClient:
             model=str(data.get("model") or ""),
         )
         if return_usage:
-            usage_payload = data.get("usage", {}) if isinstance(data, dict) else {}
-            input_tokens = int(usage_payload.get("input_tokens", 0) or 0)
-            output_tokens = int(usage_payload.get("output_tokens", 0) or 0)
-            total_tokens = usage_payload.get("total_tokens")
-            if total_tokens is None:
-                total_tokens = input_tokens + output_tokens
-            usage = TokenUsage(
-                prompt_tokens=input_tokens,
-                completion_tokens=output_tokens,
-                total_tokens=int(total_tokens or 0),
-            )
             return result, usage
         return result

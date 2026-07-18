@@ -1,4 +1,4 @@
-# Trace ABI v2
+# Trace ABI v3
 
 Droste exposes one append-only event stream and one policy-resolved terminal
 `RunRecord`. The engine creates values; it does not choose a database or write
@@ -15,7 +15,7 @@ does not change merely because a released fixture is added.
 
 ## Event envelope
 
-Every event is a strict v2 value with these fields:
+Every event is a strict v3 value with these fields:
 
 ```json
 {
@@ -23,7 +23,7 @@ Every event is a strict v2 value with these fields:
   "seq": 1,
   "timestamp": "2026-07-14T05:00:00Z",
   "type": "progress",
-  "version": 2,
+  "version": 3,
   "persistence_class": "transient",
   "parent_run_id": "optional-parent",
   "depth": 0,
@@ -56,7 +56,7 @@ always delivered once before `done`, even when it is not retained. `replay` is
 different: it is emitted only when the host explicitly selects replay
 retention.
 
-## Exhaustive v2 bodies
+## Exhaustive v3 bodies
 
 Every event body has a fixed top-level schema. Optional fields are marked `?`.
 Objects named below are JSON objects; all other types are primitive.
@@ -75,7 +75,7 @@ Objects named below are JSON objects; all other types are primitive.
 | `repair` | `phase: "start"|"completion"|"failure"`, `kind: "missing_code"|"execution_error"|"terminal"`, `iteration`, `error?` only on failure |
 | `extract` | `phase: "start"|"completion"|"failure"`, `iteration`, `extract_error?` only on failure |
 | `result`, `replay` | `result: object` |
-| `usage` | `kind: "resolved"`, `root: object`, `subcall: object`, `unattributed: object`, `total_tokens: integer`, `wall_time_ms: integer` |
+| `usage` | `kind: "resolved"|"partial"`, `root: object`, `subcall: object`, `unattributed: object`, `total_tokens: integer`, `wall_time_ms: integer` |
 | `budget` | `kind: "snapshot"|"mutation"`, `source: string`, plus the kind-specific fields below |
 | `policy` | `contract_enforced: boolean`, `outcome: string`, `violation_type: string|null` |
 | `capability` | `outcome: object` in the exact `CapabilityResult.to_trace_dict()` shape |
@@ -94,12 +94,15 @@ The configurable `replay` value is the complete result snapshot for hosts that
 explicitly retain replay content.
 
 Billing consumes the durable `usage` value. Both `root` and `subcall` carry
-`input_tokens`, `output_tokens`, `total_tokens`, `requests`, and `successes`.
+`input_tokens`, `output_tokens`, `total_tokens`, `requests`, `successes`, and
+`complete`. The top-level kind is `resolved` exactly when both scopes are
+complete; otherwise it is `partial`. Partial usage preserves known provider
+counts without substituting conservative budget reservations for actual usage.
 Legacy/custom-client tokens that cannot be assigned safely appear under
 `unattributed.total_tokens`; the three token scopes must sum to
 `total_tokens`. None of these facts is inferred by counting stream events.
 
-The budget body remains a discriminated event in Trace ABI v2. The terminal snapshot uses
+The budget body remains a discriminated event in Trace ABI v3. The terminal snapshot uses
 `kind="snapshot"`, `source="budget_ledger"`, and `configured`, `consumed`,
 and `remaining` objects. The ledger may emit any number of
 `kind="mutation"` values with `action` (`reserve`, `commit`, `refund`, or
@@ -189,14 +192,14 @@ and sdist. Python consumers load them through package resources:
 
 ```python
 from droste.testing import (
-    runner_v6_refusal_ndjson,
-    trace_v2_execution_ndjson,
-    trace_v2_lifecycle_ndjson,
+    runner_v7_refusal_ndjson,
+    trace_v3_execution_ndjson,
+    trace_v3_lifecycle_ndjson,
 )
 
-execution_lines = trace_v2_execution_ndjson().splitlines()
-event_lines = trace_v2_lifecycle_ndjson().splitlines()
-pre_admission_refusal = runner_v6_refusal_ndjson()
+execution_lines = trace_v3_execution_ndjson().splitlines()
+event_lines = trace_v3_lifecycle_ndjson().splitlines()
+pre_admission_refusal = runner_v7_refusal_ndjson()
 ```
 
 The compact execution NDJSON contains a two-iteration root trace plus a

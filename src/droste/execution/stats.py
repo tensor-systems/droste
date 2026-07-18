@@ -12,6 +12,7 @@ class UsageBreakdown:
     total_tokens: int
     requests: int
     successes: int
+    complete: bool = True
 
     def __post_init__(self) -> None:
         values = (
@@ -27,14 +28,17 @@ class UsageBreakdown:
             raise ValueError("usage breakdown counts must be non-negative integers")
         if self.successes > self.requests:
             raise ValueError("usage successes cannot exceed requests")
+        if not isinstance(self.complete, bool):
+            raise TypeError("usage completeness must be a bool")
 
-    def as_dict(self) -> dict[str, int]:
+    def as_dict(self) -> dict[str, int | bool]:
         return {
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "total_tokens": self.total_tokens,
             "requests": self.requests,
             "successes": self.successes,
+            "complete": self.complete,
         }
 
 
@@ -62,7 +66,7 @@ class ResolvedUsage:
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "kind": "resolved",
+            "kind": "resolved" if self.root.complete and self.subcall.complete else "partial",
             "root": self.root.as_dict(),
             "subcall": self.subcall.as_dict(),
             "unattributed": {"total_tokens": self.unattributed_tokens},
@@ -84,9 +88,11 @@ class ExecutionStats:
     root_total_tokens: int = 0
     root_requests: int = 0
     root_successes: int = 0
+    root_usage_complete: bool = True
     subcall_input_tokens: int = 0
     subcall_output_tokens: int = 0
     subcall_total_tokens: int = 0
+    subcall_usage_complete: bool = True
     retrieved_ids: list[str] = field(default_factory=list)
 
     def resolved_usage(self, wall_time_ms: int) -> ResolvedUsage:
@@ -98,6 +104,7 @@ class ExecutionStats:
                 self.root_total_tokens,
                 self.root_requests,
                 self.root_successes,
+                self.root_usage_complete,
             ),
             subcall=UsageBreakdown(
                 self.subcall_input_tokens,
@@ -105,6 +112,7 @@ class ExecutionStats:
                 self.subcall_total_tokens,
                 self.calls_made,
                 self.successful_calls,
+                self.subcall_usage_complete,
             ),
             unattributed_tokens=self.total_tokens - attributed,
             total_tokens=self.total_tokens,

@@ -20,7 +20,7 @@ export const RLM_EVENT_TYPES = new Set<string>([
   "extract", // discriminated extract start/completion/failure
   "result", // canonical unary-equivalent final result
   "replay", // configurable replay details
-  "usage", // durable resolved accounting
+  "usage", // durable resolved-or-partial provider accounting
   "budget", // durable budget facts
   "policy", // durable policy decisions
   "capability", // durable broker-owned capability outcome
@@ -81,6 +81,23 @@ function validStringObject(value: unknown, fields: readonly string[]): boolean {
   if (!isObject(value)) return false;
   return exactBody(value, fields) &&
     fields.every((field) => typeof value[field] === "string");
+}
+
+function validUsageBreakdown(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  const integerFields = [
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "requests",
+    "successes",
+  ];
+  return exactBody(value, [...integerFields, "complete"]) &&
+    integerFields.every((field) =>
+      isInteger(value[field]) && Number(value[field]) >= 0
+    ) &&
+    Number(value.successes) <= Number(value.requests) &&
+    typeof value.complete === "boolean";
 }
 
 function validSubcallBody(body: Record<string, unknown>): boolean {
@@ -219,7 +236,9 @@ function validBody(type: string, body: Record<string, unknown>): boolean {
     case "result":
     case "replay":
       return exactBody(body, ["result"]) && isObject(body.result);
-    case "usage":
+    case "usage": {
+      const root = body.root;
+      const subcall = body.subcall;
       return exactBody(
         body,
         [
@@ -230,10 +249,24 @@ function validBody(type: string, body: Record<string, unknown>): boolean {
           "total_tokens",
           "wall_time_ms",
         ],
-      ) && body.kind === "resolved" && isObject(body.root) &&
-        isObject(body.subcall) &&
-        isObject(body.unattributed) && integerField("total_tokens") &&
-        integerField("wall_time_ms");
+      ) && ["resolved", "partial"].includes(String(body.kind)) &&
+        isObject(root) && isObject(subcall) &&
+        validUsageBreakdown(root) && validUsageBreakdown(subcall) &&
+        body.kind === (
+            root.complete === true && subcall.complete === true
+              ? "resolved"
+              : "partial"
+          ) &&
+        isObject(body.unattributed) &&
+        exactBody(body.unattributed, ["total_tokens"]) &&
+        isInteger(body.unattributed.total_tokens) &&
+        body.unattributed.total_tokens >= 0 &&
+        integerField("total_tokens") && Number(body.total_tokens) >= 0 &&
+        integerField("wall_time_ms") && Number(body.wall_time_ms) >= 0 &&
+        Number(root.total_tokens) + Number(subcall.total_tokens) +
+              Number(body.unattributed.total_tokens) ===
+          Number(body.total_tokens);
+    }
     case "budget":
       if (!stringField("kind") || !stringField("source")) return false;
       return body.kind === "snapshot"
@@ -327,7 +360,7 @@ export function isRlmEvent(line: string): boolean {
         Number.isInteger(o.seq) && o.seq > 0 &&
         typeof o.timestamp === "string" &&
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(o.timestamp) &&
-        o.version === 2 &&
+        o.version === 3 &&
         o.persistence_class === PERSISTENCE_BY_TYPE[o.type] &&
         Number.isInteger(o.depth) && o.depth >= 0 &&
         (o.depth === 0

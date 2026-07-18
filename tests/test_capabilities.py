@@ -1299,6 +1299,8 @@ def test_brokered_subcalls_fail_fast_when_required_batch_contract_is_missing() -
         broker_subcalls(
             IncompleteSubcalls(),  # type: ignore[arg-type]
             create_environment_context(EnvironmentConfig(kind="native")).ledger,
+            usage_callback=lambda _usage: None,
+            settlement_callback=lambda _exact: None,
         )
 
 
@@ -1377,6 +1379,8 @@ def test_runner_rejects_a_different_runtime_subcall_client() -> None:
         environment.sandbox_subcalls(
             RecordingSubcalls(),
             create_environment_context(EnvironmentConfig(kind="native")).ledger,
+            usage_callback=lambda _usage: None,
+            settlement_callback=lambda _exact: None,
         )
 
 
@@ -1395,7 +1399,7 @@ def test_run_loop_keeps_canonical_query_and_batch_on_the_broker_path() -> None:
                     "answer['ready'] = True\n"
                     "```"
                 ),
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             )
         ]
     )
@@ -1442,7 +1446,7 @@ def test_run_loop_replaces_custom_environment_raw_subcall_globals() -> None:
                     "answer['ready'] = True\n"
                     "```"
                 ),
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             )
         ]
     )

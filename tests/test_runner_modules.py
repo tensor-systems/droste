@@ -203,7 +203,7 @@ def test_root_client_collects_response_metadata_as_one_record(monkeypatch) -> No
             return json.dumps(
                 {
                     "result": "ok",
-                    "usage": {"input_tokens": 2, "output_tokens": 3},
+                    "usage": {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5},
                     "provider": "provider-a",
                     "response_id": "response-1",
                     "stop_reason": "stop",
@@ -233,7 +233,7 @@ def test_root_client_collects_response_metadata_as_one_record(monkeypatch) -> No
     text, usage = client.responses_create([], model="", return_usage=True)
 
     assert text == "ok"
-    assert usage == TokenUsage(prompt_tokens=2, completion_tokens=3, total_tokens=5)
+    assert usage == TokenUsage(prompt_tokens=2, completion_tokens=3, total_tokens=5, exact=True)
     assert client.response_metadata == RootResponseMetadata(
         provider="provider-a",
         response_id="response-1",

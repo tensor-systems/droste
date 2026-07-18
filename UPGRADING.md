@@ -11,20 +11,94 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.15.5)
+## Unreleased (post-0.16.0)
 
-### Anthropic root usage now includes prompt-cache tokens
+No changes yet.
 
-`TokenUsage` adds trailing, defaulted `cache_read_tokens` and
-`cache_creation_tokens` fields. Anthropic clients populate those fields and
-include both values in `prompt_tokens` and `total_tokens`, because Anthropic's
-reported `input_tokens` excludes cached input. BYOK Anthropic embedders that
-bill or display root usage should use the inclusive prompt and total values;
-the cache fields are an optional observability breakdown. Existing positional
-three-field construction remains compatible. The cache breakdown is currently
-available only on the raw BYOK `TokenUsage` object; `ExecutionStats`, trace
-events, and `RLMResult` continue to expose inclusive totals only. Trace ABI v2
-and runner protocol v6 event and trajectory schemas are unchanged.
+## 0.16.0 (from 0.15.5)
+
+### Anthropic prompt caching and inclusive usage
+
+Root calls mark the stable system prompt and latest message as Anthropic
+ephemeral cache anchors. The markers are private loop-to-client metadata:
+Anthropic converts them to at most four `cache_control` blocks, while every
+other first-party adapter strips them before serialization. Terminal extraction
+disables cache anchors so its one-off prompt retains the ordinary Anthropic
+wire form.
+
+`TokenUsage` adds `cache_read_tokens` and `cache_creation_tokens` alongside the
+fail-closed `exact` flag. Anthropic validates and populates the cache breakdown
+for streaming and non-streaming responses, including usage-aware parsing
+failures and ordered batch failures. Its `prompt_tokens` and `total_tokens` are
+inclusive because Anthropic's reported `input_tokens` excludes cached input.
+Use those inclusive values for billing and display; the cache fields are an
+observability breakdown. `ExecutionStats`, Trace ABI v3 events, and `RLMResult`
+continue to expose inclusive totals rather than separate cache counters.
+
+### Exact provider usage settles inference reservations
+
+`TokenUsage.exact` now defaults to false. First-party ModelRelay,
+OpenAI-compatible, runner HTTP, and Pyodide adapters opt in only after
+validating explicit non-negative input, output, and total token counts; the
+provider total is preserved when it includes hidden reasoning. Anthropic usage
+includes ordinary input, cache-creation input, cache-read input, and output.
+Missing or malformed usage never falls back to visible-output byte estimates.
+
+Subcall clients implement the three `SubcallUsageProvider` companion methods
+and return `SubcallQueryResult` / `SubcallBatchResult`. Batch usage is ordered
+one-for-one with results. A complete batch checkpoint settles the sum of
+provider totals; any unavailable item keeps the successful result but settles
+the full conservative reservation.
+
+Fail-fast `llm_batch_with_usage` implementations preserve partial provider
+facts by raising `SubcallBatchFailure` with their collected
+`SubcallBatchResult`. Broker registrations record that usage once before
+surfacing the original item error; plain `llm_batch` still raises the original
+exception type. Root responses likewise record normalized provider usage and
+success before final ledger commit, so a later token or wall overrun no longer
+erases billable usage from the terminal trace.
+
+Exact inference usage may exceed the admitted token reservation. Such a
+checkpoint now flows to final settlement instead of becoming a handler error;
+`BudgetLedger.commit()` closes the reservation and raises `BudgetExhausted`
+using the actual provider total while terminal usage retains the exact fact.
+
+Provider-completed usage now survives malformed root or subcall output through
+`LLMUsageFailure`. The root loop and subcall broker settle the carried usage
+before returning the original parsing error; plain client calls retain their
+original exception types. Usage does not imply a usable-output success, so
+malformed output increments request and token facts but not success counters.
+Centralized subcall usage callbacks are serialized across concurrent broker
+calls to keep `ExecutionStats` totals aligned with ledger reconciliation.
+
+Fan-out batches now retain `LLMUsageFailure.usage` in the failed item's ordered
+slot while surfacing its original cause. Native ModelRelay batch structural
+errors similarly carry the partial ordered result through
+`SubcallBatchFailure`; successful earlier items remain attributed, unseen items
+remain unavailable, and the broker therefore records known usage once while
+settling the incomplete batch conservatively.
+
+Custom `RLMEnvironment.sandbox_subcalls` implementations now receive the
+required keyword-only `usage_callback` and `settlement_callback` and must pass
+both to `broker_subcalls`. The broker registration uses the first to record
+typed per-item provider usage exactly once; subcall transports no longer add
+token usage directly to `ExecutionStats`. The second marks full-reservation
+fallback as partial usage, including a wall-time overrun surfaced after commit
+closes the reservation. The optional capability observer is trace-only and
+cannot substitute for either accounting callback.
+
+### Trace ABI v3 and runner protocol v7 distinguish partial usage
+
+Trace usage scopes now include `complete: boolean`; `kind="resolved"` requires
+both root and subcall scopes to be complete, while missing provider facts emit
+`kind="partial"` without inventing token counts. This changes the strict event
+body and the embedded runner response, so request writers must send
+`protocol_version: 7` and event consumers must accept `version: 3` atomically.
+There is no compatibility decoder for Trace ABI v2 or runner protocol v6.
+
+The released conformance resources are now
+`trace_v3_execution_ndjson()`, `trace_v3_lifecycle_ndjson()`, and
+`runner_v7_refusal_ndjson()` backed by the correspondingly named NDJSON files.
 
 ## 0.15.5 (from 0.15.4)
 

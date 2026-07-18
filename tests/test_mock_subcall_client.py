@@ -17,7 +17,7 @@ def _run_one_mock_subcall(mock: MockSubcallClient, context: ExecutionContext) ->
                     "answer['ready'] = True\n"
                     "```"
                 ),
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             )
         ]
     )

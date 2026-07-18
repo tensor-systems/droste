@@ -8,7 +8,7 @@ import {
 import { isRlmEvent } from "../src/droste/substrates/_relay/events.ts";
 
 const TRACE_LIFECYCLE_FIXTURE = new URL(
-  "../src/droste/testing/fixtures/trace-v2-lifecycle.ndjson",
+  "../src/droste/testing/fixtures/trace-v3-lifecycle.ndjson",
   import.meta.url,
 );
 

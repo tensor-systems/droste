@@ -1,11 +1,16 @@
 from .environment import EnvCapabilities, ExecutionResult, RLMEnvironment
-from .llm_client import LLMClient, TokenUsage
+from .llm_client import LLMClient, LLMUsageFailure, TokenUsage
 from .subcall_capacity import SubcallInputCapacity
 from .subcall_client import (
+    SubcallBatchFailure,
+    SubcallBatchResult,
     SubcallClient,
     SubcallConcurrencyProvider,
     SubcallInputCapacityProvider,
     SubcallOutputTokenLimitProvider,
+    SubcallQueryResult,
+    SubcallUsageProvider,
+    fail_fast_subcall_batch,
 )
 
 __all__ = [
@@ -13,10 +18,16 @@ __all__ = [
     "EnvCapabilities",
     "ExecutionResult",
     "LLMClient",
+    "LLMUsageFailure",
     "TokenUsage",
     "SubcallClient",
+    "SubcallBatchFailure",
+    "SubcallBatchResult",
     "SubcallConcurrencyProvider",
     "SubcallInputCapacity",
     "SubcallInputCapacityProvider",
     "SubcallOutputTokenLimitProvider",
+    "SubcallQueryResult",
+    "fail_fast_subcall_batch",
+    "SubcallUsageProvider",
 ]

@@ -17,6 +17,31 @@ class TokenUsage:
     total_tokens: int
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
+    exact: bool = False
+
+    def __post_init__(self) -> None:
+        for name in (
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "cache_read_tokens",
+            "cache_creation_tokens",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"token usage {name} must be a non-negative integer")
+        if not isinstance(self.exact, bool):
+            raise TypeError("token usage exact must be a bool")
+        if self.exact and self.total_tokens < self.prompt_tokens + self.completion_tokens:
+            raise ValueError("exact token usage total cannot be less than its parts")
+        if self.exact and self.cache_read_tokens + self.cache_creation_tokens > self.prompt_tokens:
+            raise ValueError("exact cache token breakdown cannot exceed prompt tokens")
+
+    @classmethod
+    def unavailable(cls) -> TokenUsage:
+        """Return the explicit fact that trustworthy provider usage was absent."""
+
+        return cls(0, 0, 0, exact=False)
 
 
 def strip_cache_anchor_markers(
@@ -27,6 +52,19 @@ def strip_cache_anchor_markers(
         {key: value for key, value in message.items() if key != CACHE_ANCHOR_MARKER}
         for message in messages
     ]
+
+
+class LLMUsageFailure(RuntimeError):
+    """An output/parsing failure paired with completed provider usage."""
+
+    def __init__(self, usage: TokenUsage, cause: Exception) -> None:
+        if not isinstance(usage, TokenUsage):
+            raise TypeError("LLM usage failure requires TokenUsage")
+        if not isinstance(cause, Exception):
+            raise TypeError("LLM usage failure cause must be an Exception")
+        super().__init__(str(cause))
+        self.usage = usage
+        self.cause = cause
 
 
 def total_tokens_from_usage(usage: Any) -> int:

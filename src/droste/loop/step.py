@@ -40,7 +40,13 @@ from ..execution.trace import (
 from ..policy import PolicyHints, contract_violations, ready_violations
 from ..prompts.pack import PromptPackRecord
 from ..protocols.environment import ExecutionResult, RLMEnvironment
-from ..protocols.llm_client import CACHE_ANCHOR_MARKER, LLMClient, total_tokens_from_usage
+from ..protocols.llm_client import (
+    CACHE_ANCHOR_MARKER,
+    LLMClient,
+    LLMUsageFailure,
+    TokenUsage,
+    total_tokens_from_usage,
+)
 from ..structured import _StructuredBatchEvidence
 from .trajectory import (
     EXECUTION_STATUS_ERROR,
@@ -472,6 +478,23 @@ def call_root(
             index = anchor if anchor >= 0 else message_count + anchor
             if 0 <= index < message_count:
                 outbound_messages[index][CACHE_ANCHOR_MARKER] = True
+
+    def settle_completed_usage(usage: TokenUsage, *, success: bool) -> RLMError | None:
+        actual = BudgetRequest(tokens=usage.total_tokens if usage.exact else request.tokens)
+        accounting_error: RLMError | None = None
+        try:
+            if success:
+                context.record_root_success(usage)
+            else:
+                context.record_root_usage(usage)
+        except Exception as exc:
+            accounting_error = RLMError(type=exc.__class__.__name__, message=str(exc))
+        try:
+            context.ledger.commit(call_id, actual)
+        except BudgetExhausted as exc:
+            return RLMError(type="BudgetExhausted", message=str(exc))
+        return accounting_error
+
     try:
         response, usage = root_llm.responses_create(
             outbound_messages,
@@ -479,7 +502,17 @@ def call_root(
             max_tokens=context.budget.root_output_tokens,
             return_usage=True,
         )
+    except LLMUsageFailure as exc:
+        accounting_error = settle_completed_usage(exc.usage, success=False)
+        if accounting_error is not None:
+            return "", exc.usage, accounting_error
+        return (
+            "",
+            exc.usage,
+            RLMError(type=exc.cause.__class__.__name__, message=str(exc.cause)),
+        )
     except BaseException as exc:
+        context.record_root_usage_unavailable()
         try:
             context.ledger.commit(call_id, BudgetRequest(tokens=request.tokens))
         except BudgetExhausted as budget_exc:
@@ -489,31 +522,15 @@ def call_root(
         if not isinstance(exc, Exception):
             raise
         return "", None, RLMError(type=exc.__class__.__name__, message=str(exc))
-    try:
-        actual = BudgetRequest(
-            tokens=max(
-                int(usage.total_tokens),
-                input_estimate
-                + min(
-                    conservative_token_estimate(response),
-                    context.budget.root_output_tokens,
-                ),
-            )
-        )
-    except Exception as exc:
-        try:
-            context.ledger.commit(call_id, BudgetRequest(tokens=request.tokens))
-        except BudgetExhausted as budget_exc:
-            return "", usage, RLMError(type="BudgetExhausted", message=str(budget_exc))
-        return "", usage, RLMError(type=exc.__class__.__name__, message=str(exc))
-    try:
-        context.ledger.commit(call_id, actual)
-    except BudgetExhausted as exc:
-        return "", usage, RLMError(type="BudgetExhausted", message=str(exc))
-    try:
-        context.record_root_success(usage)
-    except Exception as exc:
-        return "", usage, RLMError(type=exc.__class__.__name__, message=str(exc))
+    if not isinstance(usage, TokenUsage):
+        usage = TokenUsage.unavailable()
+    # A completed provider response remains a usage/success fact even when
+    # final ledger reconciliation later rejects a token or wall-time overrun.
+    # Record it before commit so the terminal trace never reports zero usage
+    # for work the provider completed and billed.
+    accounting_error = settle_completed_usage(usage, success=True)
+    if accounting_error is not None:
+        return "", usage, accounting_error
     return response, usage, None
 
 

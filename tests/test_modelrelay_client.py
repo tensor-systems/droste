@@ -16,17 +16,47 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from droste import BatchItemError, BatchItemErrorDetails
+from droste import (
+    BatchItemError,
+    BatchItemErrorDetails,
+    CapabilityCallError,
+    LLMUsageFailure,
+    SubcallBatchFailure,
+    TokenUsage,
+)
 from droste.capabilities import broker_subcalls
 from droste.clients.modelrelay import (
     ModelRelayClient,
     ModelRelaySubcallClient,
     _batch_item_error_details,
+    _usage_from,
 )
 from droste.environments import RunnerEnvironment
 from droste.execution.context import create_execution_context
-from droste.protocols.llm_client import CACHE_ANCHOR_MARKER, TokenUsage
+from droste.protocols.llm_client import CACHE_ANCHOR_MARKER
 from droste.structured import _StructuredBatchEvidence, bind_structured_batch, structured_batch
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"usage": {}},
+        {"usage": {"input_tokens": 1, "output_tokens": 2}},
+        {"usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 2}},
+        {"usage": {"input_tokens": 1, "output_tokens": "2", "total_tokens": 3}},
+    ],
+)
+def test_usage_missing_or_malformed_is_unavailable(payload: object) -> None:
+    assert _usage_from(payload).exact is False
+
+
+def test_usage_accepts_complete_zero_and_preserves_hidden_total() -> None:
+    zero = _usage_from({"usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}})
+    hidden = _usage_from({"usage": {"input_tokens": 2, "output_tokens": 3, "total_tokens": 19}})
+
+    assert zero.exact is True and zero.total_tokens == 0
+    assert hidden.exact is True and hidden.total_tokens == 19
 
 
 class StubResponsesServer:
@@ -395,16 +425,20 @@ def test_root_accounts_usage_before_output_validation(monkeypatch):
     monkeypatch.setattr(
         client._transport,
         "complete",
-        lambda payload: {"usage": {"input_tokens": 7, "output_tokens": 3}},
+        lambda payload: {"usage": {"input_tokens": 7, "output_tokens": 3, "total_tokens": 10}},
     )
 
+    with pytest.raises(LLMUsageFailure, match="missing output") as raised:
+        client.responses_create([{"role": "user", "content": "q"}], model="", return_usage=True)
+
+    assert raised.value.usage == TokenUsage(7, 3, 10, exact=True)
+    assert isinstance(raised.value.cause, RuntimeError)
+    assert client.total_usage.total_tokens == 10
     with pytest.raises(RuntimeError, match="missing output"):
         client.responses_create([{"role": "user", "content": "q"}], model="")
 
-    assert client.total_usage.total_tokens == 10
 
-
-def test_subcall_accounting_and_cost_defaults(stub_native):
+def test_subcall_usage_reporting_and_cost_defaults(stub_native):
     context = create_execution_context()
     client = ModelRelaySubcallClient(
         model="sub-model",
@@ -413,19 +447,22 @@ def test_subcall_accounting_and_cost_defaults(stub_native):
         api_key="mr_sk_t",
     )
     assert client.output_token_limit == 2048
-    assert client.llm_query("first") == "echo: first"
+    first = client.llm_query_with_usage("first")
+    assert first.result == "echo: first" and first.usage.total_tokens == 10
     assert context.stats.calls_made == 1
     assert context.stats.successful_calls == 1
-    assert context.stats.total_tokens == 10
+    assert context.stats.total_tokens == 0
     request = stub_native.requests[0]
     # ModelRelay's server-side subcall defaults, applied client-side too.
     assert request["max_output_tokens"] == 2048
     assert request["reasoning_effort"] == "none"
 
-    assert client.llm_batch(["a", "b"]) == ["echo: a", "echo: b"]
+    batch = client.llm_batch_with_usage(["a", "b"])
+    assert list(batch.results) == ["echo: a", "echo: b"]
+    assert sum(item.total_tokens for item in batch.usage) == 20
     assert context.stats.calls_made == 3
     assert context.stats.successful_calls == 3
-    assert context.stats.total_tokens == 30
+    assert context.stats.total_tokens == 0
     assert client.total_usage.prompt_tokens == 21
     assert client.total_usage.completion_tokens == 9
     assert client.total_usage.total_tokens == 30
@@ -461,16 +498,157 @@ def test_subcall_accounts_usage_before_output_validation(monkeypatch):
     monkeypatch.setattr(
         client._transport,
         "complete",
-        lambda payload: {"usage": {"input_tokens": 7, "output_tokens": 3}},
+        lambda payload: {"usage": {"input_tokens": 7, "output_tokens": 3, "total_tokens": 10}},
     )
 
+    with pytest.raises(LLMUsageFailure, match="missing output") as raised:
+        client.llm_query_with_usage("q")
+
+    assert raised.value.usage == TokenUsage(7, 3, 10, exact=True)
+    assert isinstance(raised.value.cause, RuntimeError)
+    assert context.stats.calls_made == 1
+    assert context.stats.total_tokens == 0
+    assert context.stats.successful_calls == 0
+    assert client.total_usage.total_tokens == 10
     with pytest.raises(RuntimeError, match="missing output"):
         client.llm_query("q")
 
+
+def test_native_batch_malformed_success_preserves_item_usage(monkeypatch) -> None:
+    context = create_execution_context()
+    client = ModelRelaySubcallClient(model="sub-model", context=context, api_key="mr_sk_t")
+    monkeypatch.setattr(
+        client._transport,
+        "complete",
+        lambda payload, **kwargs: {
+            "results": [
+                {
+                    "id": "0",
+                    "status": "success",
+                    "response": {
+                        "usage": {"input_tokens": 7, "output_tokens": 3, "total_tokens": 10}
+                    },
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(SubcallBatchFailure, match="missing output") as raised:
+        client.llm_batch_with_usage(["q"])
+
+    assert raised.value.result.usage == (TokenUsage(7, 3, 10, exact=True),)
+    assert isinstance(raised.value.cause, RuntimeError)
     assert context.stats.calls_made == 1
-    assert context.stats.total_tokens == 10
     assert context.stats.successful_calls == 0
+    with pytest.raises(RuntimeError, match="missing output"):
+        client.llm_batch(["q"])
+
+
+def _native_success_result(index: int) -> dict[str, object]:
+    return {
+        "id": str(index),
+        "status": "success",
+        "response": {
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": f"ok-{index}"}],
+                }
+            ],
+            "usage": {"input_tokens": 7, "output_tokens": 3, "total_tokens": 10},
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("malformed", "message"),
+    [
+        (None, "non-object result"),
+        ({"id": "invalid"}, "invalid result id"),
+        ({"id": "0", "status": "success", "response": {}}, "unexpected result id 0"),
+        ({"id": "2", "status": "success", "response": {}}, "unexpected result id 2"),
+        ({"id": "1", "status": "success"}, "item 1 missing response"),
+        ({"id": "1", "status": "error"}, "item 1 missing error"),
+        ({"id": "1", "status": "mystery"}, "item 1 has invalid status 'mystery'"),
+    ],
+)
+def test_native_batch_structural_failure_preserves_earlier_usage(
+    monkeypatch, malformed, message
+) -> None:
+    context = create_execution_context()
+    client = ModelRelaySubcallClient(model="sub-model", context=context, api_key="mr_sk_t")
+    monkeypatch.setattr(
+        client._transport,
+        "complete",
+        lambda payload, **kwargs: {"results": [_native_success_result(0), malformed]},
+    )
+
+    with pytest.raises(SubcallBatchFailure, match=message) as failure:
+        client.llm_batch_with_usage(["a", "b"])
+
+    assert failure.value.result.usage == (
+        TokenUsage(7, 3, 10, exact=True),
+        TokenUsage.unavailable(),
+    )
+    assert type(failure.value.cause) is RuntimeError
+    assert context.stats.calls_made == 2
+    assert context.stats.successful_calls == 1
     assert client.total_usage.total_tokens == 10
+
+
+def test_native_batch_final_missing_id_preserves_earlier_usage_and_public_error(
+    monkeypatch,
+) -> None:
+    context = create_execution_context()
+    client = ModelRelaySubcallClient(model="sub-model", context=context, api_key="mr_sk_t")
+    monkeypatch.setattr(
+        client._transport,
+        "complete",
+        lambda payload, **kwargs: {"results": [_native_success_result(0)]},
+    )
+
+    with pytest.raises(SubcallBatchFailure, match=r"missing result ids \[1\]") as failure:
+        client.llm_batch_with_usage(["a", "b"])
+    assert failure.value.result.usage == (
+        TokenUsage(7, 3, 10, exact=True),
+        TokenUsage.unavailable(),
+    )
+    with pytest.raises(RuntimeError, match=r"missing result ids \[1\]"):
+        client.llm_batch(["a", "b"])
+
+
+def test_native_batch_structural_failure_broker_settles_known_usage_once(
+    monkeypatch,
+) -> None:
+    context = create_execution_context()
+    client = ModelRelaySubcallClient(model="sub-model", context=context, api_key="mr_sk_t")
+    monkeypatch.setattr(
+        client._transport,
+        "complete",
+        lambda payload, **kwargs: {
+            "results": [_native_success_result(0), {"id": "1", "status": "mystery"}]
+        },
+    )
+    brokered = broker_subcalls(
+        client,
+        context.ledger,
+        usage_callback=context.record_subcall_usage,
+        settlement_callback=context.record_subcall_settlement,
+    )
+
+    with pytest.raises(CapabilityCallError, match="invalid status") as failure:
+        brokered.llm_batch(["a", "b"])
+
+    assert failure.value.error.type == "RuntimeError"
+    assert context.stats.calls_made == 2
+    assert context.stats.successful_calls == 1
+    assert context.stats.subcall_total_tokens == 10
+    assert context.stats.subcall_usage_complete is False
+    assert client.total_usage.total_tokens == 10
+    snapshot = context.ledger.snapshot()
+    assert snapshot.consumed.tokens > 10
+    assert snapshot.reserved.tokens == 0
 
 
 def test_subcall_batch_reports_ordered_item_errors_without_retry(stub_native):
@@ -499,7 +677,7 @@ def test_subcall_batch_reports_ordered_item_errors_without_retry(stub_native):
     ]
     assert context.stats.calls_made == 3
     assert context.stats.successful_calls == 2
-    assert context.stats.total_tokens == 20
+    assert context.stats.total_tokens == 0
     assert client.total_usage.total_tokens == 20
     assert stub_native.paths == ["/api/v1/responses/batch"]
     assert len(stub_native.requests) == 1
@@ -521,6 +699,24 @@ def test_all_failed_native_batch_has_attempts_but_no_success_evidence(stub_nativ
     assert context.stats.calls_made == 2
     assert context.stats.successful_calls == 0
     assert context.stats.total_tokens == 0
+
+
+def test_failed_batch_item_never_trusts_a_zero_valued_usage_object(stub_native):
+    context = create_execution_context()
+    client = ModelRelaySubcallClient(
+        model="sub-model",
+        context=context,
+        base_url=stub_native.base_url,
+        api_key="mr_sk_t",
+    )
+    stub_native.batch_item_fields = {
+        "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    }
+
+    value = client.llm_batch_with_errors_and_usage(["fail"])
+
+    assert value.errors[0]["index"] == 0
+    assert value.usage[0].exact is False
 
 
 def test_subcall_batch_client_only_reports_mechanism_usage(stub_native):
@@ -745,7 +941,12 @@ def test_batch_error_details_survive_broker_semantic_and_runner_paths(stub_nativ
         "retryable": True,
     }
 
-    brokered = broker_subcalls(client, context.ledger)
+    brokered = broker_subcalls(
+        client,
+        context.ledger,
+        usage_callback=context.record_subcall_usage,
+        settlement_callback=context.record_subcall_settlement,
+    )
     _, broker_errors = brokered.llm_batch_with_errors(["fail"])
     assert broker_errors[0]["details"] == expected
 
@@ -801,5 +1002,6 @@ def test_native_batch_structured_repair_keeps_one_wire_request_per_attempt(stub_
     assert result["repairs_made"] == 1
     assert context.stats.calls_made == 3
     assert context.stats.successful_calls == 3
-    assert context.stats.total_tokens == 30
+    assert context.stats.total_tokens == 0
+    assert client.total_usage.total_tokens == 30
     assert stub_native.paths == ["/api/v1/responses/batch", "/api/v1/responses/batch"]

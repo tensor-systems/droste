@@ -100,7 +100,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
 
 ## Trace ABI
 
-- Every structured event is a strict Trace ABI v2 value. Stamp it exactly once
+- Every structured event is a strict Trace ABI v3 value. Stamp it exactly once
   through `ExecutionContext`; do not emit raw or partially enveloped event
   dictionaries at host boundaries.
 - Treat every envelope/body, classification, and ordering change as an ABI
@@ -166,6 +166,71 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - A strict published event vocabulary/body change requires a Trace ABI bump and,
   when embedded in runner output, an atomic runner-protocol bump. Do not expand
   an old strict version in place or add a compatibility decoder in the engine.
+- Trace ABI v3 usage is `resolved` only when both root and subcall scopes have
+  complete provider usage. Missing or malformed usage preserves any known
+  counts, marks that scope `complete=false`, and makes terminal usage
+  `kind="partial"`; never report conservative reservations as provider usage.
+- Exact inference settlement requires a complete per-item checkpoint whose
+  subcall count equals the admitted batch size. Any missing/malformed item
+  keeps the successful result but settles the full reservation and emits
+  `token_settlement_fallback`; visible output size never settles tokens.
+- An exact inference checkpoint may exceed its reservation: it is an observed
+  provider fact, not added authority. The attempt controller must preserve that
+  fact, and `BrokerBudget.checkpoint` defers it to final `BudgetLedger.commit()`
+  so the ledger closes the reservation and raises `BudgetExhausted` with the
+  actual total. Non-inference checkpoints remain capped at their reservation.
+- Usage completeness is mandatory settlement accounting, not capability-trace
+  observation. `RLMEnvironment.sandbox_subcalls` must forward its
+  `usage_callback` and `settlement_callback` into `broker_subcalls`; custom
+  environments must not drop either even when they intentionally omit the
+  optional capability observer. Subcall registrations centrally add returned
+  provider usage to `ExecutionStats`; transport clients must not also add those
+  token counts or terminal usage will double-count them.
+- A subcall registration set may serve concurrent broker calls. Its centralized
+  usage callback must be serialized across query and batch handlers; otherwise
+  `ExecutionStats` read-modify-write counters can lose exact provider totals
+  even though the budget ledger reconciles every call.
+- `BudgetLedger.commit()` closes an overrun reservation before raising
+  `BudgetExhausted`. `BrokerBudget` must report a fallback settlement on that
+  exception path so terminal usage completeness cannot remain incorrectly true.
+  A controller-owned deadline terminal error also forces fallback independently
+  of whether the ledger clock has crossed its reservation deadline yet.
+- `TokenUsage.exact` defaults false. Only validated provider adapters opt in;
+  ModelRelay/OpenAI/runner/Pyodide require explicit `total_tokens` so hidden
+  reasoning is retained, while Anthropic totals all documented input/cache
+  counters plus output. Batch error items always carry unavailable usage.
+- `TokenUsage.cache_read_tokens` and `cache_creation_tokens` are non-negative
+  observability breakdowns inside inclusive `prompt_tokens`/`total_tokens`; do
+  not subtract them during settlement. Preserve them when copying, folding, or
+  attaching usage to `LLMUsageFailure`/`SubcallBatchFailure`. Anthropic's
+  streaming adapter must retain the raw `message_start` usage map until
+  `message_delta` supplies output usage so malformed or absent fields remain
+  fail-closed rather than being coerced to zero.
+- Cache anchors are private root-loop metadata. Anthropic consumes them into
+  `cache_control`; ModelRelay, OpenAI-compatible, runner HTTP, and Pyodide
+  adapters must strip them from outbound payloads. Keep terminal extraction
+  unanchored and never mutate or persist markers in canonical messages or
+  trajectory records.
+- Fail-fast usage-aware batches raise `SubcallBatchFailure` with the collected
+  `SubcallBatchResult`; broker registrations record its per-item usage before
+  re-raising the original item error. Plain `llm_batch` must still expose that
+  original exception type, and adapters must not directly mutate token stats.
+- Fan-out batch collectors must catch `LLMUsageFailure` before the generic
+  exception branch, copy its usage into the matching item slot, and store its
+  original cause. ModelRelay native-batch structural failures after dispatch
+  likewise raise `SubcallBatchFailure` containing all usage collected before
+  the malformed item or final ID validation failed. Unseen items remain
+  unavailable, forcing conservative settlement without discarding known facts.
+- When a provider returns valid usage but trusted output parsing fails, raise
+  `LLMUsageFailure(usage, cause)`. Root orchestration or the subcall broker must
+  record and settle that usage before surfacing the original cause. Plain
+  client methods preserve the original exception type. Usage is billable even
+  when output is malformed, but `root_successes`/`successful_calls` count only
+  usable outputs and therefore must not increment on this path.
+- A completed root provider response is a success/usage fact before final
+  ledger reconciliation. Record normalized root usage before `commit()` so a
+  later token or wall overrun preserves exact terminal usage (or marks malformed
+  usage partial) while the `BudgetExhausted` outcome still wins.
 
 ## droste_runner Package
 
@@ -191,7 +256,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
   They are assertions that the Deno/WASM host supplies those boundaries, not
   Python-side enforcement. Never weaken them or silently accept a native
   signal timeout for Pyodide.
-- Every request MUST carry `"protocol_version": 6` and one complete `budget`
+- Every request MUST carry `"protocol_version": 7` and one complete `budget`
   object. Missing/mismatched versions or incomplete budgets fail before work.
   See docs/architecture.md, "The runner protocol".
 - Version refusal precedes operation resolution and carries `operation: null`.

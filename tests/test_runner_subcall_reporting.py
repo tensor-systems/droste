@@ -18,6 +18,9 @@ import pytest
 
 from droste import Budget
 from droste.execution.context import create_execution_context
+from droste.protocols.llm_client import LLMUsageFailure, TokenUsage
+from droste.protocols.subcall_client import SubcallBatchFailure, SubcallQueryResult
+from droste_runner.http_clients import RootLLMClient
 from droste_runner.runner import HTTPSubcallClient, run
 
 ROOT_REPLY = (
@@ -49,12 +52,88 @@ def test_http_subcall_reports_only_an_explicit_output_limit() -> None:
     assert HTTPSubcallClient(**kwargs, max_output_tokens=512).output_token_limit == 512
 
 
+def test_http_subcall_usage_requires_explicit_provider_total() -> None:
+    context = create_execution_context()
+    client = HTTPSubcallClient(
+        endpoint="https://example.invalid/subcall",
+        token="t",
+        session="s",
+        session_index=0,
+        context=context,
+    )
+
+    missing = client._record_usage({"input_tokens": 2, "output_tokens": 3})
+    hidden = client._record_usage({"input_tokens": 2, "output_tokens": 3, "total_tokens": 19})
+    zero = client._record_usage({"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+
+    assert missing.exact is False
+    assert hidden.exact is True and hidden.total_tokens == 19
+    assert zero.exact is True and zero.total_tokens == 0
+    assert context.stats.subcall_usage_complete is True
+    assert context.stats.total_tokens == 0
+
+
+def test_http_clients_preserve_usage_when_result_is_missing(monkeypatch) -> None:
+    raw = json.dumps(
+        {"usage": {"input_tokens": 7, "output_tokens": 3, "total_tokens": 19}}
+    ).encode()
+
+    class Response:
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self) -> bytes:
+            return raw
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: Response())
+    context = create_execution_context()
+    subcall = HTTPSubcallClient(
+        endpoint="https://example.invalid/subcall",
+        token="t",
+        session="s",
+        session_index=0,
+        context=context,
+    )
+    with pytest.raises(LLMUsageFailure, match="missing subcall result") as subcall_failure:
+        subcall.llm_query_with_usage("q")
+    assert subcall_failure.value.usage == TokenUsage(7, 3, 19, exact=True)
+    with pytest.raises(RuntimeError, match="missing subcall result"):
+        subcall.llm_query("q")
+
+    root = RootLLMClient(
+        endpoint="https://example.invalid/root",
+        token="t",
+        default_model="root-model",
+        provider=None,
+        max_output_tokens=100,
+        temperature=None,
+        stop=None,
+        session="s",
+        session_index=0,
+    )
+    with pytest.raises(LLMUsageFailure, match="missing root result") as root_failure:
+        root.responses_create(
+            [{"role": "user", "content": "q"}],
+            model="",
+            return_usage=True,
+        )
+    assert root_failure.value.usage == TokenUsage(7, 3, 19, exact=True)
+
+
 class _StubHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 (http.server API)
         length = int(self.headers.get("Content-Length") or 0)
         self.rfile.read(length)
         if self.path == "/root":
-            body = {"result": ROOT_REPLY, "usage": {"input_tokens": 1, "output_tokens": 1}}
+            body = {
+                "result": ROOT_REPLY,
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            }
         else:
             body = {
                 "result": "spam",
@@ -91,7 +170,7 @@ def test_run_reports_actual_subcall_count(monkeypatch, capfd) -> None:
     try:
         response = run(
             {
-                "protocol_version": 6,
+                "protocol_version": 7,
                 "model": "test-model",
                 "question": "is it spam?",
                 "budget": _budget(subcalls=10, depth=2),
@@ -141,8 +220,8 @@ def test_run_reports_actual_subcall_count(monkeypatch, capfd) -> None:
         "concurrency": 2,
         "seed": 17,
     }
-    assert manifest["abis"]["runner"] == 6
-    assert manifest["abis"]["trace"] == 2
+    assert manifest["abis"]["runner"] == 7
+    assert manifest["abis"]["trace"] == 3
     assert manifest["engine"]["source_revision"] == "commit-a"
     assert manifest["id"].startswith("sha256:")
     assert "trajectory" not in response
@@ -153,6 +232,7 @@ def test_run_reports_actual_subcall_count(monkeypatch, capfd) -> None:
         "total_tokens": 2,
         "requests": 1,
         "successes": 1,
+        "complete": True,
     }
     assert usage["subcall"] == {
         "input_tokens": 2,
@@ -160,6 +240,7 @@ def test_run_reports_actual_subcall_count(monkeypatch, capfd) -> None:
         "total_tokens": 5,
         "requests": 1,
         "successes": 1,
+        "complete": True,
     }
     assert usage["total_tokens"] == 7
     capability = next(
@@ -171,9 +252,14 @@ def test_run_reports_actual_subcall_count(monkeypatch, capfd) -> None:
         event for event in response["run_record"]["events"] if event["type"] == "subcall"
     ]
     assert live_subcalls == retained_subcalls
-    assert [event["phase"] for event in live_subcalls] == ["start", "completion"]
-    assert live_subcalls[0]["call_id"] == live_subcalls[1]["call_id"]
-    assert all(event["iteration"] == 1 and event["version"] == 2 for event in live_subcalls)
+    assert [event["phase"] for event in live_subcalls] == [
+        "start",
+        "progress",
+        "completion",
+    ]
+    assert len({event["call_id"] for event in live_subcalls}) == 1
+    assert live_subcalls[1]["checkpoint"] == {"tokens": 5, "subcalls": 1}
+    assert all(event["iteration"] == 1 and event["version"] == 3 for event in live_subcalls)
     assert capability["outcome"]["capability_id"]["operation"] == "llm_query"
     assert "params" not in capability["outcome"]
     assert "result" not in capability["outcome"]
@@ -223,7 +309,7 @@ def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> 
     monkeypatch.setattr(import_module("droste_runner.run"), "run_rlm", fake_run_rlm)
     response = runner_module.run(
         {
-            "protocol_version": 6,
+            "protocol_version": 7,
             "model": "test-model",
             "question": "q",
             "budget": _budget(),
@@ -247,7 +333,9 @@ def _client(**kwargs: Any) -> tuple[HTTPSubcallClient, Any]:
         context=context,
         **kwargs,
     )
-    client._request = lambda payload: "ok"  # type: ignore[method-assign]
+    client._request = lambda payload: SubcallQueryResult(  # type: ignore[method-assign]
+        "ok", TokenUsage(1, 1, 2, exact=True)
+    )
     return client, context
 
 
@@ -291,7 +379,7 @@ def test_llm_batch_with_errors_bounded_concurrency() -> None:
     active = 0
     peak = 0
 
-    def _request(payload: dict[str, Any]) -> str:
+    def _request(payload: dict[str, Any]) -> SubcallQueryResult:
         nonlocal active, peak
         with lock:
             active += 1
@@ -303,7 +391,7 @@ def test_llm_batch_with_errors_bounded_concurrency() -> None:
             # worker arrives. A fixed sleep races the 50 ms launch stagger in
             # the production batch path and can observe only one active call.
             overlap.wait(timeout=1)
-            return "ok"
+            return SubcallQueryResult("ok", TokenUsage(1, 1, 2, exact=True))
         finally:
             with lock:
                 active -= 1
@@ -330,7 +418,7 @@ def test_llm_batch_with_errors_enforces_prompt_cap() -> None:
 def test_llm_batch_with_errors_orders_errors_by_index() -> None:
     client, _ = _client()
 
-    def _request(payload: dict[str, Any]) -> str:
+    def _request(payload: dict[str, Any]) -> SubcallQueryResult:
         prompt = payload["prompt"]
         if prompt == "p1":
             # Finish after p3's failure so completion order != index order.
@@ -338,7 +426,7 @@ def test_llm_batch_with_errors_orders_errors_by_index() -> None:
             raise RuntimeError("boom p1")
         if prompt == "p3":
             raise RuntimeError("boom p3")
-        return "ok"
+        return SubcallQueryResult("ok", TokenUsage(1, 1, 2, exact=True))
 
     client._request = _request  # type: ignore[method-assign]
     results, errors = client.llm_batch_with_errors([f"p{i}" for i in range(5)])
@@ -354,15 +442,40 @@ def test_llm_batch_raises_lowest_index_error_unwrapped() -> None:
     class _Boom(RuntimeError):
         pass
 
-    def _request(payload: dict[str, Any]) -> str:
+    def _request(payload: dict[str, Any]) -> SubcallQueryResult:
         prompt = payload["prompt"]
         if prompt in ("p2", "p4"):
             raise _Boom(f"boom {prompt}")
-        return "ok"
+        return SubcallQueryResult("ok", TokenUsage(1, 1, 2, exact=True))
 
     client._request = _request  # type: ignore[method-assign]
-    with pytest.raises(_Boom, match="boom p2"):
+    with pytest.raises(_Boom, match="boom p2") as raised:
         client.llm_batch([f"p{i}" for i in range(5)])
+    assert raised.value.__cause__ is not None
+    assert raised.value.__cause__.__cause__ is None
+
+
+def test_http_fanout_batch_preserves_usage_failure_and_original_cause() -> None:
+    client, _ = _client()
+
+    def request(payload: dict[str, Any]) -> SubcallQueryResult:
+        if payload["prompt"] == "bad":
+            raise LLMUsageFailure(
+                TokenUsage(7, 3, 19, exact=True),
+                RuntimeError("malformed HTTP output"),
+            )
+        return SubcallQueryResult("ok", TokenUsage(2, 1, 5, exact=True))
+
+    client._request = request  # type: ignore[method-assign]
+    with pytest.raises(SubcallBatchFailure, match="malformed HTTP output") as failure:
+        client.llm_batch_with_usage(["ok", "bad"])
+    assert failure.value.result.usage == (
+        TokenUsage(2, 1, 5, exact=True),
+        TokenUsage(7, 3, 19, exact=True),
+    )
+    assert type(failure.value.cause) is RuntimeError
+    with pytest.raises(RuntimeError, match="malformed HTTP output"):
+        client.llm_batch(["ok", "bad"])
 
 
 # --- Subcall cost controls: the resolved budget always supplies the output
@@ -378,7 +491,10 @@ class _CapturingHandler(BaseHTTPRequestHandler):
         raw_body = self.rfile.read(length)
         if self.path == "/root":
             type(self).root_payloads.append(json.loads(raw_body.decode("utf-8")))
-            body = {"result": ROOT_REPLY, "usage": {"input_tokens": 1, "output_tokens": 1}}
+            body = {
+                "result": ROOT_REPLY,
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            }
         else:
             type(self).subcall_payloads.append(json.loads(raw_body.decode("utf-8")))
             body = {"result": "spam"}
@@ -402,7 +518,7 @@ def _run_with_capture(request_extra: dict[str, Any]) -> list[dict[str, Any]]:
     base = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         request: dict[str, Any] = {
-            "protocol_version": 6,
+            "protocol_version": 7,
             "model": "test-model",
             "question": "is it spam?",
             "budget": _budget(subcalls=10, depth=2),
@@ -417,6 +533,11 @@ def _run_with_capture(request_extra: dict[str, Any]) -> list[dict[str, Any]]:
         thread.join(timeout=5)
     assert response["error"] is None
     assert response["subcalls"] == 1
+    usage = response["run_record"]["terminal"]["usage"]
+    assert usage["kind"] == "partial"
+    assert usage["root"]["complete"] is True
+    assert usage["subcall"]["complete"] is False
+    assert usage["total_tokens"] == 2
     return _CapturingHandler.subcall_payloads
 
 
@@ -462,7 +583,7 @@ def test_zero_subcall_output_budget_is_rejected() -> None:
         budget["subcall_output_tokens"] = 0
         run(
             {
-                "protocol_version": 6,
+                "protocol_version": 7,
                 "model": "m",
                 "question": "q",
                 "budget": budget,

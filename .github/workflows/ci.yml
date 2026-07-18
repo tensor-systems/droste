@@ -140,7 +140,7 @@ jobs:
           PY
       - name: Distributions bundle the exact event ABI corpus (#144)
         run: |
-          for f in trace-v2-execution.ndjson trace-v2-lifecycle.ndjson runner-v6-refusal.ndjson; do
+          for f in trace-v3-execution.ndjson trace-v3-lifecycle.ndjson runner-v7-refusal.ndjson; do
             unzip -l dist/*.whl | grep -q "droste/testing/fixtures/$f" || {
               echo "wheel is missing droste/testing/fixtures/$f"; exit 1;
             }
@@ -153,24 +153,24 @@ jobs:
           from pathlib import Path
 
           from droste.testing import (
-              runner_v6_refusal_ndjson,
-              trace_v2_execution_ndjson,
-              trace_v2_lifecycle_ndjson,
+              runner_v7_refusal_ndjson,
+              trace_v3_execution_ndjson,
+              trace_v3_lifecycle_ndjson,
           )
 
           source = Path(sys.argv[1])
-          assert trace_v2_execution_ndjson() == (source / "trace-v2-execution.ndjson").read_bytes()
-          assert trace_v2_lifecycle_ndjson() == (source / "trace-v2-lifecycle.ndjson").read_bytes()
-          assert runner_v6_refusal_ndjson() == (source / "runner-v6-refusal.ndjson").read_bytes()
+          assert trace_v3_execution_ndjson() == (source / "trace-v3-execution.ndjson").read_bytes()
+          assert trace_v3_lifecycle_ndjson() == (source / "trace-v3-lifecycle.ndjson").read_bytes()
+          assert runner_v7_refusal_ndjson() == (source / "runner-v7-refusal.ndjson").read_bytes()
           PY
           sdist_root="$(tar tzf dist/droste-*.tar.gz | sed -n '1s#/.*##p')"
           tar xzf dist/droste-*.tar.gz -C "$tmp"
-          cmp src/droste/testing/fixtures/trace-v2-lifecycle.ndjson \
-            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v2-lifecycle.ndjson"
-          cmp src/droste/testing/fixtures/trace-v2-execution.ndjson \
-            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v2-execution.ndjson"
-          cmp src/droste/testing/fixtures/runner-v6-refusal.ndjson \
-            "$tmp/$sdist_root/src/droste/testing/fixtures/runner-v6-refusal.ndjson"
+          cmp src/droste/testing/fixtures/trace-v3-lifecycle.ndjson \
+            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v3-lifecycle.ndjson"
+          cmp src/droste/testing/fixtures/trace-v3-execution.ndjson \
+            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v3-execution.ndjson"
+          cmp src/droste/testing/fixtures/runner-v7-refusal.ndjson \
+            "$tmp/$sdist_root/src/droste/testing/fixtures/runner-v7-refusal.ndjson"
 
   deno:
     name: deno (pyodide substrate)
@@ -319,7 +319,7 @@ jobs:
           PY
       - name: Distributions bundle the exact event ABI corpus (#144)
         run: |
-          for f in trace-v2-execution.ndjson trace-v2-lifecycle.ndjson runner-v6-refusal.ndjson; do
+          for f in trace-v3-execution.ndjson trace-v3-lifecycle.ndjson runner-v7-refusal.ndjson; do
             unzip -l dist/*.whl | grep -q "droste/testing/fixtures/$f" || {
               echo "wheel is missing droste/testing/fixtures/$f"; exit 1;
             }
@@ -332,24 +332,24 @@ jobs:
           from pathlib import Path
 
           from droste.testing import (
-              runner_v6_refusal_ndjson,
-              trace_v2_execution_ndjson,
-              trace_v2_lifecycle_ndjson,
+              runner_v7_refusal_ndjson,
+              trace_v3_execution_ndjson,
+              trace_v3_lifecycle_ndjson,
           )
 
           source = Path(sys.argv[1])
-          assert trace_v2_execution_ndjson() == (source / "trace-v2-execution.ndjson").read_bytes()
-          assert trace_v2_lifecycle_ndjson() == (source / "trace-v2-lifecycle.ndjson").read_bytes()
-          assert runner_v6_refusal_ndjson() == (source / "runner-v6-refusal.ndjson").read_bytes()
+          assert trace_v3_execution_ndjson() == (source / "trace-v3-execution.ndjson").read_bytes()
+          assert trace_v3_lifecycle_ndjson() == (source / "trace-v3-lifecycle.ndjson").read_bytes()
+          assert runner_v7_refusal_ndjson() == (source / "runner-v7-refusal.ndjson").read_bytes()
           PY
           sdist_root="$(tar tzf dist/droste-*.tar.gz | sed -n '1s#/.*##p')"
           tar xzf dist/droste-*.tar.gz -C "$tmp"
-          cmp src/droste/testing/fixtures/trace-v2-lifecycle.ndjson \
-            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v2-lifecycle.ndjson"
-          cmp src/droste/testing/fixtures/trace-v2-execution.ndjson \
-            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v2-execution.ndjson"
-          cmp src/droste/testing/fixtures/runner-v6-refusal.ndjson \
-            "$tmp/$sdist_root/src/droste/testing/fixtures/runner-v6-refusal.ndjson"
+          cmp src/droste/testing/fixtures/trace-v3-lifecycle.ndjson \
+            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v3-lifecycle.ndjson"
+          cmp src/droste/testing/fixtures/trace-v3-execution.ndjson \
+            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v3-execution.ndjson"
+          cmp src/droste/testing/fixtures/runner-v7-refusal.ndjson \
+            "$tmp/$sdist_root/src/droste/testing/fixtures/runner-v7-refusal.ndjson"
 
   deno-linux:
     name: deno (linux, pyodide substrate)

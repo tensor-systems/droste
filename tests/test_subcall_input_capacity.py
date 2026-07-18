@@ -45,7 +45,7 @@ class RecordingRoot(MockLLMClient):
             [
                 MockResponse(
                     "```python\nanswer['content'] = 'ok'\nanswer['ready'] = True\n```",
-                    TokenUsage(1, 1, 2),
+                    TokenUsage(1, 1, 2, exact=True),
                 )
             ]
         )
@@ -293,13 +293,23 @@ def test_declared_capacity_fills_unknown_client_metadata() -> None:
 def test_broker_and_run_gate_forward_optional_capacity_without_owning_it() -> None:
     capacity = SubcallInputCapacity.bounded(96_000)
     raw = ReportingSubcalls(capacity)
-    brokered = broker_subcalls(raw, BudgetLedger(Budget()))
+    brokered = broker_subcalls(
+        raw,
+        BudgetLedger(Budget()),
+        usage_callback=lambda _usage: None,
+        settlement_callback=lambda _exact: None,
+    )
     gated = _SubcallGate(brokered)
 
     assert brokered.input_token_capacity == capacity
     assert gated.input_token_capacity == capacity
 
-    unknown = broker_subcalls(MockSubcallClient(), BudgetLedger(Budget()))
+    unknown = broker_subcalls(
+        MockSubcallClient(),
+        BudgetLedger(Budget()),
+        usage_callback=lambda _usage: None,
+        settlement_callback=lambda _exact: None,
+    )
     assert unknown.input_token_capacity == SubcallInputCapacity.unknown()
 
 
@@ -339,7 +349,7 @@ def test_runner_preflight_records_declared_capacity() -> None:
     }
 
 
-def test_runner_v5_is_refused_before_trace_v2_can_be_ignored() -> None:
+def test_runner_v5_is_refused_before_trace_v3_can_be_ignored() -> None:
     response = run_worker(
         {
             "protocol_version": 5,
@@ -352,7 +362,7 @@ def test_runner_v5_is_refused_before_trace_v2_can_be_ignored() -> None:
 
     assert response["status"] == "refusal"
     assert response["error"]["code"] == "protocol_version_mismatch"
-    assert response["error"]["details"] == {"requested": 5, "supported": 6}
+    assert response["error"]["details"] == {"requested": 5, "supported": 7}
 
 
 def test_scaffold_v1_round_trip_remains_explicitly_supported() -> None:

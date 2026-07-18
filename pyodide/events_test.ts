@@ -34,9 +34,23 @@ const BODIES: Record<string, Record<string, unknown>> = {
   replay: { result: {} },
   usage: {
     kind: "resolved",
-    root: {},
-    subcall: {},
-    unattributed: {},
+    root: {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      requests: 0,
+      successes: 0,
+      complete: true,
+    },
+    subcall: {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      requests: 0,
+      successes: 0,
+      complete: true,
+    },
+    unattributed: { total_tokens: 0 },
     total_tokens: 0,
     wall_time_ms: 0,
   },
@@ -60,9 +74,23 @@ const BODIES: Record<string, Record<string, unknown>> = {
     iterations: 1,
     usage: {
       kind: "resolved",
-      root: {},
-      subcall: {},
-      unattributed: {},
+      root: {
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        requests: 0,
+        successes: 0,
+        complete: true,
+      },
+      subcall: {
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        requests: 0,
+        successes: 0,
+        complete: true,
+      },
+      unattributed: { total_tokens: 0 },
       total_tokens: 0,
       wall_time_ms: 0,
     },
@@ -95,7 +123,7 @@ function wire(
     run_id: "run-1",
     seq: 1,
     timestamp: "2026-07-14T00:00:00Z",
-    version: 2,
+    version: 3,
     persistence_class: persistence ?? PERSISTENCE_BY_TYPE[type],
     depth: 0,
     ...body,
@@ -215,6 +243,18 @@ Deno.test("rejects malformed and unknown discriminated lifecycle bodies", () => 
   );
 });
 
+Deno.test("usage totals reconcile at top level and inside done", () => {
+  const mismatchedUsage = { ...BODIES.usage, total_tokens: 1 };
+
+  assert(!isRlmEvent(wire("usage", mismatchedUsage)));
+  assert(
+    !isRlmEvent(wire("done", {
+      ...BODIES.done,
+      usage: mismatchedUsage,
+    })),
+  );
+});
+
 Deno.test("successful output beginning ERROR remains an output event", () => {
   assert(isRlmEvent(wire("output", {
     iteration: 1,
@@ -227,7 +267,7 @@ Deno.test("successful output beginning ERROR remains an output event", () => {
 
 Deno.test("Python and relay accept the same execution golden NDJSON", async () => {
   const fixture = new URL(
-    "../src/droste/testing/fixtures/trace-v2-execution.ndjson",
+    "../src/droste/testing/fixtures/trace-v3-execution.ndjson",
     import.meta.url,
   );
   const lines = (await Deno.readTextFile(fixture)).trim().split("\n");
@@ -271,7 +311,7 @@ Deno.test("Python and relay accept the same execution golden NDJSON", async () =
 
 Deno.test("Python and relay accept the same lifecycle golden NDJSON", async () => {
   const fixture = new URL(
-    "../src/droste/testing/fixtures/trace-v2-lifecycle.ndjson",
+    "../src/droste/testing/fixtures/trace-v3-lifecycle.ndjson",
     import.meta.url,
   );
   const lines = (await Deno.readTextFile(fixture)).trim().split("\n");
@@ -427,13 +467,13 @@ Deno.test("Python and relay accept the same lifecycle golden NDJSON", async () =
 
 Deno.test("runner refusal fixture remains outside the event stream", async () => {
   const fixture = new URL(
-    "../src/droste/testing/fixtures/runner-v6-refusal.ndjson",
+    "../src/droste/testing/fixtures/runner-v7-refusal.ndjson",
     import.meta.url,
   );
   const bytes = await Deno.readTextFile(fixture);
   const refusal = JSON.parse(bytes) as Record<string, unknown>;
   assertEquals(refusal.status, "refusal");
-  assertEquals(refusal.protocol_version, 6);
+  assertEquals(refusal.protocol_version, 7);
   assertEquals(refusal.run_id, null);
   assertEquals(refusal.run_record, null);
   assertEquals(
