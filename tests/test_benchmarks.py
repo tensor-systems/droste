@@ -31,7 +31,7 @@ SMOKE_MANIFEST = ROOT / "benchmarks" / "manifests" / "smoke-v1.json"
 PAPER_MANIFEST = ROOT / "benchmarks" / "manifests" / "rlm-paper-v1.json"
 
 
-def test_manifest_pins_paper_tasks_and_blocks_unpublished_live_runs() -> None:
+def test_manifest_pins_paper_tasks_and_enables_published_live_runs() -> None:
     manifest = load_manifest(PAPER_MANIFEST)
 
     assert manifest.paper is not None
@@ -44,9 +44,9 @@ def test_manifest_pins_paper_tasks_and_blocks_unpublished_live_runs() -> None:
         "longbench-v2-codeqa",
         "tag-bench",
     }
-    assert not manifest.live_run.enabled
-    assert manifest.live_run.blockers[0].issue == "#81"
-    assert all(arm.executor == "blocked" for arm in manifest.arms)
+    assert manifest.live_run.enabled
+    assert not manifest.live_run.blockers
+    assert all(arm.executor == "modelrelay" for arm in manifest.arms)
     oolong = next(item for item in manifest.benchmarks if item.benchmark_id == "oolong")
     assert oolong.status == "ready"
     assert oolong.tasks_sha256 == "28abaefcbcba1d843a384115a1217ea0017201b13074c95de6feb313c40c8da4"
@@ -160,11 +160,21 @@ def test_live_cost_uses_integer_microusd_and_snapshotted_fee() -> None:
     manifest = load_manifest(PAPER_MANIFEST)
     arm = next(item for item in manifest.arms if item.method == "droste")
     assert arm.model is not None
-    price = ModelPrice(arm.model.root_model, "test-provider", 100, 600)
-    pricing = PricingSnapshot("test", 5, {price.model_id: price}, {})
+    assert arm.model.subcall_model is not None
+    root_price = ModelPrice(arm.model.root_model, "test-provider", 100, 600)
+    subcall_price = ModelPrice(arm.model.subcall_model, "test-provider", 200, 1200)
+    pricing = PricingSnapshot(
+        "test",
+        5,
+        {
+            root_price.model_id: root_price,
+            subcall_price.model_id: subcall_price,
+        },
+        {},
+    )
     usage = Usage(10, 2, 20, 3)
 
-    assert _cost_microusd(usage, arm, pricing) == 63
+    assert _cost_microusd(usage, arm, pricing) == 103
 
 
 def test_live_cost_budget_stops_on_actual_cap_or_projected_next_arm() -> None:
@@ -177,44 +187,92 @@ def test_live_cost_budget_stops_on_actual_cap_or_projected_next_arm() -> None:
 def test_oolong_semantic_guidance_bounds_auditable_per_record_classification() -> None:
     guidance = _OOLONG_SEMANTIC_GUIDANCE
 
-    assert "math.ceil(len(records) / 20)" in guidance
-    assert "non-overlapping chunks" in guidance
-    assert "at most 20 chunks" in guidance
-    assert "exactly one single-character code" in guidance
-    assert "stays well within the 2048-token subcall output bound" in guidance
-    assert "avoids unreliable JSON array element counting" in guidance
     assert (
-        "Do not switch back to a JSON array, multi-character codes, or a larger chunk count"
-        in guidance
+        "if 'oolong_result' not in globals():\n"
+        "    oolong_chunk_size = min(100, max(1, len(records)))\n"
+        "    oolong_chunks = [\n"
+        "        records[start:start + oolong_chunk_size]\n"
+        "        for start in range(0, len(records), oolong_chunk_size)\n"
+        "    ]" in guidance
     )
-    for old_code in ("DESC", "ENTY", "HUM", "NUM", "LOC", "ABBR"):
-        assert old_code not in guidance
     assert (
-        "schema = {'type': 'object', 'required': ['labels'], 'properties': "
-        "{'labels': {'type': 'string'}}, 'additionalProperties': False}"
-    ) in guidance
-    assert "labels string contains exactly one ordered A/D/E/H/L/N character" in guidance
-    assert '{"labels":"ADEHLN"}' in guidance
+        "                    'required': ['i', 'label'],\n"
+        "                    'properties': {\n"
+        "                        'i': {'type': 'integer'},\n"
+        "                        'label': {\n"
+        "                            'type': 'string',\n"
+        "                            'enum': ['A', 'D', 'E', 'H', 'L', 'N'],\n"
+        "                        },\n"
+        "                    },\n"
+        "                    'additionalProperties': False," in guidance
+    )
     assert (
-        "def validate_labels(value, index):\n"
-        "    if (\n"
-        "        len(value['labels']) != len(chunks[index])\n"
-        "        or any(code not in 'ADEHLN' for code in value['labels'])\n"
-        "    ):\n"
-        "        raise ValueError('expected one allowed label per record')\n"
-        "    return value"
-    ) in guidance
+        "                'minItems': 1,\n                'maxItems': oolong_chunk_size," in guidance
+    )
     assert (
-        "llm_batch_json(prompts, schema, max_repair_attempts=1, validator=validate_labels)"
-    ) in guidance
-    assert "at most 40 of the 50 available calls" in guidance
-    assert ("if result['errors']:\n    raise RuntimeError('classification failed')") in guidance
-    assert "Refuse any result with errors" in guidance
-    assert "flat_labels = ''.join(value['labels'] for value in result['values'])" in guidance
+        "        'A = an abbreviation or its expansion; '\n"
+        "        'D = a description or abstract concept such as a definition, manner, or "
+        "reason; '\n"
+        "        'E = a thing such as an animal, product, event, language, disease, or "
+        "term; '\n"
+        "        'H = a person, group, or human title; '\n"
+        "        'L = a place; '\n"
+        "        'N = a count, date, measure, code, order, or other number. '" in guidance
+    )
+    assert (
+        "            + 'Return exactly one object per record, using the record number as i. "
+        "'\n"
+        "            + f'The i values must cover 1 through {len(oolong_chunk)} exactly "
+        "once.\\n\\n'" in guidance
+    )
+    assert (
+        "    def validate_labels(value, index):\n"
+        "        expected = set(range(1, len(oolong_chunks[index]) + 1))\n"
+        "        indices = [item['i'] for item in value['labels']]" in guidance
+    )
+    assert (
+        "        missing = sorted(expected - set(indices))\n"
+        "        duplicates = sorted(duplicates)\n"
+        "        extra = sorted(set(indices) - expected)\n"
+        "        if missing or duplicates or extra:" in guidance
+    )
+    assert (
+        "repair_rounds_by_attempt = (2, 0)\n"
+        "attempt = 0\n"
+        "while (\n"
+        "    (oolong_result is None or oolong_result['errors'])\n"
+        "    and attempt < len(repair_rounds_by_attempt)\n"
+        "):" in guidance
+    )
+    assert (
+        "    oolong_result = llm_batch_json(oolong_prompts, oolong_schema, "
+        "max_repair_attempts=repair_rounds_by_attempt[attempt], "
+        "validator=validate_labels)\n"
+        "    attempt += 1\n"
+        "result = oolong_result\n"
+        "if result['errors']:\n"
+        "    raise RuntimeError('classification failed')" in guidance
+    )
+    assert (
+        "Never retry a subset, reconstruct any of those objects, or call a subcall helper "
+        "again after this loop." in guidance
+    )
+    assert (
+        "chunk_label_strings = []\n"
+        "for chunk_index, value in enumerate(result['values']):\n"
+        "    labels_by_index = {item['i']: item['label'] for item in value['labels']}\n"
+        "    chunk_label_strings.append(\n"
+        "        ''.join(\n"
+        "            labels_by_index[item_index]\n"
+        "            for item_index in range(1, len(oolong_chunks[chunk_index]) + 1)\n"
+        "        )\n"
+        "    )\n"
+        "flat_labels = ''.join(chunk_label_strings)" in guidance
+    )
     assert (
         "if len(flat_labels) != len(records):\n"
-        "    raise RuntimeError('classification length mismatch')"
-    ) in guidance
+        "    raise RuntimeError('classification length mismatch')" in guidance
+    )
     assert (
         "code_to_label = {'A': 'abbreviation', 'D': 'description and abstract concept', "
         "'E': 'entity', 'H': 'human being', 'L': 'location', 'N': 'numeric value'}"
@@ -223,11 +281,6 @@ def test_oolong_semantic_guidance_bounds_auditable_per_record_classification() -
     assert (
         "label_counts = {label: code_counts[code] for code, label in code_to_label.items()}"
     ) in guidance
-    assert "Derive the final requested" in guidance
-    assert "make classification auditable" in guidance
-    assert "avoid silent aggregate-count mistakes" in guidance
-    assert "aggregate_json_counts" not in guidance
-    assert "required counts object" not in guidance
 
 
 def test_direct_late_failure_preserves_accounted_usage_and_cost(

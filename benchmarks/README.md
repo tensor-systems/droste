@@ -65,23 +65,20 @@ paper's S-NIAH, BrowseComp-Plus, OOLONG, OOLONG-Pairs, and LongBench-v2 CodeQA
 task families. TAG-Bench is tracked separately in the same manifest as a
 Droste-specific follow-on rather than being presented as part of the paper.
 
-The OOLONG 131K `trec_coarse` validation slice is ready after materialization;
-its live arms remain blocked until a public model configuration and immutable
-result artifacts are published under [#81](https://github.com/tensor-systems/droste/issues/81).
+The OOLONG 131K `trec_coarse` validation slice is `ready` and has published results: immutable artifacts, a price-snapshot provenance record, and regenerated reports live under `results/oolong-trec-coarse-131k-2026-07-17/` ([#81](https://github.com/tensor-systems/droste/issues/81)).
 The other datasets remain `planned`. A planned benchmark cannot be run: it has
 no task path, and a blocked executor cannot silently degrade to a fixture or
 another provider. Dataset adapters promote each benchmark to `ready` only
 after its public source revision, split, integrity checks, and scorer are
 pinned.
 
-## Live-run status
+## Live runs
 
-Live execution is intentionally disabled in the checked-in manifest. Before
-publishing results, pin a public model and compatible endpoint for both matched
-arms, verify the requested reasoning settings from response usage, and record
-the exact configuration in the manifest. The runner then requires a new output
-directory, refuses to overwrite artifacts, snapshots the endpoint's public
-price table, and rejects additions if that snapshot changes.
+The checked-in manifest pins one public live configuration (models, reasoning efforts, budgets, concurrency) for the OOLONG arms. Live runs require a new output directory, refuse to overwrite artifacts, snapshot the endpoint's public price table, and reject additions if that snapshot changes. Published reports regenerate offline from the committed artifacts:
+
+```bash
+uv run python -m benchmarks report benchmarks/manifests/rlm-paper-v1.json benchmarks/results/oolong-trec-coarse-131k-2026-07-17/artifacts --json /tmp/regen-check.json --markdown /tmp/regen-check.md
+```
 
 When enabling a public configuration, include `--max-cost-microusd <amount>` in
 the run command. That optional integer micro-USD cap includes existing

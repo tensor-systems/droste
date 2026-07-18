@@ -1,0 +1,43 @@
+{
+  "record_type": "manual_pricing_reconciliation",
+  "models": [
+    {
+      "input_cost_per_million_cents": 100,
+      "model_id": "gpt-5.6-luna",
+      "output_cost_per_million_cents": 600,
+      "provider": "openai"
+    },
+    {
+      "input_cost_per_million_cents": 500,
+      "model_id": "gpt-5.6-sol",
+      "output_cost_per_million_cents": 3000,
+      "provider": "openai"
+    },
+    {
+      "input_cost_per_million_cents": 250,
+      "model_id": "gpt-5.6-terra",
+      "output_cost_per_million_cents": 1500,
+      "provider": "openai"
+    }
+  ],
+  "note": "This file is a manually assembled reconciliation record, not an authoritative fetched price-table snapshot. Each arm's authoritative snapshot was fetched independently because pricing fetches are scoped to the models referenced by that individual run. The overlapping gpt-5.6-terra rate was verified byte-identical in the direct-terra and droste-terra-luna snapshots at 250 input and 1500 output cents per million; no pricing drift occurred.",
+  "platform_fee_percent": 0,
+  "source": "https://api.modelrelay.ai/api/v1/pricing",
+  "authoritative_snapshots": [
+    {
+      "arm_id": "direct-sol",
+      "path": "pricing-direct-sol.json",
+      "price_table_version": "modelrelay-pricing-sha256:cb03c5390d3bcc5233d080b9067b08896b250349c0ad084169e3534fcfc8e34c"
+    },
+    {
+      "arm_id": "direct-terra",
+      "path": "pricing-direct-terra.json",
+      "price_table_version": "modelrelay-pricing-sha256:ceefd1c2eb37f66cde04cf07beeb958f7b0254914b3a19c107bb65ec87bb2d28"
+    },
+    {
+      "arm_id": "droste-terra-luna",
+      "path": "pricing-droste-terra-luna.json",
+      "price_table_version": "modelrelay-pricing-sha256:3c92ae36dcb9e498e885d213e9029e82132f00235da1c4b46b919e5e23aed61b"
+    }
+  ]
+}

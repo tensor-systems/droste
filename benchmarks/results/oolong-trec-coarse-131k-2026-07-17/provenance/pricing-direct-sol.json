@@ -1,0 +1,13 @@
+{
+  "models": [
+    {
+      "input_cost_per_million_cents": 500,
+      "model_id": "gpt-5.6-sol",
+      "output_cost_per_million_cents": 3000,
+      "provider": "openai"
+    }
+  ],
+  "platform_fee_percent": 0,
+  "price_table_version": "modelrelay-pricing-sha256:cb03c5390d3bcc5233d080b9067b08896b250349c0ad084169e3534fcfc8e34c",
+  "source": "https://api.modelrelay.ai/api/v1/pricing"
+}

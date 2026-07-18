@@ -332,26 +332,68 @@ RLMResult(
 )
 ```
 
-## Benchmarks (in progress)
+## Benchmarks
 
-The repository ships a [versioned benchmark harness](benchmarks/README.md),
-immutable per-task artifact schemas, deterministic scorers, and report
-generation. A zero-cost smoke run checks the artifact and reporting path
-without making network calls:
+The repository ships a [versioned benchmark harness](benchmarks/README.md):
+immutable per-task artifacts, deterministic scorers, and reports that
+regenerate byte-for-byte from committed evidence, offline. One live result is
+published so far — the OOLONG `trec_coarse` slice from the
+[RLM paper suite](benchmarks/manifests/rlm-paper-v1.json): 131K-token
+contexts, 50 tasks, three arms, one repetition, run 2026-07-17
+([report](benchmarks/results/oolong-trec-coarse-131k-2026-07-17/report.md) ·
+[raw artifacts](benchmarks/results/oolong-trec-coarse-131k-2026-07-17/artifacts)).
+
+| Arm | Root model | Subcall model | Mean score | Cost | Tokens |
+|---|---|---|---:|---:|---:|
+| direct-sol | gpt-5.6-sol | — | 0.6020 | $26.175585 | 4,763,877 |
+| direct-terra | gpt-5.6-terra | — | 0.5668 | $12.471453 | 4,722,032 |
+| droste-terra-luna | gpt-5.6-terra | gpt-5.6-luna | 0.6432 | $10.158295 | 3,531,293 |
+
+The direct arms place the full context in a single model call. The droste arm
+runs this engine with a mid-tier root model delegating to a cheaper subcall
+model (root reasoning `medium`, subcall reasoning `none`). All 150 task–arm
+runs completed; a failure or timeout would be retained as a typed artifact,
+not dropped. All arms ran through the same OpenAI-compatible endpoint
+(ModelRelay); costs are measured in integer micro-USD against the price
+snapshot recorded with the run. The `oolong_official` scorer
+([benchmarks/scoring.py](benchmarks/scoring.py)) implements the benchmark's
+published rule — exact, comparison-phrase, and date matches score 1.0, and
+numeric answers earn graded credit of 0.75^|error| — so the mean score is
+graded, not plain accuracy.
+
+droste-terra-luna scored highest of the three arms — 0.6432, against 0.6020
+for direct-sol and 0.5668 for direct-terra — while costing about 2.6× less
+than the stronger direct baseline and using fewer total tokens. With one
+50-task repetition, a paired bootstrap over the per-task scores in the
+committed artifacts does not separate the three mean scores at 95%
+confidence, so treat the score ranking as this run's observed result rather
+than a statistically established ranking; the cost figure is a direct
+measurement, not a sampled statistic, and isn't subject to that caveat.
+Run-to-run variation comes from provider sampling (temperature is
+not pinned; the endpoint default applies), from possible server-side model
+changes behind pinned model ids, and from trajectory variance in the droste
+arm. Per-arm prompts are fixed harness prompts committed in
+[benchmarks/live.py](benchmarks/live.py), including benchmark-specific
+guidance for the droste arm; budgets, limits, and concurrency are pinned in
+the [manifest](benchmarks/manifests/rlm-paper-v1.json).
+
+The task slice is materialized from the public dataset
+([oolongbench/oolong-synth](https://huggingface.co/datasets/oolongbench/oolong-synth),
+pinned revision `f0d59ea`, validation rows 1050–1099) with SHA-256
+verification. The dataset card at that revision does not state a license, so
+the tasks themselves are not redistributed here; the committed artifacts
+contain only per-task predictions, gold labels, scores, and usage.
+[benchmarks/README.md](benchmarks/README.md) has the offline
+report-regeneration command, the materialization command, and the live-run
+procedure (new output directory, immutable artifacts, explicit cost cap).
+The remaining suite families are `planned` and cannot run until their
+sources are pinned. A zero-cost smoke run checks the artifact and reporting
+path without network calls:
 
 ```bash
 output="$(mktemp -d)/droste-benchmark-smoke"
 uv run python -m benchmarks smoke --output "$output"
 ```
-
-The smoke run validates the machinery, not model quality. Today the
-[suite manifest](benchmarks/manifests/rlm-paper-v1.json) has one ready dataset:
-a pinned 50-task, 131K-token OOLONG slice that must be materialized from its
-public source. Publishing the public model configuration, immutable live
-artifacts, and reports is in progress
-([#81](https://github.com/tensor-systems/droste/issues/81)); until those land,
-this README presents no score, cost, or latency numbers as reproducible
-results.
 
 ## Development
 
