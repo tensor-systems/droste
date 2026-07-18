@@ -232,9 +232,7 @@ def test_browsecomp_plus_decoder_matches_pinned_real_reference_values() -> None:
 
 def test_browsecomp_plus_sampling_is_required_inclusive_and_deterministic() -> None:
     corpus = tuple(str(value) for value in range(12))
-    first = sample_document_ids(
-        corpus, {"2", "9"}, sample_size=6, seed=17, query_id="query-a"
-    )
+    first = sample_document_ids(corpus, {"2", "9"}, sample_size=6, seed=17, query_id="query-a")
 
     assert first == sample_document_ids(
         corpus, {"9", "2"}, sample_size=6, seed=17, query_id="query-a"
@@ -1015,8 +1013,7 @@ def test_materialize_browsecomp_plus_is_byte_deterministic_and_shared(
             return [encrypt(item) for item in value]
         if isinstance(value, dict):
             return {
-                name: item if name == "query_id" else encrypt(item)
-                for name, item in value.items()
+                name: item if name == "query_id" else encrypt(item) for name, item in value.items()
             }
         return value
 
@@ -1269,6 +1266,46 @@ def test_report_missing_oolong_pairs_tasks_names_materializer(tmp_path: Path) ->
         "cannot load declared tasks for benchmark 'oolong-pairs': run "
         "`python -m benchmarks materialize-oolong-pairs "
         "--output benchmarks/.data/oolong-pairs-32k-v1` first"
+    )
+    assert isinstance(caught.value.__cause__, FileNotFoundError)
+
+
+def test_report_missing_browsecomp_plus_tasks_names_materializer(tmp_path: Path) -> None:
+    benchmark_root = tmp_path / "benchmarks"
+    manifest_path = benchmark_root / "manifests" / "suite.json"
+    oolong_tasks = benchmark_root / ".data" / "oolong-trec-coarse-131k-v1" / "tasks.json"
+    oolong_tasks.parent.mkdir(parents=True)
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text("{}")
+    oolong_tasks.write_text('[{"id": "normalization", "reference": "Beta"}]')
+
+    manifest = load_manifest(SMOKE_MANIFEST)
+    oolong = replace(
+        manifest.benchmarks[0],
+        benchmark_id="oolong",
+        tasks_path="../.data/oolong-trec-coarse-131k-v1/tasks.json",
+    )
+    browsecomp = replace(
+        manifest.benchmarks[1],
+        benchmark_id="browsecomp-plus-1k",
+        tasks_path="../.data/browsecomp-plus-1k-seed-166001-v1/tasks.json",
+    )
+    manifest = replace(
+        manifest,
+        benchmarks=(oolong, browsecomp),
+        source_path=manifest_path,
+    )
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "selected-browsecomp-plus-artifact.json").write_text("{}")
+
+    with pytest.raises(ReportError) as caught:
+        load_artifacts(artifacts, manifest, task_ids=["normalization"])
+
+    assert str(caught.value) == (
+        "cannot load declared tasks for benchmark 'browsecomp-plus-1k': run "
+        "`python -m benchmarks materialize-browsecomp-plus "
+        "--output benchmarks/.data/browsecomp-plus-1k-seed-166001-v1` first"
     )
     assert isinstance(caught.value.__cause__, FileNotFoundError)
 

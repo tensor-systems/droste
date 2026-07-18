@@ -37,6 +37,10 @@ _MATERIALIZE_COMMANDS = {
         "python -m benchmarks materialize-oolong-pairs "
         "--output benchmarks/.data/oolong-pairs-32k-v1"
     ),
+    "browsecomp-plus-1k": (
+        "python -m benchmarks materialize-browsecomp-plus "
+        "--output benchmarks/.data/browsecomp-plus-1k-seed-166001-v1"
+    ),
 }
 _LEAN_PREDICTIONS_BENCHMARK_ID = "oolong-pairs"
 
