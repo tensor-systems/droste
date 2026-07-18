@@ -162,13 +162,14 @@ pinned.
 ## Live runs
 
 The checked-in manifest pins public live configurations (models, reasoning
-efforts, budgets, concurrency) for OOLONG, S-NIAH, and LongBench-v2 CodeQA. Materializing or
-validating the suite makes no model calls. Live runs require an explicit run
-command and a new output directory, refuse to overwrite artifacts, snapshot
-the endpoint's public price table, and reject additions if that snapshot
-changes.
+efforts, budgets, concurrency) for OOLONG, S-NIAH, and LongBench-v2 CodeQA.
+Materializing or validating the suite makes no model calls. Live runs require
+an explicit run command and a new output directory, refuse to overwrite
+artifacts, snapshot the endpoint's public price table, and reject additions if
+that snapshot changes.
 
-The published OOLONG report regenerates offline from its committed artifacts:
+Each published artifact set retains the exact run-era manifest named by its
+manifest SHA-256. The OOLONG report regenerates offline with its snapshot:
 
 ```bash
 uv run python -m benchmarks report benchmarks/manifests/rlm-paper-v1-oolong-2026-07-17.json benchmarks/results/oolong-trec-coarse-131k-2026-07-17/artifacts --json /tmp/regen-check.json --markdown /tmp/regen-check.md
@@ -218,7 +219,7 @@ task_ids=(
 task_args=()
 for task_id in "${task_ids[@]}"; do task_args+=(--task-id "$task_id"); done
 uv run python -m benchmarks report \
-  benchmarks/manifests/rlm-paper-v1.json \
+  benchmarks/manifests/rlm-paper-v1-longbench-v2-codeqa-2026-07-17.json \
   benchmarks/results/longbench-v2-codeqa-20-2026-07-17/artifacts \
   "${task_args[@]}" \
   --json /tmp/longbench-codeqa-regen.json \
