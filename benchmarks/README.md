@@ -136,7 +136,7 @@ changes. The published OOLONG report regenerates offline from the committed
 artifacts:
 
 ```bash
-uv run python -m benchmarks report benchmarks/manifests/rlm-paper-v1.json benchmarks/results/oolong-trec-coarse-131k-2026-07-17/artifacts --json /tmp/regen-check.json --markdown /tmp/regen-check.md
+uv run python -m benchmarks report benchmarks/manifests/rlm-paper-v1-oolong-2026-07-17.json benchmarks/results/oolong-trec-coarse-131k-2026-07-17/artifacts --json /tmp/regen-check.json --markdown /tmp/regen-check.md
 ```
 
 After materializing the ready task sets above, the published S-NIAH reports
@@ -146,7 +146,7 @@ regenerate from the committed artifacts with the 50 S-NIAH task ids selected:
 task_args=()
 for id in {000..049}; do task_args+=(--task-id "sniah-$id"); done
 uv run python -m benchmarks report \
-  benchmarks/manifests/rlm-paper-v1.json \
+  benchmarks/manifests/rlm-paper-v1-sniah-2026-07-17.json \
   benchmarks/results/sniah-32k-2026-07-17/artifacts \
   "${task_args[@]}" \
   --json /tmp/sniah-regen-check.json \

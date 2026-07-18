@@ -389,8 +389,8 @@ report-regeneration command, the materialization command, and the live-run
 procedure (new output directory, immutable artifacts, explicit cost cap).
 
 The adjacent S-NIAH result is the single needle-in-a-haystack retrieval task
-from the RULER
-methodology of [Hsieh et al. (2024)](https://arxiv.org/abs/2404.06654). This
+from the RULER methodology of
+[Hsieh et al. (2024)](https://arxiv.org/abs/2404.06654). This
 run used 32,768-token noise haystacks, word-pair keys and values, seed `42`, 50
 tasks, three arms, and one repetition on 2026-07-17
 ([report](benchmarks/results/sniah-32k-2026-07-17/report.md) ·
