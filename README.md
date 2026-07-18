@@ -336,8 +336,12 @@ RLMResult(
 
 The repository ships a [versioned benchmark harness](benchmarks/README.md):
 immutable per-task artifacts, deterministic scorers, and reports that
-regenerate byte-for-byte from committed evidence, offline. One live result is
-published so far — the OOLONG `trec_coarse` slice from the
+regenerate byte-for-byte from committed evidence, offline. Two live results are
+published so far.
+
+### OOLONG
+
+The OOLONG `trec_coarse` slice from the
 [RLM paper suite](benchmarks/manifests/rlm-paper-v1.json): 131K-token
 contexts, 50 tasks, three arms, one repetition, run 2026-07-17
 ([report](benchmarks/results/oolong-trec-coarse-131k-2026-07-17/report.md) ·
@@ -386,14 +390,69 @@ contain only per-task predictions, gold labels, scores, and usage.
 [benchmarks/README.md](benchmarks/README.md) has the offline
 report-regeneration command, the materialization command, and the live-run
 procedure (new output directory, immutable artifacts, explicit cost cap).
-The remaining suite families are `planned` and cannot run until their
-sources are pinned. A zero-cost smoke run checks the artifact and reporting
-path without network calls:
+
+### OOLONG-Pairs
+
+OOLONG-Pairs tests multi-hop pairwise reasoning over OOLONG-style
+synthetic conversations: find every pair of users satisfying a relational
+predicate, scored with set-based F1 over normalized, deduplicated pairs. The
+run used one 32,768-token context, 20 tasks, three arms, and one repetition on
+2026-07-17
+([report](benchmarks/results/oolong-pairs-32k-2026-07-17/report.md) ·
+[raw artifacts](benchmarks/results/oolong-pairs-32k-2026-07-17/artifacts) ·
+[provenance](benchmarks/results/oolong-pairs-32k-2026-07-17/PROVENANCE.md)).
+
+| Arm | Root model | Subcall model | Mean F1 | Successful | Cost | Tokens |
+|---|---|---|---:|---:|---:|---:|
+| direct-sol-pairs | gpt-5.6-sol | — | 0.000000 | 0/20 | $0.000000 | 0 |
+| direct-terra-pairs | gpt-5.6-terra | — | 0.034057 | 14/20 | $2.497269 | 435,842 |
+| droste-terra-luna-pairs | gpt-5.6-terra | gpt-5.6-luna | 0.801724 | 20/20 | $2.141592 | 767,642 |
+
+The direct arms place the complete context in one model call. The Droste arm
+uses a `gpt-5.6-terra` root with `gpt-5.6-luna` subcalls (root reasoning
+`medium`, subcall reasoning `none`). Its design is deliberately hybrid:
+deterministic Python parses and aggregates the records and exhaustively
+enumerates user pairs, while Luna handles only the irreducible semantic
+classification step. All 60 scheduled attempts remain in the committed
+artifacts, including failures. Costs are measured in integer micro-USD from
+the recorded model usage.
+
+This is Droste's strongest result across the four benchmark families evaluated
+under [#166](https://github.com/tensor-systems/droste/issues/166). Direct-sol
+could not complete a single task: all 20 attempts ended in legitimate HTTP 504
+timeouts. Direct-terra completed 14/20, with six further 504 timeouts, but its
+mean F1 of 0.034 was near zero—it essentially failed at the pairwise reasoning.
+Droste completed all 20 tasks at 0.802 mean F1 for $2.14, less than
+direct-terra's $2.50 despite succeeding on every task. No attempt recorded a
+402 or 429. Exhaustive multi-hop reasoning over facts scattered across a long
+context is where the paper's thesis about direct approaches structurally
+failing is clearest in these runs.
+
+The tasks are materialized from
+[`oolongbench/oolong-synth`](https://huggingface.co/datasets/oolongbench/oolong-synth/tree/f0d59eaf0febf130664cfceb710436c8e3216b2b),
+validation `trec_coarse` context-window row 900, at pinned revision
+`f0d59eaf0febf130664cfceb710436c8e3216b2b`. The manifest pins the materialized
+20-task file at SHA-256
+`169a2aaddc8603128f672d32f9aa8a2e0565974d91b6468b7431654dd81bde40`.
+The materializer documents the predicate semantics, and the scorer normalizes
+unordered pairs before computing set precision, recall, and F1. The dataset
+card at the pinned revision does not state a license, so dataset contexts and
+tasks are not redistributed here.
+
+This is a clean result, but its disclosed scope is small: `n=20`, with one
+repetition. It establishes the outcome of this paired run rather than a
+population-wide guarantee.
+
+The remaining suite families are `planned` and cannot run until their sources
+are pinned. A zero-cost smoke run checks the artifact and reporting path
+without making network calls:
 
 ```bash
 output="$(mktemp -d)/droste-benchmark-smoke"
 uv run python -m benchmarks smoke --output "$output"
 ```
+
+The smoke run validates the machinery, not model quality.
 
 ## Development
 

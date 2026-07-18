@@ -84,6 +84,11 @@ task families. TAG-Bench is tracked separately in the same manifest as a
 Droste-specific follow-on rather than being presented as part of the paper.
 
 The OOLONG 131K `trec_coarse` validation slice is `ready` and has published results: immutable artifacts, a price-snapshot provenance record, and regenerated reports live under `results/oolong-trec-coarse-131k-2026-07-17/` ([#81](https://github.com/tensor-systems/droste/issues/81)).
+OOLONG-Pairs is `ready` and has published results: immutable artifacts,
+dataset and materializer provenance, and regenerated reports live under
+[`results/oolong-pairs-32k-2026-07-17/`](results/oolong-pairs-32k-2026-07-17/).
+Its three arms compare direct `gpt-5.6-sol`, direct `gpt-5.6-terra`, and Droste
+with a `gpt-5.6-terra` root and `gpt-5.6-luna` subcalls.
 The other datasets remain `planned`. A planned benchmark cannot be run: it has
 no task path, and a blocked executor cannot silently degrade to a fixture or
 another provider. Dataset adapters promote each benchmark to `ready` only
@@ -92,10 +97,33 @@ pinned.
 
 ## Live runs
 
-The checked-in manifest pins one public live configuration (models, reasoning efforts, budgets, concurrency) for the OOLONG arms. Live runs require a new output directory, refuse to overwrite artifacts, snapshot the endpoint's public price table, and reject additions if that snapshot changes. Published reports regenerate offline from the committed artifacts:
+The checked-in manifest pins public live configurations (models, reasoning
+efforts, budgets, concurrency) for both sets of OOLONG arms. Materializing or
+validating the suite makes no model calls. Live runs require a new output
+directory, refuse to overwrite artifacts, snapshot the endpoint's public price
+table, and reject additions if that snapshot changes. The OOLONG report
+regenerates offline from the committed artifacts:
 
 ```bash
 uv run python -m benchmarks report benchmarks/manifests/rlm-paper-v1.json benchmarks/results/oolong-trec-coarse-131k-2026-07-17/artifacts --json /tmp/regen-check.json --markdown /tmp/regen-check.md
+```
+
+The OOLONG-Pairs report regenerates from the committed artifacts with all 20
+task IDs selected:
+
+```bash
+task_args=()
+for task_id in {1..20}; do task_args+=(--task-id "$task_id"); done
+uv run python -m benchmarks report \
+  benchmarks/manifests/rlm-paper-v1.json \
+  benchmarks/results/oolong-pairs-32k-2026-07-17/artifacts \
+  "${task_args[@]}" \
+  --json /tmp/oolong-pairs-report.json \
+  --markdown /tmp/oolong-pairs-report.md
+cmp benchmarks/results/oolong-pairs-32k-2026-07-17/report.json \
+  /tmp/oolong-pairs-report.json
+cmp benchmarks/results/oolong-pairs-32k-2026-07-17/report.md \
+  /tmp/oolong-pairs-report.md
 ```
 
 When enabling a public configuration, include `--max-cost-microusd <amount>` in
