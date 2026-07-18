@@ -114,13 +114,16 @@ Droste-specific follow-on rather than being presented as part of the paper.
 The OOLONG 131K `trec_coarse` validation slice is `ready` and has published
 results: immutable artifacts, a price-snapshot provenance record, and
 regenerated reports live under `results/oolong-trec-coarse-131k-2026-07-17/`
-([#81](https://github.com/tensor-systems/droste/issues/81)). The deterministic
-S-NIAH 32K split is also ready after materialization. Its pilot arms compare direct
-`gpt-5.6-sol`, direct `gpt-5.6-terra`, and Droste with a `gpt-5.6-terra` root
-and `gpt-5.6-luna` subcalls. The other datasets remain `planned`. A planned
-benchmark cannot be run because it has no task path. Dataset adapters promote
-each benchmark to `ready` only after source or generator provenance, split,
-integrity checks, and scorer are pinned.
+([#81](https://github.com/tensor-systems/droste/issues/81)).
+
+The deterministic S-NIAH 32K split is `ready` and has published results:
+immutable artifacts, generator provenance, and regenerated reports live under
+[`results/sniah-32k-2026-07-17/`](results/sniah-32k-2026-07-17/). Its three
+arms compare direct `gpt-5.6-sol`, direct `gpt-5.6-terra`, and Droste with a
+`gpt-5.6-terra` root and `gpt-5.6-luna` subcalls. The other datasets remain
+`planned`. A planned benchmark cannot be run because it has no
+task path. Dataset adapters promote each benchmark to `ready` only after source
+or generator provenance, split, integrity checks, and scorer are pinned.
 
 ## Live runs
 
@@ -134,6 +137,20 @@ artifacts:
 
 ```bash
 uv run python -m benchmarks report benchmarks/manifests/rlm-paper-v1.json benchmarks/results/oolong-trec-coarse-131k-2026-07-17/artifacts --json /tmp/regen-check.json --markdown /tmp/regen-check.md
+```
+
+After materializing the ready task sets above, the published S-NIAH reports
+regenerate from the committed artifacts with the 50 S-NIAH task ids selected:
+
+```bash
+task_args=()
+for id in {000..049}; do task_args+=(--task-id "sniah-$id"); done
+uv run python -m benchmarks report \
+  benchmarks/manifests/rlm-paper-v1.json \
+  benchmarks/results/sniah-32k-2026-07-17/artifacts \
+  "${task_args[@]}" \
+  --json /tmp/sniah-regen-check.json \
+  --markdown /tmp/sniah-regen-check.md
 ```
 
 When enabling a public configuration, include `--max-cost-microusd <amount>` in

@@ -336,8 +336,9 @@ RLMResult(
 
 The repository ships a [versioned benchmark harness](benchmarks/README.md):
 immutable per-task artifacts, deterministic scorers, and reports that
-regenerate byte-for-byte from committed evidence, offline. One live result is
-published so far — the OOLONG `trec_coarse` slice from the
+regenerate byte-for-byte from committed evidence, offline.
+
+The OOLONG `trec_coarse` slice from the
 [RLM paper suite](benchmarks/manifests/rlm-paper-v1.json): 131K-token
 contexts, 50 tasks, three arms, one repetition, run 2026-07-17
 ([report](benchmarks/results/oolong-trec-coarse-131k-2026-07-17/report.md) ·
@@ -386,14 +387,47 @@ contain only per-task predictions, gold labels, scores, and usage.
 [benchmarks/README.md](benchmarks/README.md) has the offline
 report-regeneration command, the materialization command, and the live-run
 procedure (new output directory, immutable artifacts, explicit cost cap).
-The remaining suite families are `planned` and cannot run until their
-sources are pinned. A zero-cost smoke run checks the artifact and reporting
-path without network calls:
+
+The adjacent S-NIAH result is the single needle-in-a-haystack retrieval task
+from the RULER
+methodology of [Hsieh et al. (2024)](https://arxiv.org/abs/2404.06654). This
+run used 32,768-token noise haystacks, word-pair keys and values, seed `42`, 50
+tasks, three arms, and one repetition on 2026-07-17
+([report](benchmarks/results/sniah-32k-2026-07-17/report.md) ·
+[raw artifacts](benchmarks/results/sniah-32k-2026-07-17/artifacts) ·
+[generator provenance](benchmarks/results/sniah-32k-2026-07-17/provenance/generator.json)).
+
+| Arm | Root model | Subcall model | Exact-match accuracy | Cost | Tokens |
+|---|---|---|---:|---:|---:|
+| direct-sol | gpt-5.6-sol | — | 84% | $7.791160 | 1,556,242 |
+| direct-terra | gpt-5.6-terra | — | 100% | $3.895694 | 1,556,249 |
+| droste-terra-luna | gpt-5.6-terra | gpt-5.6-luna | 100% | $0.659419 | 190,253 |
+
+The direct arms place the complete prompt in one model call. The droste arm
+runs this engine with a `gpt-5.6-terra` root delegating to `gpt-5.6-luna`
+subcalls (root reasoning `medium`, subcall reasoning `none`). All 150 task-arm
+runs completed; failures and timeouts would remain typed artifacts rather than
+being dropped. Costs are measured in integer micro-USD from the price snapshot
+used by each run.
+
+This benchmark is Droste's deterministic reproduction of RULER's published
+algorithm and prompt methodology, checked against NVIDIA/RULER commit
+[`38da79d79519ef87aa46ae804f838e1eab7f86d7`](https://github.com/NVIDIA/RULER/tree/38da79d79519ef87aa46ae804f838e1eab7f86d7).
+The generator is [committed in this repository](benchmarks/sniah.py); it fetches
+and redistributes no dataset or generated examples. There is consequently no
+external dataset revision, dataset citation, or dataset-license section for
+this result. The provenance record instead pins the generator hash, seed,
+configuration, materialized-task hash, and RULER commit.
+
+A zero-cost smoke run checks the artifact and reporting path without making
+network calls:
 
 ```bash
 output="$(mktemp -d)/droste-benchmark-smoke"
 uv run python -m benchmarks smoke --output "$output"
 ```
+
+The smoke run validates the machinery, not model quality.
 
 ## Development
 
