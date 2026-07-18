@@ -337,8 +337,8 @@ RLMResult(
 The repository ships a [versioned benchmark suite](benchmarks/README.md) with
 immutable per-task artifacts, deterministic scorers, and reports that
 regenerate byte-for-byte from committed evidence, offline. Scores and measured
-costs below are from the published 2026-07-17 runs; each result cell is
-score / cost.
+costs below are from the published 2026-07-17 and 2026-07-18 runs; each result
+cell is score / cost.
 
 | Benchmark | Scope | Direct Sol | Direct Terra | Droste Terra + Luna | Outcome |
 |---|---|---:|---:|---:|---|
@@ -346,6 +346,7 @@ score / cost.
 | [S-NIAH](benchmarks/README.md#s-niah) | 32K tokens, 50 tasks | 0.84 / $7.79 | **1.00 / $3.90** | **1.00 / $0.66** | Ties best accuracy at 5.9× lower cost |
 | [LongBench-v2 CodeQA](benchmarks/README.md#longbench-v2-codeqa) | Cost-bounded 20-of-50 sample | **0.75 / $19.60** | 0.65 / $9.10 | 0.65 / $3.79 | Mixed: ties Terra, trails Sol by 0.10, and costs 5.2× less than Sol[^codeqa] |
 | [OOLONG-Pairs](benchmarks/README.md#oolong-pairs) | 32K tokens, 20 tasks | 0.00 / $0[^pairs-cost] | 0.034 / $2.50 | **0.80 / $2.14** | Strongest result: direct approaches structurally fail; Droste reaches 0.80 F1 at lower recorded cost |
+| [BrowseComp-Plus](benchmarks/README.md#browsecomp-plus) | 6.0M–11.1M tokens, 150 tasks | 0.00 / $0 | 0.00 / $0 | **0.56 / $24.54** | Most extreme result: direct approaches cannot attempt the task; Droste completes 148/150 |
 
 [^codeqa]: CodeQA's capped sample tests an easier regime than the full
     23K–4.2M-token range in the RLM paper, where the direct baseline scores far
@@ -357,10 +358,12 @@ score / cost.
     guarantee.
 
 Across the published suite, Droste wins or ties on accuracy in all but CodeQA
-and is dramatically more cost-efficient throughout. Its clearest wins are on
-tasks that require aggregation across scattered context (OOLONG and
-OOLONG-Pairs); on more lookup-shaped tasks (S-NIAH and CodeQA), direct
-approaches with sufficient context remain competitive on accuracy.
+and is dramatically more cost-efficient wherever a direct comparison can run.
+Its clearest wins are on tasks that require aggregation across scattered
+context (OOLONG and OOLONG-Pairs) and on BrowseComp-Plus, where the raw context
+is 6–10× beyond any model window. On smaller lookup-shaped tasks (S-NIAH and
+CodeQA), direct approaches with sufficient context remain competitive on
+accuracy.
 
 [Full results, methodology, provenance, and caveats for every published
 family](benchmarks/README.md#results) are documented in the benchmark guide.

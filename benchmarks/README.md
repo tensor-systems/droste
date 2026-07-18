@@ -202,6 +202,54 @@ This is a clean result, but its disclosed scope is small: `n=20`, with one
 repetition. It establishes the outcome of this paired run rather than a
 population-wide guarantee.
 
+### BrowseComp-Plus
+
+BrowseComp-Plus tests multi-hop factual retrieval over a large document
+corpus. The published run used a deterministic 150-of-830 query sample, about
+1,000 documents per query, three arms, and one repetition on 2026-07-18
+([report](results/browsecomp-plus-1k-2026-07-18/report.md) ·
+[raw artifacts](results/browsecomp-plus-1k-2026-07-18/artifacts) ·
+[provenance](results/browsecomp-plus-1k-2026-07-18/PROVENANCE.md)).
+
+| Arm | Root model | Subcall model | Exact-match score | Successful | Cost | Tokens |
+|---|---|---|---:|---:|---:|---:|
+| direct-sol-browsecomp-plus-1k | gpt-5.6-sol | — | 0.0000 | 0/150 | $0.000000 | 0 |
+| direct-terra-browsecomp-plus-1k | gpt-5.6-terra | — | 0.0000 | 0/150 | $0.000000 | 0 |
+| droste-terra-luna-browsecomp-plus-1k | gpt-5.6-terra | gpt-5.6-luna | 0.5600 | 148/150 | $24.537529 | 7,970,677 |
+
+The selected contexts range from 24.1 MB to 44.4 MB, approximately
+6.0M–11.1M tokens. That is 6–10× beyond available model context windows. The
+direct arms must place the complete raw context in one call, so they cannot
+structurally attempt these tasks at any cost. All 300 direct attempts were
+rejected as `context_limit` before generation, producing zero model tokens and
+genuinely zero cost. The harness did not truncate, summarize, or otherwise
+weaken their input.
+
+The Droste arm keeps the raw context external. Local Python searches and ranks
+the 1,000 documents, preserves document IDs and excerpts for verification, and
+uses bounded `gpt-5.6-luna` subcalls only on promising evidence. No single LLM
+call receives the full context. This is the paper's core recursive-analysis
+thesis at its most extreme: direct approaches do not merely underperform; the
+problem is structurally outside their input regime, while Droste completes
+148/150 tasks and reaches 0.5600 exact match for $24.54.
+
+The two unsuccessful Droste tasks, `229` and `794`, ended in legitimate HTTP
+504 timeouts. They remain typed artifacts and contribute to the reported
+150-task result: a 1.3% infrastructure-timeout rate on the only arm that could
+attempt substantive work. There were no duplicate artifacts and no HTTP 402
+failures.
+
+The query and corpus sources are the MIT-licensed
+[`Tevatron/browsecomp-plus`](https://huggingface.co/datasets/Tevatron/browsecomp-plus/tree/144cff8e35b5eaef7e526346aa60774a9deb941f)
+and
+[`Tevatron/browsecomp-plus-corpus`](https://huggingface.co/datasets/Tevatron/browsecomp-plus-corpus/tree/b27b02bc3e45511b8b82a13e6f90ce761df726f6),
+pinned independently at revisions `144cff8e35b5eaef7e526346aa60774a9deb941f`
+and `b27b02bc3e45511b8b82a13e6f90ce761df726f6`. Query IDs are sampled from
+stable lexicographic order with seed `166001`; required gold and evidence
+documents are combined with independently seeded fillers, and documents shared
+across tasks are stored once in a 77,928-document pool. The task materializer,
+task-file hash, snapshot manifest, and offline regeneration command are public.
+
 ## Zero-cost smoke run
 
 From a clean checkout:
@@ -444,16 +492,22 @@ dataset and materializer provenance, and regenerated reports live under
 Its three arms compare direct `gpt-5.6-sol`, direct `gpt-5.6-terra`, and Droste
 with a `gpt-5.6-terra` root and `gpt-5.6-luna` subcalls.
 
-The other datasets remain `planned`. A planned benchmark cannot be run because
-it has no task path. Dataset adapters promote each benchmark to `ready` only
-after source or generator provenance, split, integrity checks, and scorer are
-pinned.
+BrowseComp-Plus is `ready` and has published results: immutable artifacts,
+dataset and sampling provenance, and regenerated reports live under
+[`results/browsecomp-plus-1k-2026-07-18/`](results/browsecomp-plus-1k-2026-07-18/).
+Its two direct arms cannot fit the 6.0M–11.1M-token contexts in a model window;
+the Droste arm searches the external context locally and delegates bounded
+evidence groups to `gpt-5.6-luna`.
+
+TAG-Bench remains `planned`. A planned benchmark cannot be run because it has
+no task path. Dataset adapters promote each benchmark to `ready` only after
+source or generator provenance, split, integrity checks, and scorer are pinned.
 
 ## Live runs
 
 The checked-in manifest pins public live configurations (models, reasoning
-efforts, budgets, concurrency) for OOLONG, S-NIAH, LongBench-v2 CodeQA, and
-OOLONG-Pairs.
+efforts, budgets, concurrency) for OOLONG, S-NIAH, LongBench-v2 CodeQA,
+OOLONG-Pairs, and BrowseComp-Plus.
 Materializing or validating the suite makes no model calls. Live runs require
 an explicit run command and a new output directory, refuse to overwrite
 artifacts, snapshot the endpoint's public price table, and reject additions if
@@ -557,6 +611,38 @@ cmp benchmarks/results/oolong-pairs-32k-2026-07-17/report.json \
   /tmp/oolong-pairs-report.json
 cmp benchmarks/results/oolong-pairs-32k-2026-07-17/report.md \
   /tmp/oolong-pairs-report.md
+```
+
+The pinned BrowseComp-Plus snapshot declares OOLONG and BrowseComp-Plus
+`ready`, so both task sets must be materialized before report regeneration:
+
+```bash
+uv sync --group benchmarks
+uv run python -m benchmarks materialize-oolong \
+  --output benchmarks/.data/oolong-trec-coarse-131k-v1
+uv run python -m benchmarks materialize-browsecomp-plus \
+  --output benchmarks/.data/browsecomp-plus-1k-seed-166001-v1
+```
+
+The BrowseComp-Plus report then regenerates from the committed artifacts with
+all 150 selected task IDs:
+
+```bash
+task_args=()
+while IFS= read -r task_id; do
+  task_args+=(--task-id "$task_id")
+done < <(jq -r '.task_id' \
+  benchmarks/results/browsecomp-plus-1k-2026-07-18/artifacts/*.json | sort -u)
+uv run python -m benchmarks report \
+  benchmarks/manifests/browsecomp-plus-1k-2026-07-18.json \
+  benchmarks/results/browsecomp-plus-1k-2026-07-18/artifacts \
+  "${task_args[@]}" \
+  --json /tmp/browsecomp-plus-report.json \
+  --markdown /tmp/browsecomp-plus-report.md
+cmp benchmarks/results/browsecomp-plus-1k-2026-07-18/report.json \
+  /tmp/browsecomp-plus-report.json
+cmp benchmarks/results/browsecomp-plus-1k-2026-07-18/report.md \
+  /tmp/browsecomp-plus-report.md
 ```
 
 These result-specific manifests are exact snapshots of the configurations that
