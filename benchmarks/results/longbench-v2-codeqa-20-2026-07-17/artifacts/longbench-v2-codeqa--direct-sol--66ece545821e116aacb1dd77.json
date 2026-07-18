@@ -1,0 +1,32 @@
+{
+  "arm_id": "direct-sol",
+  "benchmark_id": "longbench-v2-codeqa",
+  "cost_microusd": 1060295,
+  "droste_commit": "4e166e197dd395f28c90b9afa865b93cfcc3613c+worktree.92f1f62095af5377",
+  "error": null,
+  "iterations": 1,
+  "manifest_sha256": "868add78edb8ab7b03d045ae0cc17060e2ebd6435240c7602c7b57cc67a81a7b",
+  "metric": "exact_match",
+  "prediction": "A",
+  "price_table_version": "modelrelay-pricing-sha256:cb03c5390d3bcc5233d080b9067b08896b250349c0ad084169e3534fcfc8e34c",
+  "provider": "openai",
+  "reference": "A",
+  "root_model": "gpt-5.6-sol",
+  "schema_version": 1,
+  "score": 1.0,
+  "started_at": "2026-07-17T23:42:33.092760Z",
+  "status": "ok",
+  "subcall_model": null,
+  "subcalls": 0,
+  "suite_id": "rlm-paper",
+  "suite_version": "0.2.0",
+  "task_id": "66ece545821e116aacb1dd77",
+  "usage": {
+    "root_input_tokens": 211909,
+    "root_output_tokens": 25,
+    "subcall_input_tokens": 0,
+    "subcall_output_tokens": 0,
+    "total_tokens": 211934
+  },
+  "wall_time_ms": 4614
+}
