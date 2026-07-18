@@ -1,0 +1,32 @@
+{
+  "arm_id": "direct-terra-browsecomp-plus-1k",
+  "benchmark_id": "browsecomp-plus-1k",
+  "cost_microusd": 0,
+  "droste_commit": "75354f3c10736d6fac517cd8e5955d62865ee845",
+  "error": "root llm failed with HTTP 400: {\"error\":\"api_error\",\"request_id\":\"5b326c8b-d21c-42fb-9fbc-352c4509c37c\",\"layer\":\"request\",\"cause\":\"validation\",\"status_code\":400,\"code\":\"INVALID_INPUT\",\"message\":\"invalid payload\",\"retryable\":false}",
+  "iterations": 1,
+  "manifest_sha256": "2bc0a0010299db07fb7366c76dd7b1fa5c734859da31332ca63a3e7b0a635cba",
+  "metric": "exact_match",
+  "prediction": null,
+  "price_table_version": "modelrelay-pricing-sha256:ceefd1c2eb37f66cde04cf07beeb958f7b0254914b3a19c107bb65ec87bb2d28",
+  "provider": "openai",
+  "reference": "65",
+  "root_model": "gpt-5.6-terra",
+  "schema_version": 1,
+  "score": null,
+  "started_at": "2026-07-18T01:35:29.374564Z",
+  "status": "context_limit",
+  "subcall_model": null,
+  "subcalls": 0,
+  "suite_id": "rlm-paper",
+  "suite_version": "0.2.0",
+  "task_id": "435",
+  "usage": {
+    "root_input_tokens": 0,
+    "root_output_tokens": 0,
+    "subcall_input_tokens": 0,
+    "subcall_output_tokens": 0,
+    "total_tokens": 0
+  },
+  "wall_time_ms": 6760
+}

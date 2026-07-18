@@ -1,0 +1,32 @@
+{
+  "arm_id": "droste-terra-luna-browsecomp-plus-1k",
+  "benchmark_id": "browsecomp-plus-1k",
+  "cost_microusd": 129387,
+  "droste_commit": "75354f3c10736d6fac517cd8e5955d62865ee845",
+  "error": null,
+  "iterations": 6,
+  "manifest_sha256": "2bc0a0010299db07fb7366c76dd7b1fa5c734859da31332ca63a3e7b0a635cba",
+  "metric": "exact_match",
+  "prediction": "Brazuca (2017), directed by Faidon Gkretsikos.",
+  "price_table_version": "modelrelay-pricing-sha256:3c92ae36dcb9e498e885d213e9029e82132f00235da1c4b46b919e5e23aed61b",
+  "provider": "openai",
+  "reference": "Brazuca",
+  "root_model": "gpt-5.6-terra",
+  "schema_version": 1,
+  "score": 0.0,
+  "started_at": "2026-07-18T16:35:44.917013Z",
+  "status": "ok",
+  "subcall_model": "gpt-5.6-luna",
+  "subcalls": 1,
+  "suite_id": "rlm-paper",
+  "suite_version": "0.2.0",
+  "task_id": "628",
+  "usage": {
+    "root_input_tokens": 34720,
+    "root_output_tokens": 2788,
+    "subcall_input_tokens": 257,
+    "subcall_output_tokens": 85,
+    "total_tokens": 37850
+  },
+  "wall_time_ms": 41237
+}
