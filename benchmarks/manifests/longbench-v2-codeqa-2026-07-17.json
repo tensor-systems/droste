@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite_id": "rlm-paper",
-  "suite_version": "0.7.0",
+  "suite_version": "0.2.0",
   "paper": {
     "title": "Recursive Language Models",
     "revision": "arXiv:2512.24601v3",
@@ -15,13 +15,11 @@
     {
       "id": "s-niah",
       "dataset": "RULER S-NIAH",
-      "dataset_version": "droste-native-generator-v1/ruler-38da79d79519ef87aa46ae804f838e1eab7f86d7",
-      "split": "noise/context_length=32768/tokenizer=wordpunct-newline-v1/needle_key=words/needle_value=words/tasks=50/seed=42",
+      "dataset_version": "pending-pin",
+      "split": "paper-v3",
       "scorer": "exact_match",
-      "tasks_path": "../.data/sniah-noise-words-32768-50-v1/tasks.json",
-      "tasks_sha256": "62b1e267fedc723349b4233b5d8929b6ffa1a822155056ec96e20dbc90ae2990",
       "phase": 2,
-      "status": "ready"
+      "status": "planned"
     },
     {
       "id": "browsecomp-plus-1k",
@@ -75,25 +73,25 @@
   ],
   "arms": [
     {
-      "id": "droste-terra-luna",
-      "method": "droste",
+      "id": "direct-sol",
+      "method": "direct-model",
       "executor": "modelrelay",
       "model": {
         "provider": "openai",
-        "root_model": "gpt-5.6-terra",
-        "subcall_model": "gpt-5.6-luna",
+        "root_model": "gpt-5.6-sol",
+        "subcall_model": null,
         "root_reasoning_effort": "medium",
-        "subcall_reasoning_effort": "none",
+        "subcall_reasoning_effort": null,
         "temperature": null
       },
       "limits": {
-        "tokens": 2000000,
-        "subcalls": 150,
-        "depth": 1,
+        "tokens": 200000,
+        "subcalls": 0,
+        "depth": 0,
         "wall_ms": 900000,
-        "root_output_tokens": 16384,
+        "root_output_tokens": 4096,
         "subcall_output_tokens": 2048,
-        "concurrency": 8
+        "concurrency": 1
       }
     },
     {
@@ -113,79 +111,13 @@
         "subcalls": 0,
         "depth": 0,
         "wall_ms": 900000,
-        "root_output_tokens": 16384,
+        "root_output_tokens": 4096,
         "subcall_output_tokens": 2048,
         "concurrency": 1
       }
     },
     {
-      "id": "direct-sol",
-      "method": "direct-model",
-      "executor": "modelrelay",
-      "model": {
-        "provider": "openai",
-        "root_model": "gpt-5.6-sol",
-        "subcall_model": null,
-        "root_reasoning_effort": "medium",
-        "subcall_reasoning_effort": null,
-        "temperature": null
-      },
-      "limits": {
-        "tokens": 200000,
-        "subcalls": 0,
-        "depth": 0,
-        "wall_ms": 900000,
-        "root_output_tokens": 16384,
-        "subcall_output_tokens": 2048,
-        "concurrency": 1
-      }
-    },
-    {
-      "id": "direct-sol-sniah",
-      "method": "direct-model",
-      "executor": "modelrelay",
-      "model": {
-        "provider": "openai",
-        "root_model": "gpt-5.6-sol",
-        "subcall_model": null,
-        "root_reasoning_effort": "medium",
-        "subcall_reasoning_effort": null,
-        "temperature": null
-      },
-      "limits": {
-        "tokens": 50000,
-        "subcalls": 0,
-        "depth": 0,
-        "wall_ms": 900000,
-        "root_output_tokens": 4096,
-        "subcall_output_tokens": 1024,
-        "concurrency": 1
-      }
-    },
-    {
-      "id": "direct-terra-sniah",
-      "method": "direct-model",
-      "executor": "modelrelay",
-      "model": {
-        "provider": "openai",
-        "root_model": "gpt-5.6-terra",
-        "subcall_model": null,
-        "root_reasoning_effort": "medium",
-        "subcall_reasoning_effort": null,
-        "temperature": null
-      },
-      "limits": {
-        "tokens": 50000,
-        "subcalls": 0,
-        "depth": 0,
-        "wall_ms": 900000,
-        "root_output_tokens": 4096,
-        "subcall_output_tokens": 1024,
-        "concurrency": 1
-      }
-    },
-    {
-      "id": "droste-terra-luna-sniah",
+      "id": "droste-terra-luna",
       "method": "droste",
       "executor": "modelrelay",
       "model": {
@@ -197,12 +129,12 @@
         "temperature": null
       },
       "limits": {
-        "tokens": 250000,
-        "subcalls": 25,
+        "tokens": 2000000,
+        "subcalls": 150,
         "depth": 1,
         "wall_ms": 900000,
         "root_output_tokens": 4096,
-        "subcall_output_tokens": 1024,
+        "subcall_output_tokens": 2048,
         "concurrency": 8
       }
     }

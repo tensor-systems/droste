@@ -21,6 +21,10 @@ _MATERIALIZE_COMMANDS = {
         "python -m benchmarks materialize-sniah "
         "--output benchmarks/.data/sniah-noise-words-32768-50-v1"
     ),
+    "longbench-v2-codeqa": (
+        "python -m benchmarks materialize-longbench-codeqa "
+        "--output benchmarks/.data/longbench-v2-codeqa-20-v1"
+    ),
 }
 
 

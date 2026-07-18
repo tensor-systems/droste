@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .live import run_modelrelay_suite
+from .longbench_codeqa import materialize_longbench_codeqa
 from .models import load_manifest
 from .oolong import materialize_oolong
 from .report import aggregate, load_artifacts, render_markdown, summary_dict
@@ -44,6 +45,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     materialize_sniah_parser.add_argument("--task-count", type=int, default=DEFAULT_TASK_COUNT)
     materialize_sniah_parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+
+    materialize_codeqa = commands.add_parser(
+        "materialize-longbench-codeqa",
+        help="materialize the pinned LongBench-v2 CodeQA 20-task cost-bounded subsample",
+    )
+    materialize_codeqa.add_argument("--output", type=Path, required=True)
 
     run = commands.add_parser("run", help="run selected live ModelRelay benchmark arms")
     run.add_argument("manifest", type=Path)
@@ -92,6 +99,13 @@ def main(argv: list[str] | None = None) -> int:
             task_count=args.task_count,
             seed=args.seed,
         )
+        print(
+            f"materialized {result.task_count} tasks and {result.context_count} contexts; "
+            f"tasks SHA-256: {result.tasks_sha256}"
+        )
+        return 0
+    if args.command == "materialize-longbench-codeqa":
+        result = materialize_longbench_codeqa(args.output)
         print(
             f"materialized {result.task_count} tasks and {result.context_count} contexts; "
             f"tasks SHA-256: {result.tasks_sha256}"

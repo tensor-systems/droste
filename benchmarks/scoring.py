@@ -12,6 +12,10 @@ from dateutil import parser as date_parser
 from .models import ScorerKind
 
 _TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
+_MULTIPLE_CHOICE_RE = re.compile(
+    r"(?:answer\s*:\s*)?(?:\(\s*([a-d])\s*\)|([a-d])[.)]?)",
+    re.IGNORECASE,
+)
 
 
 def _normalized_text(value: Any) -> str:
@@ -23,7 +27,13 @@ def _tokens(value: Any) -> list[str]:
 
 
 def exact_match(prediction: Any, reference: Any) -> float:
-    return float(_normalized_text(prediction) == _normalized_text(reference))
+    predicted = _normalized_text(prediction)
+    expected = _normalized_text(reference)
+    if expected in {"a", "b", "c", "d"}:
+        match = _MULTIPLE_CHOICE_RE.fullmatch(predicted)
+        if match is not None:
+            predicted = (match.group(1) or match.group(2)).casefold()
+    return float(predicted == expected)
 
 
 def numeric_score(prediction: Any, reference: Any, *, tolerance: float = 0.0) -> float:

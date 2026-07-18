@@ -199,6 +199,13 @@ _OOLONG_SEMANTIC_GUIDANCE = (
     "subcall."
 )
 
+_LONGBENCH_CODEQA_GUIDANCE = (
+    "This LongBench-v2 task asks one multiple-choice question about a code repository. "
+    "Use Python to search and inspect the supplied repository context, and use semantic "
+    "subcalls when code behavior or relationships require interpretation. Compare the evidence "
+    "against all four choices. Return exactly one final letter: A, B, C, or D."
+)
+
 
 @dataclass(frozen=True)
 class ModelPrice:
@@ -419,6 +426,8 @@ def _status_for_exception(exc: Exception) -> RunStatus:
 def _policy_for_task(benchmark_id: str, task: dict[str, Any]) -> tuple[bool, str]:
     if benchmark_id == "s-niah":
         return False, _SNIAH_GUIDANCE
+    if benchmark_id == "longbench-v2-codeqa":
+        return True, _LONGBENCH_CODEQA_GUIDANCE
     if task.get("answer_type") != "ANSWER_TYPE.USER":
         return True, _OOLONG_SEMANTIC_GUIDANCE
     return False, (
