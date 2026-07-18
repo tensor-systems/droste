@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
+import tarfile
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -25,10 +27,22 @@ from benchmarks.live import (
     _status_for_exception,
 )
 from benchmarks.longbench_codeqa import materialize_longbench_codeqa
-from benchmarks.models import ArtifactError, ManifestError, RunArtifact, Usage, load_manifest
+from benchmarks.models import (
+    ArtifactError,
+    ManifestError,
+    RunArtifact,
+    Usage,
+    canonical_json_bytes,
+    canonical_json_sha256,
+    load_manifest,
+)
 from benchmarks.oolong import materialize_oolong
 from benchmarks.oolong_pairs import TASKS as OOLONG_PAIR_TASKS
-from benchmarks.oolong_pairs import evaluate_predicate, parse_labeled_context
+from benchmarks.oolong_pairs import (
+    evaluate_predicate,
+    materialize_oolong_pairs_predictions,
+    parse_labeled_context,
+)
 from benchmarks.report import ReportError, aggregate, load_artifacts, render_markdown
 from benchmarks.runner import BenchmarkRunError, run_fixture_suite
 from benchmarks.scoring import (
@@ -837,6 +851,54 @@ def test_materialize_longbench_codeqa_rejects_unverified_rows_before_writing(
     assert not output.exists()
 
 
+def test_materialize_oolong_pairs_predictions_verifies_and_extracts_release_asset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import benchmarks.oolong_pairs as module
+
+    buffer = io.BytesIO()
+    artifacts = (
+        ("direct--1", "direct", "1", ""),
+        ("droste--2", "droste", "2", [[1, 2]]),
+    )
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        metadata = b"not JSON"
+        metadata_member = tarfile.TarInfo("oolong-pairs-32k-2026-07-17/artifacts/._ignored.json")
+        metadata_member.size = len(metadata)
+        archive.addfile(metadata_member, io.BytesIO(metadata))
+        for filename, arm_id, task_id, prediction in artifacts:
+            encoded = json.dumps(
+                {"arm_id": arm_id, "task_id": task_id, "prediction": prediction}
+            ).encode()
+            member = tarfile.TarInfo(f"oolong-pairs-32k-2026-07-17/artifacts/{filename}.json")
+            member.size = len(encoded)
+            archive.addfile(member, io.BytesIO(encoded))
+    asset = buffer.getvalue()
+    monkeypatch.setattr(module, "PREDICTIONS_ASSET_SHA256", hashlib.sha256(asset).hexdigest())
+    monkeypatch.setattr(module, "_EXPECTED_PREDICTION_COUNT", 2)
+
+    output = tmp_path / "predictions"
+    result = materialize_oolong_pairs_predictions(output, fetch=lambda: asset)
+
+    assert result.prediction_count == 2
+    assert json.loads(result.predictions_path.read_text()) == {
+        "direct--1": "",
+        "droste--2": [[1, 2]],
+    }
+    with pytest.raises(BenchmarkRunError, match="refusing to overwrite materialized directory"):
+        materialize_oolong_pairs_predictions(output, fetch=lambda: asset)
+
+
+def test_materialize_oolong_pairs_predictions_rejects_wrong_asset_hash(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "predictions"
+
+    with pytest.raises(BenchmarkRunError, match="predictions asset has SHA-256"):
+        materialize_oolong_pairs_predictions(output, fetch=lambda: b"not the pinned asset")
+    assert not output.exists()
+
+
 def test_smoke_suite_writes_artifacts_and_deterministic_report(tmp_path: Path) -> None:
     manifest = load_manifest(SMOKE_MANIFEST)
     output = tmp_path / "artifacts"
@@ -1086,6 +1148,57 @@ def test_report_recomputes_deterministic_scores(tmp_path: Path) -> None:
         load_artifacts(output, manifest)
 
 
+def _make_one_smoke_artifact_lean(output: Path) -> tuple[str, object]:
+    path = next(output.glob("smoke-exact--fixture-direct--mismatch.json"))
+    value = json.loads(path.read_text())
+    prediction = value.pop("prediction")
+    reference = value.pop("reference")
+    value.update(
+        {
+            "prediction_sha256": canonical_json_sha256(prediction),
+            "prediction_byte_length": len(canonical_json_bytes(prediction)),
+            "reference_sha256": canonical_json_sha256(reference),
+            "reference_byte_length": len(canonical_json_bytes(reference)),
+        }
+    )
+    path.write_text(json.dumps(value))
+    return "fixture-direct--mismatch", prediction
+
+
+def test_report_verifies_lean_artifact_with_materialized_prediction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import benchmarks.report as report_module
+
+    manifest = load_manifest(SMOKE_MANIFEST)
+    output = tmp_path / "artifacts"
+    run_fixture_suite(manifest, output)
+    prediction_key, prediction = _make_one_smoke_artifact_lean(output)
+    predictions_path = tmp_path / "predictions.json"
+    predictions_path.write_text(json.dumps({prediction_key: prediction}))
+    monkeypatch.setattr(report_module, "PREDICTIONS_PATH", predictions_path)
+
+    assert len(load_artifacts(output, manifest)) == 10
+
+
+def test_report_fails_closed_when_lean_predictions_are_not_materialized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import benchmarks.report as report_module
+
+    manifest = load_manifest(SMOKE_MANIFEST)
+    output = tmp_path / "artifacts"
+    run_fixture_suite(manifest, output)
+    _make_one_smoke_artifact_lean(output)
+    monkeypatch.setattr(report_module, "PREDICTIONS_PATH", tmp_path / "missing.json")
+
+    with pytest.raises(
+        ReportError,
+        match="materialize-oolong-pairs-predictions --output",
+    ):
+        load_artifacts(output, manifest)
+
+
 def test_report_rejects_model_identity_on_fixture_arm(tmp_path: Path) -> None:
     manifest = load_manifest(SMOKE_MANIFEST)
     output = tmp_path / "artifacts"
@@ -1167,6 +1280,81 @@ def test_failed_artifact_requires_an_error() -> None:
             prediction=None,
             reference="answer",
         )
+
+
+def test_artifact_accepts_falsy_inline_values_and_hash_only_values() -> None:
+    common = {
+        "suite_id": "suite",
+        "suite_version": "1",
+        "manifest_sha256": "a" * 64,
+        "benchmark_id": "benchmark",
+        "task_id": "task",
+        "arm_id": "arm",
+        "status": "ok",
+        "metric": "exact_match",
+        "score": 1.0,
+    }
+
+    inline = RunArtifact(**common, prediction="", reference=None)
+    lean = RunArtifact(
+        **common,
+        prediction_sha256=canonical_json_sha256(""),
+        prediction_byte_length=len(canonical_json_bytes("")),
+        reference_sha256=canonical_json_sha256(None),
+        reference_byte_length=len(canonical_json_bytes(None)),
+    )
+
+    assert inline.has_inline_prediction
+    assert inline.has_inline_reference
+    assert not lean.has_inline_prediction
+    assert not lean.has_inline_reference
+    assert "prediction" not in lean.to_dict()
+    assert "reference" not in lean.to_dict()
+    assert RunArtifact.from_dict(lean.to_dict()) == lean
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        (
+            {
+                "prediction": "value",
+                "prediction_sha256": "a" * 64,
+                "reference": "answer",
+            },
+            "never both",
+        ),
+        (
+            {"prediction_byte_length": 1, "reference": "answer"},
+            "requires SHA-256 and byte length",
+        ),
+        (
+            {
+                "prediction_sha256": "a" * 64,
+                "prediction_byte_length": 1,
+            },
+            "reference must be inline or represented",
+        ),
+    ],
+)
+def test_artifact_rejects_invalid_inline_hash_exclusivity(
+    overrides: dict[str, object], message: str
+) -> None:
+    values: dict[str, object] = {
+        "suite_id": "suite",
+        "suite_version": "1",
+        "manifest_sha256": "a" * 64,
+        "benchmark_id": "benchmark",
+        "task_id": "task",
+        "arm_id": "arm",
+        "status": "ok",
+        "metric": "exact_match",
+        "score": 1.0,
+    }
+    values.update(overrides)
+
+    with pytest.raises(ArtifactError, match=message):
+        RunArtifact(**values)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

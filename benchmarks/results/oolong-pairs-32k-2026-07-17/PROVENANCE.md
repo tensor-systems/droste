@@ -23,13 +23,22 @@ aggregates per-user histories, and exhaustively enumerates candidate pairs.
 Luna subcalls perform only the irreducible semantic classification of context
 instances; they do not perform the pair enumeration or aggregation.
 
-The 60 JSON files under `artifacts/` are the immutable per-task records for 20
-tasks across three arms. The adjacent reports are deterministic aggregations
-of those artifacts; no dataset context or materialized task file is
-redistributed in this result directory. The exact suite manifest used for this
-run is preserved as
+The 60 lean JSON files under `artifacts/` are the immutable per-task records for
+20 tasks across three arms. They retain canonical SHA-256 and byte-length
+markers instead of duplicating the full predictions and references. The
+adjacent reports are deterministic aggregations of those artifacts; no dataset
+context or materialized task file is redistributed in this result directory.
+The exact suite manifest used for this run is preserved as
 [`rlm-paper-v0.3.0-oolong-pairs.json`](../../manifests/rlm-paper-v0.3.0-oolong-pairs.json)
 so report regeneration retains strict suite-version and manifest-hash checks
 after later additive suite changes.
 
-For convenience, the complete directory is mirrored as [`oolong-pairs-32k-2026-07-17.tar.gz`](https://github.com/tensor-systems/droste/releases/download/benchmark-data/oolong-pairs-32k-2026-07-17/oolong-pairs-32k-2026-07-17.tar.gz) (SHA-256 `6aa129b1df692948a8c2961bfe049cbf68353f0aebff8a26d63b968b1abaa89f`); this mirror does not replace the git-committed artifacts, which remain the verifiable source of truth.
+The full predictions are load-bearing verification data in the release asset
+[`oolong-pairs-32k-2026-07-17.tar.gz`](https://github.com/tensor-systems/droste/releases/download/benchmark-data/oolong-pairs-32k-2026-07-17/oolong-pairs-32k-2026-07-17.tar.gz),
+pinned by SHA-256
+`6aa129b1df692948a8c2961bfe049cbf68353f0aebff8a26d63b968b1abaa89f`.
+The report command verifies materialized predictions against the lean artifact
+markers. References are regenerated locally by the existing, task-SHA-pinned
+OOLONG-Pairs materializer and checked against their markers. The machine-readable
+release and verification record is
+[`provenance/evidence-bundle.json`](provenance/evidence-bundle.json).

@@ -10,15 +10,17 @@ Pairs are unordered for output purposes: always emit (lower_user_id, higher_user
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
+import tarfile
 import urllib.request
 from collections import defaultdict
 from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import date, datetime
 from itertools import combinations
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Literal, TypeAlias
 
 from . import oolong
@@ -33,6 +35,23 @@ ROW_OFFSET = 900
 ROW_COUNT = 44
 DATASET_CATEGORY = "trec_coarse"
 CONTEXT_LENGTH = 32768
+
+PREDICTIONS_RELEASE_TAG = "benchmark-data/oolong-pairs-32k-2026-07-17"
+PREDICTIONS_ASSET_URL = (
+    "https://github.com/tensor-systems/droste/releases/download/"
+    "benchmark-data/oolong-pairs-32k-2026-07-17/"
+    "oolong-pairs-32k-2026-07-17.tar.gz"
+)
+PREDICTIONS_ASSET_SHA256 = "6aa129b1df692948a8c2961bfe049cbf68353f0aebff8a26d63b968b1abaa89f"
+PREDICTIONS_CACHE_DIR = (
+    Path(__file__).resolve().parent / ".data" / "oolong-pairs-32k-2026-07-17-predictions"
+)
+PREDICTIONS_PATH = PREDICTIONS_CACHE_DIR / "predictions.json"
+PREDICTIONS_MATERIALIZE_COMMAND = (
+    "python -m benchmarks materialize-oolong-pairs-predictions "
+    "--output benchmarks/.data/oolong-pairs-32k-2026-07-17-predictions"
+)
+_EXPECTED_PREDICTION_COUNT = 60
 
 PAPER_REVISION = "arXiv:2512.24601v3"
 PAPER_APPENDIX = "D.1"
@@ -122,6 +141,13 @@ class MaterializedOolongPairs:
     tasks_sha256: str
     task_count: int
     context_count: int
+
+
+@dataclass(frozen=True)
+class MaterializedOolongPairsPredictions:
+    predictions_path: Path
+    asset_sha256: str
+    prediction_count: int
 
 
 def _at_least(label: Label, count: int = 1) -> CountConstraint:
@@ -404,6 +430,94 @@ def _download_rows() -> bytes:
             return response.read()
     except Exception as exc:
         raise BenchmarkRunError(f"failed to download pinned OOLONG-Pairs rows: {exc}") from exc
+
+
+def _download_predictions_asset() -> bytes:
+    request = urllib.request.Request(
+        PREDICTIONS_ASSET_URL, headers={"User-Agent": "droste-benchmarks/1"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return response.read()
+    except Exception as exc:
+        raise BenchmarkRunError(
+            f"failed to download pinned OOLONG-Pairs predictions: {exc}"
+        ) from exc
+
+
+def materialize_oolong_pairs_predictions(
+    output_dir: Path,
+    *,
+    fetch: Callable[[], bytes] = _download_predictions_asset,
+) -> MaterializedOolongPairsPredictions:
+    """Materialize release-pinned model predictions used by lean artifacts."""
+
+    if output_dir.exists():
+        raise BenchmarkRunError(f"refusing to overwrite materialized directory: {output_dir}")
+    asset = fetch()
+    asset_sha256 = hashlib.sha256(asset).hexdigest()
+    if asset_sha256 != PREDICTIONS_ASSET_SHA256:
+        raise BenchmarkRunError(
+            f"OOLONG-Pairs predictions asset has SHA-256 {asset_sha256}; "
+            f"expected {PREDICTIONS_ASSET_SHA256}"
+        )
+
+    predictions: dict[str, Any] = {}
+    try:
+        with tarfile.open(fileobj=io.BytesIO(asset), mode="r:gz") as archive:
+            artifact_members = [
+                member
+                for member in archive.getmembers()
+                if member.isfile()
+                and PurePosixPath(member.name).parent.name == "artifacts"
+                and PurePosixPath(member.name).suffix == ".json"
+                and not PurePosixPath(member.name).name.startswith("._")
+            ]
+            for member in sorted(artifact_members, key=lambda item: item.name):
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise BenchmarkRunError(
+                        f"could not read OOLONG-Pairs artifact {member.name} from release asset"
+                    )
+                try:
+                    artifact = json.loads(extracted.read(), parse_constant=reject_json_constant)
+                except (json.JSONDecodeError, ValueError) as exc:
+                    raise BenchmarkRunError(
+                        f"OOLONG-Pairs release artifact {member.name} is invalid JSON: {exc}"
+                    ) from exc
+                if not isinstance(artifact, dict) or "prediction" not in artifact:
+                    raise BenchmarkRunError(
+                        f"OOLONG-Pairs release artifact {member.name} has no inline prediction"
+                    )
+                arm_id = artifact.get("arm_id")
+                task_id = artifact.get("task_id")
+                if not isinstance(arm_id, str) or not arm_id or not isinstance(task_id, str):
+                    raise BenchmarkRunError(
+                        f"OOLONG-Pairs release artifact {member.name} has invalid identity"
+                    )
+                key = f"{arm_id}--{task_id}"
+                if key in predictions:
+                    raise BenchmarkRunError(
+                        f"OOLONG-Pairs release asset has duplicate prediction {key}"
+                    )
+                predictions[key] = artifact["prediction"]
+    except (tarfile.TarError, OSError) as exc:
+        raise BenchmarkRunError(
+            f"OOLONG-Pairs predictions asset is not a valid tarball: {exc}"
+        ) from exc
+
+    if len(predictions) != _EXPECTED_PREDICTION_COUNT:
+        raise BenchmarkRunError(
+            f"OOLONG-Pairs release asset contains {len(predictions)} predictions; "
+            f"expected {_EXPECTED_PREDICTION_COUNT}"
+        )
+    predictions_path = output_dir / "predictions.json"
+    oolong._write_exclusive(predictions_path, oolong._encode_json(predictions))
+    return MaterializedOolongPairsPredictions(
+        predictions_path=predictions_path,
+        asset_sha256=asset_sha256,
+        prediction_count=len(predictions),
+    )
 
 
 def _validated_labeled_rows(

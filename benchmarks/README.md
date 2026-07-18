@@ -147,6 +147,20 @@ context, and provenance files are gitignored and never checked in.
 The `oolong_pairs_f1` scorer parses, normalizes, and deduplicates ID pairs before
 computing set precision, recall, and F1.
 
+Published OOLONG-Pairs artifacts keep only canonical hashes and byte lengths
+for predictions and references. Materialize the release-pinned predictions
+before regenerating their report:
+
+```bash
+uv run python -m benchmarks materialize-oolong-pairs-predictions \
+  --output benchmarks/.data/oolong-pairs-32k-2026-07-17-predictions
+```
+
+The command verifies the release tarball's pinned SHA-256 before extracting any
+predictions and refuses to replace an existing output directory. References
+remain deterministic outputs of the task materializer above; report generation
+never fetches either source implicitly.
+
 ## RLM paper suite
 
 `manifests/rlm-paper-v1.json` pins the target paper revision and names the

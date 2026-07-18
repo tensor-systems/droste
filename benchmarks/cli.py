@@ -8,7 +8,7 @@ from .live import run_modelrelay_suite
 from .longbench_codeqa import materialize_longbench_codeqa
 from .models import load_manifest
 from .oolong import materialize_oolong
-from .oolong_pairs import materialize_oolong_pairs
+from .oolong_pairs import materialize_oolong_pairs, materialize_oolong_pairs_predictions
 from .report import aggregate, load_artifacts, render_markdown, summary_dict
 from .runner import run_fixture_suite
 from .sniah import (
@@ -58,6 +58,12 @@ def _parser() -> argparse.ArgumentParser:
         help="materialize the 20 OOLONG-Pairs tasks against the pinned 131K context",
     )
     materialize_pairs.add_argument("--output", type=Path, required=True)
+
+    materialize_pair_predictions = commands.add_parser(
+        "materialize-oolong-pairs-predictions",
+        help="materialize release-pinned predictions for lean OOLONG-Pairs artifacts",
+    )
+    materialize_pair_predictions.add_argument("--output", type=Path, required=True)
 
     run = commands.add_parser("run", help="run selected live ModelRelay benchmark arms")
     run.add_argument("manifest", type=Path)
@@ -123,6 +129,13 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"materialized {result.task_count} tasks and {result.context_count} context; "
             f"tasks SHA-256: {result.tasks_sha256}"
+        )
+        return 0
+    if args.command == "materialize-oolong-pairs-predictions":
+        result = materialize_oolong_pairs_predictions(args.output)
+        print(
+            f"materialized {result.prediction_count} predictions; "
+            f"asset SHA-256: {result.asset_sha256}"
         )
         return 0
     if args.command == "run":

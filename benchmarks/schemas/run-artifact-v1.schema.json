@@ -15,8 +15,6 @@
     "status",
     "metric",
     "score",
-    "prediction",
-    "reference",
     "usage",
     "cost_microusd",
     "wall_time_ms",
@@ -53,6 +51,44 @@
           "price_table_version": { "type": "string", "minLength": 1 }
         }
       }
+    },
+    {
+      "oneOf": [
+        {
+          "required": ["prediction"],
+          "properties": {
+            "prediction_sha256": { "const": null },
+            "prediction_byte_length": { "const": null }
+          }
+        },
+        {
+          "required": ["prediction_sha256", "prediction_byte_length"],
+          "not": { "required": ["prediction"] },
+          "properties": {
+            "prediction_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "prediction_byte_length": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ]
+    },
+    {
+      "oneOf": [
+        {
+          "required": ["reference"],
+          "properties": {
+            "reference_sha256": { "const": null },
+            "reference_byte_length": { "const": null }
+          }
+        },
+        {
+          "required": ["reference_sha256", "reference_byte_length"],
+          "not": { "required": ["reference"] },
+          "properties": {
+            "reference_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "reference_byte_length": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ]
     }
   ],
   "properties": {
@@ -78,6 +114,10 @@
     "score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
     "prediction": true,
     "reference": true,
+    "prediction_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+    "prediction_byte_length": { "type": ["integer", "null"], "minimum": 0 },
+    "reference_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+    "reference_byte_length": { "type": ["integer", "null"], "minimum": 0 },
     "usage": {
       "type": "object",
       "additionalProperties": false,
