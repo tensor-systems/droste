@@ -117,7 +117,13 @@ class ExecutionContext:
 
     @staticmethod
     def _validate_usage(usage: TokenUsage) -> None:
-        values = (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
+        values = (
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens,
+            usage.cache_read_tokens,
+            usage.cache_creation_tokens,
+        )
         if any(
             isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in values
         ):

@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+# Reserved for the loop-to-client handoff. It is never part of the canonical
+# transcript and must be consumed or stripped before an API payload is built.
+CACHE_ANCHOR_MARKER = "_droste_cache_anchor"
+
 
 @dataclass
 class TokenUsage:
@@ -11,6 +15,18 @@ class TokenUsage:
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+
+
+def strip_cache_anchor_markers(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return a shallow outbound copy without Droste's cache marker."""
+    return [
+        {key: value for key, value in message.items() if key != CACHE_ANCHOR_MARKER}
+        for message in messages
+    ]
 
 
 def total_tokens_from_usage(usage: Any) -> int:
@@ -25,7 +41,12 @@ def total_tokens_from_usage(usage: Any) -> int:
     if hasattr(usage, "prompt_tokens") and hasattr(usage, "completion_tokens"):
         return int(getattr(usage, "prompt_tokens")) + int(getattr(usage, "completion_tokens"))
     if hasattr(usage, "input_tokens") and hasattr(usage, "output_tokens"):
-        return int(getattr(usage, "input_tokens")) + int(getattr(usage, "output_tokens"))
+        return (
+            int(getattr(usage, "input_tokens"))
+            + int(getattr(usage, "cache_read_input_tokens", 0))
+            + int(getattr(usage, "cache_creation_input_tokens", 0))
+            + int(getattr(usage, "output_tokens"))
+        )
     return 0
 
 

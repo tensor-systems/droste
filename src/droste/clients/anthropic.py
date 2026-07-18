@@ -43,7 +43,7 @@ from typing import Any
 from ..execution.budget import DEFAULT_SUBCALL_OUTPUT_TOKENS
 from ..execution.config import DEFAULT_SUBCALL_CONCURRENCY, validate_subcall_concurrency
 from ..execution.context import ExecutionContext
-from ..protocols.llm_client import TokenUsage
+from ..protocols.llm_client import CACHE_ANCHOR_MARKER, TokenUsage
 from ..protocols.subcall_client import SubcallClient
 from .errors import http_error_excerpt
 from .useragent import USER_AGENT
@@ -70,22 +70,82 @@ def resolve_anthropic_api_key(api_key: str | None = None) -> str:
     return os.environ.get("ANTHROPIC_API_KEY", "")
 
 
-def _lift_system(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+def _clean_content_blocks(content: Any) -> Any:
+    """Shallow-copy content blocks and remove caller-side cache controls."""
+    if not isinstance(content, list):
+        return content
+    return [
+        {key: value for key, value in block.items() if key != "cache_control"}
+        if isinstance(block, dict)
+        else block
+        for block in content
+    ]
+
+
+def _mark_content(content: Any) -> tuple[Any, bool]:
+    """Attach one ephemeral breakpoint to content when its shape permits."""
+    content = _clean_content_blocks(content)
+    if isinstance(content, str):
+        return (
+            [
+                {
+                    "type": "text",
+                    "text": content,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            True,
+        )
+    if isinstance(content, list):
+        for index in range(len(content) - 1, -1, -1):
+            block = content[index]
+            if isinstance(block, dict):
+                content[index] = {
+                    **block,
+                    "cache_control": {"type": "ephemeral"},
+                }
+                return content, True
+    return content, False
+
+
+def _system_blocks(content: Any) -> list[Any]:
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content else []
+    if isinstance(content, list):
+        return content
+    return []
+
+
+def _lift_system(
+    messages: list[dict[str, Any]],
+) -> tuple[list[Any], list[dict[str, Any]]]:
     """Split ``role: system`` messages out into the top-level ``system`` field.
 
     The runner passes the system prompt as ``messages[0]``; Anthropic rejects
     a system role inside ``messages``. Multiple system messages concatenate.
     """
-    system_parts: list[str] = []
+    system_parts: list[Any] = []
     rest: list[dict[str, Any]] = []
+    cache_controls = 0
     for message in messages:
-        if str(message.get("role", "")).lower() == "system":
-            content = message.get("content")
-            if isinstance(content, str) and content:
-                system_parts.append(content)
+        anchored = bool(message.get(CACHE_ANCHOR_MARKER))
+        outbound = {key: value for key, value in message.items() if key != CACHE_ANCHOR_MARKER}
+        content = outbound.get("content")
+        if anchored and cache_controls < 4:
+            content, marked = _mark_content(content)
+            cache_controls += int(marked)
         else:
-            rest.append(message)
-    return "\n\n".join(system_parts), rest
+            content = _clean_content_blocks(content)
+        outbound["content"] = content
+        if str(message.get("role", "")).lower() == "system":
+            blocks = _system_blocks(content)
+            if blocks:
+                if system_parts:
+                    system_parts.append({"type": "text", "text": "\n\n"})
+                system_parts.extend(blocks)
+        else:
+            rest.append(outbound)
+    return system_parts, rest
 
 
 def _text_from_content(data: Any, *, label: str) -> str:
@@ -105,12 +165,17 @@ def _usage_from(data: Any) -> TokenUsage:
     usage = data.get("usage") if isinstance(data, dict) else None
     if not isinstance(usage, dict):
         usage = {}
-    prompt = int(usage.get("input_tokens") or 0)
+    input_tokens = int(usage.get("input_tokens") or 0)
+    cache_read = int(usage.get("cache_read_input_tokens") or 0)
+    cache_creation = int(usage.get("cache_creation_input_tokens") or 0)
+    prompt = input_tokens + cache_read + cache_creation
     completion = int(usage.get("output_tokens") or 0)
     return TokenUsage(
         prompt_tokens=prompt,
         completion_tokens=completion,
         total_tokens=prompt + completion,
+        cache_read_tokens=cache_read,
+        cache_creation_tokens=cache_creation,
     )
 
 
@@ -188,6 +253,8 @@ class _MessagesTransport:
         model = ""
         stop_reason = ""
         input_tokens = 0
+        cache_read_input_tokens = 0
+        cache_creation_input_tokens = 0
         output_tokens = 0
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
@@ -216,6 +283,10 @@ class _MessagesTransport:
                         model = str(message.get("model") or model)
                         usage = message.get("usage") or {}
                         input_tokens = int(usage.get("input_tokens") or 0)
+                        cache_read_input_tokens = int(usage.get("cache_read_input_tokens") or 0)
+                        cache_creation_input_tokens = int(
+                            usage.get("cache_creation_input_tokens") or 0
+                        )
                     elif etype == "content_block_delta":
                         delta = event.get("delta") or {}
                         if delta.get("type") == "text_delta":
@@ -246,7 +317,12 @@ class _MessagesTransport:
             "model": model,
             "content": [{"type": "text", "text": "".join(parts)}],
             "stop_reason": stop_reason or "end_turn",
-            "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_read_input_tokens": cache_read_input_tokens,
+                "cache_creation_input_tokens": cache_creation_input_tokens,
+            },
         }
 
 

@@ -4,6 +4,9 @@ single RLMResult construction site — no LLM or sandbox required."""
 
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
+
 from droste.exceptions import PolicyError, RLMError
 from droste.execution.context import create_execution_context
 from droste.loop.step import (
@@ -13,11 +16,17 @@ from droste.loop.step import (
     build_initial_messages,
     build_missing_code_repair_messages,
     build_refinement_messages,
+    call_root,
     finalize,
     record_iteration,
 )
 from droste.loop.trajectory import IterationRecord
 from droste.policy import PolicyHints, contract_violations, ready_violations
+from droste.protocols.llm_client import (
+    CACHE_ANCHOR_MARKER,
+    TokenUsage,
+    strip_cache_anchor_markers,
+)
 
 
 def test_ready_violations_requires_hints_and_readiness() -> None:
@@ -124,6 +133,74 @@ def test_build_error_repair_messages_policy_vs_plain_error() -> None:
     plain = build_error_repair_messages([], "c", ValueError("boom"))
     assert "Fix the code and try again." in plain[1]["content"]
     assert "boom" in plain[1]["content"]
+
+
+def test_strip_cache_anchor_markers_returns_clean_shallow_copy() -> None:
+    messages = [
+        {"role": "system", "content": "SYS", CACHE_ANCHOR_MARKER: True},
+        {"role": "user", "content": "Q"},
+    ]
+
+    outbound = strip_cache_anchor_markers(messages)
+
+    assert outbound == [
+        {"role": "system", "content": "SYS"},
+        {"role": "user", "content": "Q"},
+    ]
+    assert CACHE_ANCHOR_MARKER in messages[0]
+    assert outbound is not messages
+    assert all(clean is not original for clean, original in zip(outbound, messages, strict=True))
+
+
+def test_call_root_cache_anchors_never_alias_canonical_or_iteration_record() -> None:
+    class CapturingLLM:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def responses_create(self, messages, **_kwargs):
+            self.calls.append(messages)
+            return "response", TokenUsage(1, 1, 2)
+
+    client = CapturingLLM()
+    context = create_execution_context()
+    messages = build_initial_messages("SYS", "Q")
+    canonical_bytes = json.dumps(messages, sort_keys=True)
+
+    _response, usage, error = call_root(
+        client,
+        messages,
+        model="model",
+        context=context,  # type: ignore[arg-type]
+    )
+    assert error is None
+    assert [CACHE_ANCHOR_MARKER in message for message in client.calls[0]] == [True, True]
+    assert json.dumps(messages, sort_keys=True) == canonical_bytes
+
+    record = record_iteration(
+        iteration=1,
+        messages=messages,
+        response="response",
+        code="pass",
+        outcome=StepOutcome(output="", answer={}),
+        usage=usage,
+    )
+    record_bytes = json.dumps(asdict(record), sort_keys=True)
+    later_messages = build_refinement_messages(
+        messages,
+        template="{current_content}|{last_output}",
+        code="pass",
+        answer_content="draft",
+        last_output="",
+    )
+    _response, _usage, error = call_root(
+        client,
+        later_messages,
+        model="model",
+        context=context,  # type: ignore[arg-type]
+    )
+    assert error is None
+    assert json.dumps(asdict(record), sort_keys=True) == record_bytes
+    assert all(CACHE_ANCHOR_MARKER not in message for message in record.llm_input)
 
 
 def test_record_iteration_snapshots_messages() -> None:

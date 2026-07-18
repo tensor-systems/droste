@@ -26,7 +26,7 @@ import dataclasses
 import io
 from typing import Any, Callable
 
-from droste.protocols.llm_client import TokenUsage
+from droste.protocols.llm_client import TokenUsage, strip_cache_anchor_markers
 
 # Bind the interpreter primitive once, away from call sites, so static scanners
 # don't confuse it with shell exec.
@@ -175,7 +175,7 @@ class BridgedLLMClient:
         # (gpt-5.x, opus-4.x) reject an explicit temperature outright.
         body: dict[str, Any] = {
             "model": model,
-            "input": _build_input(messages),
+            "input": _build_input(strip_cache_anchor_markers(messages)),
             "max_output_tokens": max_tokens,
         }
         if temperature is not None:

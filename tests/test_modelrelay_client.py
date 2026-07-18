@@ -25,6 +25,7 @@ from droste.clients.modelrelay import (
 )
 from droste.environments import RunnerEnvironment
 from droste.execution.context import create_execution_context
+from droste.protocols.llm_client import CACHE_ANCHOR_MARKER
 from droste.structured import _StructuredBatchEvidence, bind_structured_batch, structured_batch
 
 
@@ -223,7 +224,10 @@ def test_root_returns_text_usage_and_sends_api_key_header(stub_native):
     client = ModelRelayClient(model="root-model", base_url=stub_native.base_url, api_key="mr_sk_t")
     stub_native.root_responses = ["the answer"]
     text, usage = client.responses_create(
-        [{"role": "system", "content": "sys"}, {"role": "user", "content": "q"}],
+        [
+            {"role": "system", "content": "sys", CACHE_ANCHOR_MARKER: True},
+            {"role": "user", "content": "q", CACHE_ANCHOR_MARKER: True},
+        ],
         model="",
         return_usage=True,
     )
@@ -237,6 +241,7 @@ def test_root_returns_text_usage_and_sends_api_key_header(stub_native):
     assert client.last_stop_reason == "stop"
 
     request = stub_native.requests[0]
+    assert CACHE_ANCHOR_MARKER not in json.dumps(request)
     assert request["model"] == "root-model"
     assert request["input"][0] == {
         "type": "message",

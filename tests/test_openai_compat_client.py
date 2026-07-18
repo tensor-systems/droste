@@ -19,6 +19,7 @@ from droste.clients.openai_compat import (
     OpenAICompatSubcallClient,
 )
 from droste.execution.context import create_execution_context
+from droste.protocols.llm_client import CACHE_ANCHOR_MARKER
 from droste.testing import MockEnvironment
 
 
@@ -186,7 +187,7 @@ def _subcall_client(server: StubOpenAIServer, context, **kwargs) -> OpenAICompat
 def test_root_responses_create_returns_text_and_usage(stub_server):
     client = OpenAICompatClient(model="root-model", base_url=stub_server.base_url, api_key="k")
     result, usage = client.responses_create(
-        [{"role": "user", "content": "Question: hello"}],
+        [{"role": "user", "content": "Question: hello", CACHE_ANCHOR_MARKER: True}],
         model="",
         return_usage=True,
     )
@@ -195,6 +196,7 @@ def test_root_responses_create_returns_text_and_usage(stub_server):
     payload = stub_server.requests[0]
     assert payload["model"] == "root-model"
     assert payload["messages"][0]["content"] == "Question: hello"
+    assert CACHE_ANCHOR_MARKER not in json.dumps(payload)
     assert payload["max_tokens"] == 4096
     assert stub_server.auth_headers[0] == "Bearer k"
     assert client.last_stop_reason == "stop"

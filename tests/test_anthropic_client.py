@@ -13,6 +13,7 @@ from droste import (
     AnthropicSubcallClient,
     create_execution_context,
 )
+from droste.protocols.llm_client import CACHE_ANCHOR_MARKER
 from droste_cli.main import main
 
 
@@ -86,7 +87,15 @@ class StubAnthropicServer:
                                 "message": {
                                     "id": "msg_stub_1",
                                     "model": payload.get("model", ""),
-                                    "usage": {"input_tokens": stub.usage["input_tokens"]},
+                                    "usage": {
+                                        key: stub.usage[key]
+                                        for key in (
+                                            "input_tokens",
+                                            "cache_read_input_tokens",
+                                            "cache_creation_input_tokens",
+                                        )
+                                        if key in stub.usage
+                                    },
                                 },
                             }
                         )
@@ -186,8 +195,55 @@ def test_system_message_lifted_to_top_level(stub):
         model="claude-test",
     )
     sent = stub.requests[0]
-    assert sent["system"] == "be terse"
+    assert sent["system"] == [{"type": "text", "text": "be terse"}]
     assert [m["role"] for m in sent["messages"]] == ["user", "assistant"]
+
+
+def test_cache_anchors_become_at_most_four_ephemeral_blocks(stub):
+    stub.root_responses = ["ok"]
+    client = AnthropicClient(model="claude-test", base_url=stub.base_url, api_key="sk-ant-k")
+    messages = [
+        {"role": "system", "content": "system", CACHE_ANCHOR_MARKER: True},
+        {"role": "user", "content": "one", CACHE_ANCHOR_MARKER: True},
+        {"role": "assistant", "content": "two"},
+        {"role": "user", "content": "three", CACHE_ANCHOR_MARKER: True},
+        {"role": "assistant", "content": "four", CACHE_ANCHOR_MARKER: True},
+        {"role": "user", "content": "five", CACHE_ANCHOR_MARKER: True},
+    ]
+
+    client.responses_create(messages, model="claude-test")
+
+    sent = stub.requests[0]
+    cache_control = {"type": "ephemeral"}
+    assert sent["system"] == [{"type": "text", "text": "system", "cache_control": cache_control}]
+    assert [isinstance(message["content"], list) for message in sent["messages"]] == [
+        True,
+        False,
+        True,
+        True,
+        False,
+    ]
+    assert json.dumps(sent).count('"cache_control"') == 4
+    assert CACHE_ANCHOR_MARKER not in json.dumps(sent)
+
+
+def test_non_streaming_cache_usage_is_inclusive(stub):
+    stub.usage = {
+        "input_tokens": 100,
+        "output_tokens": 3,
+        "cache_read_input_tokens": 5000,
+        "cache_creation_input_tokens": 1000,
+    }
+    client = AnthropicClient(model="claude-test", base_url=stub.base_url, api_key="sk-ant-k")
+
+    _text, usage = client.responses_create(
+        [{"role": "user", "content": "q"}], model="claude-test", return_usage=True
+    )
+
+    assert usage.prompt_tokens == 6100
+    assert usage.total_tokens == 6103
+    assert usage.cache_read_tokens == 5000
+    assert usage.cache_creation_tokens == 1000
 
 
 def test_max_tokens_always_present_and_temperature_omitted(stub):
@@ -233,6 +289,28 @@ def test_streaming_deltas_assembly_and_usage(stub):
     assert "".join(deltas) == "streamed claude body"
     assert usage.total_tokens == 10
     assert stub.requests[0]["stream"] is True
+
+
+def test_streaming_cache_usage_is_inclusive(stub):
+    stub.root_responses = ["streamed"]
+    stub.usage = {
+        "input_tokens": 100,
+        "output_tokens": 3,
+        "cache_read_input_tokens": 5000,
+        "cache_creation_input_tokens": 1000,
+    }
+    client = AnthropicClient(
+        model="claude-test", base_url=stub.base_url, api_key="sk-ant-k", on_delta=lambda _t: None
+    )
+
+    _text, usage = client.responses_create(
+        [{"role": "user", "content": "q"}], model="claude-test", return_usage=True
+    )
+
+    assert usage.prompt_tokens == 6100
+    assert usage.total_tokens == 6103
+    assert usage.cache_read_tokens == 5000
+    assert usage.cache_creation_tokens == 1000
 
 
 def test_mid_stream_error_raises(stub):

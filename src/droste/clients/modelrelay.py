@@ -36,7 +36,7 @@ from ..exceptions import BatchItemError, BatchItemErrorDetails
 from ..execution.budget import DEFAULT_SUBCALL_OUTPUT_TOKENS
 from ..execution.config import validate_subcall_concurrency
 from ..execution.context import ExecutionContext
-from ..protocols.llm_client import TokenUsage
+from ..protocols.llm_client import TokenUsage, strip_cache_anchor_markers
 from ..protocols.subcall_client import SubcallClient
 from .errors import http_error_excerpt, redact_secrets
 from .openai_compat import (
@@ -394,7 +394,7 @@ class ModelRelayClient:
             raise ValueError("model is required")
         payload: dict[str, Any] = {
             "model": resolved_model,
-            "input": _input_items(messages),
+            "input": _input_items(strip_cache_anchor_markers(messages)),
         }
         max_output_tokens = self._max_output_tokens or int(max_tokens or 0)
         if max_output_tokens > 0:

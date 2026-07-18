@@ -40,7 +40,7 @@ from ..execution.trace import (
 from ..policy import PolicyHints, contract_violations, ready_violations
 from ..prompts.pack import PromptPackRecord
 from ..protocols.environment import ExecutionResult, RLMEnvironment
-from ..protocols.llm_client import LLMClient, total_tokens_from_usage
+from ..protocols.llm_client import CACHE_ANCHOR_MARKER, LLMClient, total_tokens_from_usage
 from ..structured import _StructuredBatchEvidence
 from .trajectory import (
     EXECUTION_STATUS_ERROR,
@@ -436,6 +436,7 @@ def call_root(
     *,
     model: str,
     context: ExecutionContext,
+    cache_anchors: tuple[int, ...] | None = (0, -1),
 ) -> tuple[str, Any, RLMError | None]:
     """One root-LLM call with token accounting.
 
@@ -464,9 +465,16 @@ def call_root(
             ),
         )
     context.record_root_attempt()
+    outbound_messages: list[dict[str, Any]] = [dict(message) for message in messages]
+    if cache_anchors is not None:
+        message_count = len(outbound_messages)
+        for anchor in cache_anchors:
+            index = anchor if anchor >= 0 else message_count + anchor
+            if 0 <= index < message_count:
+                outbound_messages[index][CACHE_ANCHOR_MARKER] = True
     try:
         response, usage = root_llm.responses_create(
-            messages,
+            outbound_messages,
             model=model,
             max_tokens=context.budget.root_output_tokens,
             return_usage=True,
