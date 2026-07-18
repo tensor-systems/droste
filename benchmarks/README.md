@@ -4,6 +4,204 @@ This directory is repository-local tooling, not part of the published `droste`
 wheel. It defines the versioned contract for benchmark manifests, per-task run
 artifacts, deterministic scoring, and aggregate reports.
 
+## Results
+
+### OOLONG `trec_coarse`
+
+The published OOLONG result is a slice from the
+[RLM paper suite](manifests/rlm-paper-v1.json): 131K-token contexts, 50 tasks,
+three arms, one repetition, run 2026-07-17
+([report](results/oolong-trec-coarse-131k-2026-07-17/report.md) ·
+[raw artifacts](results/oolong-trec-coarse-131k-2026-07-17/artifacts)).
+
+| Arm | Root model | Subcall model | Mean score | Cost | Tokens |
+|---|---|---|---:|---:|---:|
+| direct-sol | gpt-5.6-sol | — | 0.6020 | $26.175585 | 4,763,877 |
+| direct-terra | gpt-5.6-terra | — | 0.5668 | $12.471453 | 4,722,032 |
+| droste-terra-luna | gpt-5.6-terra | gpt-5.6-luna | 0.6432 | $10.158295 | 3,531,293 |
+
+The direct arms place the full context in a single model call. The droste arm
+runs this engine with a mid-tier root model delegating to a cheaper subcall
+model (root reasoning `medium`, subcall reasoning `none`). All 150 task–arm
+runs completed; a failure or timeout would be retained as a typed artifact,
+not dropped. All arms ran through the same OpenAI-compatible endpoint
+(ModelRelay); costs are measured in integer micro-USD against the price
+snapshot recorded with the run. The `oolong_official` scorer
+([scoring.py](scoring.py)) implements the benchmark's published rule — exact,
+comparison-phrase, and date matches score 1.0, and numeric answers earn graded
+credit of 0.75^|error| — so the mean score is graded, not plain accuracy.
+
+droste-terra-luna scored highest of the three arms — 0.6432, against 0.6020
+for direct-sol and 0.5668 for direct-terra — while costing about 2.6× less
+than the stronger direct baseline and using fewer total tokens. With one
+50-task repetition, a paired bootstrap over the per-task scores in the
+committed artifacts does not separate the three mean scores at 95%
+confidence, so treat the score ranking as this run's observed result rather
+than a statistically established ranking; the cost figure is a direct
+measurement, not a sampled statistic, and isn't subject to that caveat.
+Run-to-run variation comes from provider sampling (temperature is
+not pinned; the endpoint default applies), from possible server-side model
+changes behind pinned model ids, and from trajectory variance in the droste
+arm. Per-arm prompts are fixed harness prompts committed in
+[live.py](live.py), including benchmark-specific guidance for the droste arm;
+budgets, limits, and concurrency are pinned in the
+[manifest](manifests/rlm-paper-v1.json).
+
+The task slice is materialized from the public dataset
+([oolongbench/oolong-synth](https://huggingface.co/datasets/oolongbench/oolong-synth),
+pinned revision `f0d59ea`, validation rows 1050–1099) with SHA-256
+verification. The dataset card at that revision does not state a license, so
+the tasks themselves are not redistributed here; the committed artifacts
+contain only per-task predictions, gold labels, scores, and usage. This guide
+has the [materialization command](#pinned-oolong-data), the
+[offline report-regeneration command](#live-runs), and the live-run procedure
+(new output directory, immutable artifacts, explicit cost cap).
+
+### S-NIAH
+
+The adjacent S-NIAH result is the single needle-in-a-haystack retrieval task
+from the RULER methodology of
+[Hsieh et al. (2024)](https://arxiv.org/abs/2404.06654). This
+run used 32,768-token noise haystacks, word-pair keys and values, seed `42`, 50
+tasks, three arms, and one repetition on 2026-07-17
+([report](results/sniah-32k-2026-07-17/report.md) ·
+[raw artifacts](results/sniah-32k-2026-07-17/artifacts) ·
+[generator provenance](results/sniah-32k-2026-07-17/provenance/generator.json)).
+
+| Arm | Root model | Subcall model | Exact-match accuracy | Cost | Tokens |
+|---|---|---|---:|---:|---:|
+| direct-sol-sniah | gpt-5.6-sol | — | 84% | $7.791160 | 1,556,242 |
+| direct-terra-sniah | gpt-5.6-terra | — | 100% | $3.895694 | 1,556,249 |
+| droste-terra-luna-sniah | gpt-5.6-terra | gpt-5.6-luna | 100% | $0.659419 | 190,253 |
+
+The direct arms place the complete prompt in one model call. The droste arm
+runs this engine with a `gpt-5.6-terra` root delegating to `gpt-5.6-luna`
+subcalls (root reasoning `medium`, subcall reasoning `none`). All 150 task-arm
+runs completed; failures and timeouts would remain typed artifacts rather than
+being dropped. Costs are measured in integer micro-USD from the price snapshot
+used by each run.
+
+This benchmark is Droste's deterministic reproduction of RULER's published
+algorithm and prompt methodology, checked against NVIDIA/RULER commit
+[`38da79d79519ef87aa46ae804f838e1eab7f86d7`](https://github.com/NVIDIA/RULER/tree/38da79d79519ef87aa46ae804f838e1eab7f86d7).
+The generator is [committed in this repository](sniah.py); it fetches and
+redistributes no dataset or generated examples. There is consequently no
+external dataset revision, dataset citation, or dataset-license section for
+this result. The provenance record instead pins the generator hash, seed,
+configuration, materialized-task hash, and RULER commit.
+
+### LongBench-v2 CodeQA
+
+This published result is code-repository-understanding multiple-choice QA over
+real long-context codebases. The run used 20 tasks, three arms, and one
+repetition on 2026-07-17
+([report](results/longbench-v2-codeqa-20-2026-07-17/report.md) ·
+[raw artifacts](results/longbench-v2-codeqa-20-2026-07-17/artifacts) ·
+[provenance](results/longbench-v2-codeqa-20-2026-07-17/PROVENANCE.md)).
+
+| Arm | Root model | Subcall model | Mean score | Successful | Cost | Tokens |
+|---|---|---|---:|---:|---:|---:|
+| direct-sol | gpt-5.6-sol | — | 0.7500 | 18/20 | $19.597640 | 3,910,423 |
+| direct-terra | gpt-5.6-terra | — | 0.6500 | 17/20 | $9.096737 | 3,627,983 |
+| droste-terra-luna | gpt-5.6-terra | gpt-5.6-luna | 0.6500 | 20/20 | $3.793057 | 1,348,775 |
+
+The direct arms place the complete codebase context in one model call. The
+droste arm runs this engine with a `gpt-5.6-terra` root delegating to
+`gpt-5.6-luna` subcalls (root reasoning `medium`, subcall reasoning `none`).
+All 60 scheduled task–arm attempts remain in the committed artifacts, including
+the two unsuccessful direct-sol attempts and three unsuccessful direct-terra
+attempts. Costs are measured in integer micro-USD from the price snapshot used
+by each run.
+
+droste-terra-luna tied direct-terra's 0.6500 mean score and trailed direct-sol's
+0.7500 by 10 percentage points, while costing 2.4× less than direct-terra and
+5.2× less than direct-sol. This is a mixed, cost-favorable result, not a clean
+sweep. With one 20-task sample, the two-task score difference from direct-sol
+is the observed result, not evidence of a population-level separation.
+
+In [*Recursive Language Models* (Zhang, Kraska, and Khattab, 2025;
+arXiv:2512.24601)](https://arxiv.org/abs/2512.24601), Table 1 evaluates CodeQA
+across the full 23K–4.2M-token range: its GPT-5 direct baseline, with no
+fine-tuning, scores 24.0%, far below this capped sample's 75.0% direct-sol
+score, and several CodeQA entries are flagged for partial context-limit
+failures. The contrast shows that this cost-bounded sample tests an easier
+regime than the scale where the paper demonstrates the clearest gap between
+direct and recursive approaches; this result therefore likely understates,
+rather than contradicts, RLM's advantage on CodeQA-style tasks at the scale the
+paper evaluates. [Issue #172](https://github.com/tensor-systems/droste/issues/172)
+tracks a full-domain, larger-scale run.
+
+The tasks come from
+[`zai-org/LongBench-v2`](https://huggingface.co/datasets/zai-org/LongBench-v2/tree/2b48e494f2c7a2f0af81aae178e05c7e1dde0fe9),
+Apache-2.0, at pinned revision
+`2b48e494f2c7a2f0af81aae178e05c7e1dde0fe9`, filtered to the 50-task
+`Code Repository Understanding` domain. The published run is explicitly a
+disclosed, cost-bounded 20-of-50 stratified subsample, not the complete domain:
+8 short, 7 medium, and 5 long tasks, comprising 8 easy and 12 hard tasks. The
+full-domain cost was disproportionate for this run—one pilot task alone cost
+$3.30—so the harness fixes centered, evenly spaced selections within each
+length/difficulty stratum before model outcomes are observed. The
+[materializer](longbench_codeqa.py), manifest task hash, selection rule, and
+offline report-regeneration command are public.
+
+### OOLONG-Pairs
+
+OOLONG-Pairs tests multi-hop pairwise reasoning over OOLONG-style
+synthetic conversations: find every pair of users satisfying a relational
+predicate, scored with set-based F1 over normalized, deduplicated pairs. The
+run used one 32,768-token context, 20 tasks, three arms, and one repetition on
+2026-07-17
+([report](results/oolong-pairs-32k-2026-07-17/report.md) ·
+[raw artifacts](results/oolong-pairs-32k-2026-07-17/artifacts) ·
+[provenance](results/oolong-pairs-32k-2026-07-17/PROVENANCE.md)).
+
+| Arm | Root model | Subcall model | Mean F1 | Successful | Cost | Tokens |
+|---|---|---|---:|---:|---:|---:|
+| direct-sol-pairs | gpt-5.6-sol | — | 0.000000 | 0/20 | $0.000000 | 0 |
+| direct-terra-pairs | gpt-5.6-terra | — | 0.034057 | 14/20 | $2.497269 | 435,842 |
+| droste-terra-luna-pairs | gpt-5.6-terra | gpt-5.6-luna | 0.801724 | 20/20 | $2.141592 | 767,642 |
+
+The `$0.000000` recorded for direct-sol's HTTP 504 failures is a measurement
+limit, not a zero-cost guarantee: because no response arrived, the harness
+received no usage to bill, although provider generation may already have
+started. By contrast, an HTTP 400 `context_limit` rejection occurs before
+generation and is genuinely free.
+
+The direct arms place the complete context in one model call. The Droste arm
+uses a `gpt-5.6-terra` root with `gpt-5.6-luna` subcalls (root reasoning
+`medium`, subcall reasoning `none`). Its design is deliberately hybrid:
+deterministic Python parses and aggregates the records and exhaustively
+enumerates user pairs, while Luna handles only the irreducible semantic
+classification step. All 60 scheduled attempts remain in the committed
+artifacts, including failures. Costs are measured in integer micro-USD from
+the recorded model usage.
+
+This is Droste's strongest result across the benchmark families evaluated
+under [#166](https://github.com/tensor-systems/droste/issues/166). Direct-sol
+could not complete a single task: all 20 attempts ended in legitimate HTTP 504
+timeouts. Direct-terra completed 14/20, with six further 504 timeouts, but its
+mean F1 of 0.034 was near zero—it essentially failed at the pairwise reasoning.
+Droste completed all 20 tasks at 0.802 mean F1 for $2.14, less than
+direct-terra's $2.50 despite succeeding on every task. No attempt recorded a
+402 or 429. Exhaustive multi-hop reasoning over facts scattered across a long
+context is where the paper's thesis about direct approaches structurally
+failing is clearest in these runs.
+
+The tasks are materialized from
+[`oolongbench/oolong-synth`](https://huggingface.co/datasets/oolongbench/oolong-synth/tree/f0d59eaf0febf130664cfceb710436c8e3216b2b),
+validation `trec_coarse` context-window row 900, at pinned revision
+`f0d59eaf0febf130664cfceb710436c8e3216b2b`. The manifest pins the materialized
+20-task file at SHA-256
+`169a2aaddc8603128f672d32f9aa8a2e0565974d91b6468b7431654dd81bde40`.
+The materializer documents the predicate semantics, and the scorer normalizes
+unordered pairs before computing set precision, recall, and F1. The dataset
+card at the pinned revision does not state a license, so dataset contexts and
+tasks are not redistributed here.
+
+This is a clean result, but its disclosed scope is small: `n=20`, with one
+repetition. It establishes the outcome of this paired run rather than a
+population-wide guarantee.
+
 ## Zero-cost smoke run
 
 From a clean checkout:
@@ -309,7 +507,7 @@ cmp benchmarks/results/oolong-pairs-32k-2026-07-17/report.md \
 
 These result-specific manifests are exact snapshots of the configurations that
 produced the immutable artifacts. The current `rlm-paper-v1.json` manifest is
-the additive union of both live benchmark configurations and therefore has a
+the additive union of the live benchmark configurations and therefore has a
 different SHA-256; reports continue to reject artifacts whose recorded suite
 version or manifest hash differs from the selected snapshot.
 
