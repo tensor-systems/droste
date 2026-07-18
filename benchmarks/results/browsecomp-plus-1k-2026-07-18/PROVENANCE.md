@@ -29,11 +29,13 @@ direct artifacts are honest `context_limit` results with zero model tokens and
 zero cost. This is a genuine incapacity of the direct approach at this scale,
 not a harness bug, silent truncation, or budget artifact.
 
-The 450 JSON files under `artifacts/` are the immutable per-task records for
-150 tasks across three arms. The Droste arm completed 148 tasks; tasks `229`
-and `794` ended in legitimate HTTP 504 timeouts. The adjacent reports are
-deterministic aggregations of those artifacts. No dataset contexts, corpus
-documents, or materialized task files are redistributed in this result
-directory. The exact run-era manifest is preserved as
+The 450 JSON files under `artifacts/` are the per-task records for 150 tasks
+across three arms. The Droste arm completed 148 tasks; tasks `229` and `794`
+ended in legitimate HTTP 504 timeouts. The original deterministic aggregation
+is retained in `report.json`, while the headline semantic score in `report.md`
+comes from the separate `judge-results.json` pass and does not modify those
+prediction artifacts. No dataset contexts, corpus documents, or materialized
+task files are redistributed in this result directory. The exact run-era
+manifest is preserved as
 [`browsecomp-plus-1k-2026-07-18.json`](../../manifests/browsecomp-plus-1k-2026-07-18.json)
 so report regeneration retains strict suite-version and manifest-hash checks.

@@ -211,11 +211,11 @@ corpus. The published run used a deterministic 150-of-830 query sample, about
 [raw artifacts](results/browsecomp-plus-1k-2026-07-18/artifacts) ·
 [provenance](results/browsecomp-plus-1k-2026-07-18/PROVENANCE.md)).
 
-| Arm | Root model | Subcall model | Exact-match score | Successful | Cost | Tokens |
-|---|---|---|---:|---:|---:|---:|
-| direct-sol-browsecomp-plus-1k | gpt-5.6-sol | — | 0.0000 | 0/150 | $0.000000 | 0 |
-| direct-terra-browsecomp-plus-1k | gpt-5.6-terra | — | 0.0000 | 0/150 | $0.000000 | 0 |
-| droste-terra-luna-browsecomp-plus-1k | gpt-5.6-terra | gpt-5.6-luna | 0.5600 | 148/150 | $24.537529 | 7,970,677 |
+| Arm | Root model | Subcall model | Semantic judge | Exact match | Successful | Cost | Tokens |
+|---|---|---|---:|---:|---:|---:|---:|
+| direct-sol-browsecomp-plus-1k | gpt-5.6-sol | — | N/A (context exceeds window) | N/A | 0/150 | $0.000000 | 0 |
+| direct-terra-browsecomp-plus-1k | gpt-5.6-terra | — | N/A (context exceeds window) | N/A | 0/150 | $0.000000 | 0 |
+| droste-terra-luna-browsecomp-plus-1k | gpt-5.6-terra | gpt-5.6-luna | **0.9400** | 0.5600 | 148/150 | $24.537529 | 7,970,677 |
 
 The selected contexts range from 24.1 MB to 44.4 MB, approximately
 6.0M–11.1M tokens. That is 6–10× beyond available model context windows. The
@@ -231,7 +231,20 @@ uses bounded `gpt-5.6-luna` subcalls only on promising evidence. No single LLM
 call receives the full context. This is the paper's core recursive-analysis
 thesis at its most extreme: direct approaches do not merely underperform; the
 problem is structurally outside their input regime, while Droste completes
-148/150 tasks and reaches 0.5600 exact match for $24.54.
+148/150 tasks and reaches 0.9400 semantic-judge accuracy for $24.54. The two
+tasks without predictions count as incorrect, so this is 141 correct answers
+out of all 150 scheduled tasks. The paper reports 88.0%–91.3% on
+BrowseComp-Plus; this run is 2.7 percentage points above the top of that range,
+although it uses a 150-task sample rather than the paper's full evaluation.
+
+BrowseComp-Plus's official methodology uses an LLM judge for semantic
+equivalence. A `gpt-5.6-terra` pass through ModelRelay applied its canonical
+prompt to all 148 predictions for $0.292503. The complete judge responses are
+in [judge-results.json](results/browsecomp-plus-1k-2026-07-18/judge-results.json),
+and the exact-match score remains disclosed as a secondary metric. Exact match
+marked 57 semantically accepted predictions wrong for differences such as
+terminal punctuation, typographic apostrophes, abbreviations, and correct
+additional detail.
 
 The two unsuccessful Droste tasks, `229` and `794`, ended in legitimate HTTP
 504 timeouts. They remain typed artifacts and contribute to the reported
@@ -447,10 +460,12 @@ pool. Each task stores its exact 1,000 IDs in pinned corpus row order, and the
 live harness assembles and hashes a context file on demand. Generated data and
 assembled context caches remain under gitignored `benchmarks/.data/`.
 
-The paper arm deliberately retains the deterministic `exact_match` scorer
-(case- and whitespace-normalized). The upstream BrowseComp-Plus leaderboard's
-Qwen3 LLM judge accepts broader semantic equivalence and is a different,
-model-dependent evaluation contract.
+The harness retains the deterministic `exact_match` scorer (case- and
+whitespace-normalized) as a secondary diagnostic. The published headline uses
+BrowseComp-Plus's official semantic-equivalence methodology: the standalone
+[`browsecomp_judge.py`](browsecomp_judge.py) applies the canonical judge prompt
+to the original predictions and writes a separate JSON result without changing
+the run artifacts.
 
 The pinned task contexts range from about 24.1 MB to 44.4 MB (median 32.3 MB),
 or roughly 6.0M–11.1M tokens under a coarse four-bytes-per-token estimate. The
