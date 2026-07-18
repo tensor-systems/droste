@@ -193,8 +193,7 @@ def test_oolong_semantic_guidance_bounds_auditable_per_record_classification() -
         "    oolong_chunks = [\n"
         "        records[start:start + oolong_chunk_size]\n"
         "        for start in range(0, len(records), oolong_chunk_size)\n"
-        "    ]"
-        in guidance
+        "    ]" in guidance
     )
     assert (
         "                    'required': ['i', 'label'],\n"
@@ -205,13 +204,10 @@ def test_oolong_semantic_guidance_bounds_auditable_per_record_classification() -
         "                            'enum': ['A', 'D', 'E', 'H', 'L', 'N'],\n"
         "                        },\n"
         "                    },\n"
-        "                    'additionalProperties': False,"
-        in guidance
+        "                    'additionalProperties': False," in guidance
     )
     assert (
-        "                'minItems': 1,\n"
-        "                'maxItems': oolong_chunk_size,"
-        in guidance
+        "                'minItems': 1,\n                'maxItems': oolong_chunk_size," in guidance
     )
     assert (
         "        'A = an abbreviation or its expansion; '\n"
@@ -221,28 +217,24 @@ def test_oolong_semantic_guidance_bounds_auditable_per_record_classification() -
         "term; '\n"
         "        'H = a person, group, or human title; '\n"
         "        'L = a place; '\n"
-        "        'N = a count, date, measure, code, order, or other number. '"
-        in guidance
+        "        'N = a count, date, measure, code, order, or other number. '" in guidance
     )
     assert (
         "            + 'Return exactly one object per record, using the record number as i. "
         "'\n"
         "            + f'The i values must cover 1 through {len(oolong_chunk)} exactly "
-        "once.\\n\\n'"
-        in guidance
+        "once.\\n\\n'" in guidance
     )
     assert (
         "    def validate_labels(value, index):\n"
         "        expected = set(range(1, len(oolong_chunks[index]) + 1))\n"
-        "        indices = [item['i'] for item in value['labels']]"
-        in guidance
+        "        indices = [item['i'] for item in value['labels']]" in guidance
     )
     assert (
         "        missing = sorted(expected - set(indices))\n"
         "        duplicates = sorted(duplicates)\n"
         "        extra = sorted(set(indices) - expected)\n"
-        "        if missing or duplicates or extra:"
-        in guidance
+        "        if missing or duplicates or extra:" in guidance
     )
     assert (
         "repair_rounds_by_attempt = (2, 0)\n"
@@ -250,8 +242,7 @@ def test_oolong_semantic_guidance_bounds_auditable_per_record_classification() -
         "while (\n"
         "    (oolong_result is None or oolong_result['errors'])\n"
         "    and attempt < len(repair_rounds_by_attempt)\n"
-        "):"
-        in guidance
+        "):" in guidance
     )
     assert (
         "    oolong_result = llm_batch_json(oolong_prompts, oolong_schema, "
@@ -260,13 +251,11 @@ def test_oolong_semantic_guidance_bounds_auditable_per_record_classification() -
         "    attempt += 1\n"
         "result = oolong_result\n"
         "if result['errors']:\n"
-        "    raise RuntimeError('classification failed')"
-        in guidance
+        "    raise RuntimeError('classification failed')" in guidance
     )
     assert (
         "Never retry a subset, reconstruct any of those objects, or call a subcall helper "
-        "again after this loop."
-        in guidance
+        "again after this loop." in guidance
     )
     assert (
         "chunk_label_strings = []\n"
@@ -278,13 +267,11 @@ def test_oolong_semantic_guidance_bounds_auditable_per_record_classification() -
         "            for item_index in range(1, len(oolong_chunks[chunk_index]) + 1)\n"
         "        )\n"
         "    )\n"
-        "flat_labels = ''.join(chunk_label_strings)"
-        in guidance
+        "flat_labels = ''.join(chunk_label_strings)" in guidance
     )
     assert (
         "if len(flat_labels) != len(records):\n"
-        "    raise RuntimeError('classification length mismatch')"
-        in guidance
+        "    raise RuntimeError('classification length mismatch')" in guidance
     )
     assert (
         "code_to_label = {'A': 'abbreviation', 'D': 'description and abstract concept', "
