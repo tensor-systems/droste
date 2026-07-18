@@ -3,7 +3,7 @@
   "release_tag": "benchmark-data/oolong-pairs-32k-2026-07-17",
   "tarball_sha256": "6aa129b1df692948a8c2961bfe049cbf68353f0aebff8a26d63b968b1abaa89f",
   "verification": {
-    "predictions": "Lean git artifacts pin canonical prediction hashes and byte lengths; the matching full predictions are materialized only from the SHA-256-pinned release asset.",
-    "references": "The existing tasks_sha256-pinned OOLONG-Pairs task materializer deterministically regenerates full references, which are checked against canonical hashes and byte lengths in the lean artifacts."
+    "predictions": "Lean git artifacts pin canonical prediction hashes; the matching full predictions are materialized only from the SHA-256-pinned release asset.",
+    "references": "The existing tasks_sha256-pinned OOLONG-Pairs task materializer deterministically regenerates full references, which are checked against canonical hashes in the lean artifacts."
   }
 }

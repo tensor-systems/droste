@@ -4,7 +4,7 @@ import hashlib
 import json
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, TypeAlias, cast
 
@@ -505,9 +505,7 @@ class RunArtifact:
     prediction: Any = _MISSING
     reference: Any = _MISSING
     prediction_sha256: str | None = None
-    prediction_byte_length: int | None = None
     reference_sha256: str | None = None
-    reference_byte_length: int | None = None
     usage: Usage = Usage()
     cost_microusd: int = 0
     wall_time_ms: int = 0
@@ -556,23 +554,15 @@ class RunArtifact:
             value = getattr(self, name)
             if value is not None and not _SHA256_RE.fullmatch(value):
                 raise ArtifactError(f"{name} must be a lowercase SHA-256 digest or null")
-        for name in ("prediction_byte_length", "reference_byte_length"):
-            value = getattr(self, name)
-            if value is not None and (
-                not isinstance(value, int) or isinstance(value, bool) or value < 0
-            ):
-                raise ArtifactError(f"{name} must be a non-negative integer or null")
         self._validate_value_representation(
             "prediction",
             self.prediction,
             self.prediction_sha256,
-            self.prediction_byte_length,
         )
         self._validate_value_representation(
             "reference",
             self.reference,
             self.reference_sha256,
-            self.reference_byte_length,
         )
 
     @staticmethod
@@ -580,16 +570,13 @@ class RunArtifact:
         name: str,
         inline_value: Any,
         sha256: str | None,
-        byte_length: int | None,
     ) -> None:
         has_inline_value = inline_value is not _MISSING
-        has_hash_marker = sha256 is not None or byte_length is not None
+        has_hash_marker = sha256 is not None
         if has_inline_value and has_hash_marker:
             raise ArtifactError(f"{name} must be inline or hash-only, never both")
         if not has_inline_value and not has_hash_marker:
-            raise ArtifactError(f"{name} must be inline or represented by hash and byte length")
-        if not has_inline_value and (sha256 is None or byte_length is None):
-            raise ArtifactError(f"{name} hash-only form requires SHA-256 and byte length")
+            raise ArtifactError(f"{name} must be inline or represented by SHA-256")
 
     @property
     def has_inline_prediction(self) -> bool:
@@ -616,9 +603,7 @@ class RunArtifact:
             "metric": self.metric,
             "score": self.score,
             "prediction_sha256": self.prediction_sha256,
-            "prediction_byte_length": self.prediction_byte_length,
             "reference_sha256": self.reference_sha256,
-            "reference_byte_length": self.reference_byte_length,
             "usage": self.usage.to_dict(),
             "cost_microusd": self.cost_microusd,
             "wall_time_ms": self.wall_time_ms,
@@ -657,9 +642,7 @@ class RunArtifact:
             "prediction",
             "reference",
             "prediction_sha256",
-            "prediction_byte_length",
             "reference_sha256",
-            "reference_byte_length",
             "usage",
             "cost_microusd",
             "wall_time_ms",
@@ -680,9 +663,7 @@ class RunArtifact:
             "prediction",
             "reference",
             "prediction_sha256",
-            "prediction_byte_length",
             "reference_sha256",
-            "reference_byte_length",
         }
         missing = sorted(expected_fields - conditionally_optional_fields - set(data))
         if missing:
@@ -727,14 +708,6 @@ class RunArtifact:
                 raise ArtifactError(f"{name} must be a non-empty string or null")
             return value
 
-        def optional_nonnegative_int(name: str) -> int | None:
-            value = data.get(name)
-            if value is not None and (
-                not isinstance(value, int) or isinstance(value, bool) or value < 0
-            ):
-                raise ArtifactError(f"{name} must be a non-negative integer or null")
-            return value
-
         usage = Usage(
             root_input_tokens=nonnegative_int("root_input_tokens", usage_value),
             root_output_tokens=nonnegative_int("root_output_tokens", usage_value),
@@ -756,9 +729,7 @@ class RunArtifact:
             prediction=data["prediction"] if "prediction" in data else _MISSING,
             reference=data["reference"] if "reference" in data else _MISSING,
             prediction_sha256=optional_string("prediction_sha256"),
-            prediction_byte_length=optional_nonnegative_int("prediction_byte_length"),
             reference_sha256=optional_string("reference_sha256"),
-            reference_byte_length=optional_nonnegative_int("reference_byte_length"),
             usage=usage,
             cost_microusd=nonnegative_int("cost_microusd"),
             wall_time_ms=nonnegative_int("wall_time_ms"),
@@ -772,3 +743,17 @@ class RunArtifact:
             started_at=optional_string("started_at"),
             droste_commit=required_string("droste_commit"),
         )
+
+
+def to_lean_artifact(artifact: RunArtifact) -> RunArtifact:
+    """Return the reproducible hash-only form of a full run artifact."""
+
+    if not artifact.has_inline_prediction or not artifact.has_inline_reference:
+        raise ArtifactError("only a fully inline artifact can be converted to lean form")
+    return replace(
+        artifact,
+        prediction=_MISSING,
+        reference=_MISSING,
+        prediction_sha256=canonical_json_sha256(artifact.prediction),
+        reference_sha256=canonical_json_sha256(artifact.reference),
+    )

@@ -24,8 +24,8 @@ Luna subcalls perform only the irreducible semantic classification of context
 instances; they do not perform the pair enumeration or aggregation.
 
 The 60 lean JSON files under `artifacts/` are the immutable per-task records for
-20 tasks across three arms. They retain canonical SHA-256 and byte-length
-markers instead of duplicating the full predictions and references. The
+20 tasks across three arms. They retain canonical SHA-256 markers instead of
+duplicating the full predictions and references. The
 adjacent reports are deterministic aggregations of those artifacts; no dataset
 context or materialized task file is redistributed in this result directory.
 The exact suite manifest used for this run is preserved as

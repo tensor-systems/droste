@@ -31,18 +31,21 @@ from benchmarks.models import (
     ArtifactError,
     ManifestError,
     RunArtifact,
+    RunStatus,
+    SuiteManifest,
     Usage,
-    canonical_json_bytes,
     canonical_json_sha256,
     load_manifest,
+    to_lean_artifact,
 )
 from benchmarks.oolong import materialize_oolong
-from benchmarks.oolong_pairs import TASKS as OOLONG_PAIR_TASKS
 from benchmarks.oolong_pairs import (
+    PREDICTIONS_ASSET_SHA256,
     evaluate_predicate,
     materialize_oolong_pairs_predictions,
     parse_labeled_context,
 )
+from benchmarks.oolong_pairs import TASKS as OOLONG_PAIR_TASKS
 from benchmarks.report import ReportError, aggregate, load_artifacts, render_markdown
 from benchmarks.runner import BenchmarkRunError, run_fixture_suite
 from benchmarks.scoring import (
@@ -63,6 +66,13 @@ from droste.protocols.llm_client import TokenUsage
 ROOT = Path(__file__).resolve().parents[1]
 SMOKE_MANIFEST = ROOT / "benchmarks" / "manifests" / "smoke-v1.json"
 PAPER_MANIFEST = ROOT / "benchmarks" / "manifests" / "rlm-paper-v1.json"
+OOLONG_PAIRS_MANIFEST = ROOT / "benchmarks" / "manifests" / "oolong-pairs-2026-07-17.json"
+OOLONG_PAIRS_ARTIFACTS = (
+    ROOT / "benchmarks" / "results" / "oolong-pairs-32k-2026-07-17" / "artifacts"
+)
+OOLONG_PAIRS_FULL_VALUES_FIXTURE = (
+    ROOT / "tests" / "fixtures" / "oolong-pairs-droste-terra-luna-pairs--19-values.json"
+)
 
 
 def test_manifest_pins_paper_tasks_and_published_live_arms() -> None:
@@ -1188,35 +1198,77 @@ def test_report_recomputes_deterministic_scores(tmp_path: Path) -> None:
 
 def _make_one_smoke_artifact_lean(output: Path) -> tuple[str, object]:
     path = next(output.glob("smoke-exact--fixture-direct--mismatch.json"))
-    value = json.loads(path.read_text())
-    prediction = value.pop("prediction")
-    reference = value.pop("reference")
-    value.update(
-        {
-            "prediction_sha256": canonical_json_sha256(prediction),
-            "prediction_byte_length": len(canonical_json_bytes(prediction)),
-            "reference_sha256": canonical_json_sha256(reference),
-            "reference_byte_length": len(canonical_json_bytes(reference)),
-        }
+    full = RunArtifact.from_dict(json.loads(path.read_text()))
+    path.write_text(json.dumps(to_lean_artifact(full).to_dict()))
+    return "fixture-direct--mismatch", full.prediction
+
+
+def _write_single_oolong_pairs_lean_artifact(
+    output: Path, *, status: RunStatus = "ok"
+) -> tuple[SuiteManifest, Path]:
+    manifest = load_manifest(SMOKE_MANIFEST)
+    manifest = replace(
+        manifest,
+        benchmarks=(replace(manifest.benchmarks[0], benchmark_id="oolong-pairs"),),
+        arms=(manifest.arms[0],),
     )
-    path.write_text(json.dumps(value))
-    return "fixture-direct--mismatch", prediction
+    prediction = "  ALPHA  " if status == "ok" else None
+    full = RunArtifact(
+        suite_id=manifest.suite_id,
+        suite_version=manifest.suite_version,
+        manifest_sha256=manifest.sha256,
+        benchmark_id="oolong-pairs",
+        task_id="normalization",
+        arm_id="fixture-droste",
+        status=status,
+        metric="exact_match",
+        score=1.0 if status == "ok" else None,
+        prediction=prediction,
+        reference="Alpha",
+        error=None if status == "ok" else "provider failed",
+    )
+    output.mkdir()
+    artifact_path = output / f"{full.artifact_id}.json"
+    artifact_path.write_text(json.dumps(to_lean_artifact(full).to_dict()))
+    return manifest, artifact_path
 
 
-def test_report_verifies_lean_artifact_with_materialized_prediction(
+def test_report_verifies_oolong_pairs_lean_artifact_with_scoped_prediction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import benchmarks.report as report_module
 
+    output = tmp_path / "artifacts"
+    manifest, _ = _write_single_oolong_pairs_lean_artifact(output)
+    predictions_path = tmp_path / "predictions.json"
+    predictions_path.write_text(json.dumps({"fixture-droste--normalization": "  ALPHA  "}))
+    monkeypatch.setattr(report_module, "PREDICTIONS_PATH", predictions_path)
+
+    assert len(load_artifacts(output, manifest, task_ids=["normalization"])) == 1
+
+
+def test_report_rejects_cross_benchmark_lean_prediction_lookup(tmp_path: Path) -> None:
     manifest = load_manifest(SMOKE_MANIFEST)
     output = tmp_path / "artifacts"
     run_fixture_suite(manifest, output)
-    prediction_key, prediction = _make_one_smoke_artifact_lean(output)
-    predictions_path = tmp_path / "predictions.json"
-    predictions_path.write_text(json.dumps({prediction_key: prediction}))
-    monkeypatch.setattr(report_module, "PREDICTIONS_PATH", predictions_path)
+    _make_one_smoke_artifact_lean(output)
 
-    assert len(load_artifacts(output, manifest)) == 10
+    with pytest.raises(
+        ReportError,
+        match="lean artifacts for benchmark 'smoke-exact' have no registered predictions",
+    ):
+        load_artifacts(output, manifest)
+
+
+def test_report_rejects_tampered_failed_lean_prediction_hash(tmp_path: Path) -> None:
+    output = tmp_path / "artifacts"
+    manifest, artifact_path = _write_single_oolong_pairs_lean_artifact(output, status="error")
+    artifact = json.loads(artifact_path.read_text())
+    artifact["prediction_sha256"] = "0" * 64
+    artifact_path.write_text(json.dumps(artifact))
+
+    with pytest.raises(ReportError, match="prediction does not match canonical JSON null"):
+        load_artifacts(output, manifest, task_ids=["normalization"])
 
 
 def test_report_fails_closed_when_lean_predictions_are_not_materialized(
@@ -1224,17 +1276,15 @@ def test_report_fails_closed_when_lean_predictions_are_not_materialized(
 ) -> None:
     import benchmarks.report as report_module
 
-    manifest = load_manifest(SMOKE_MANIFEST)
     output = tmp_path / "artifacts"
-    run_fixture_suite(manifest, output)
-    _make_one_smoke_artifact_lean(output)
+    manifest, _ = _write_single_oolong_pairs_lean_artifact(output)
     monkeypatch.setattr(report_module, "PREDICTIONS_PATH", tmp_path / "missing.json")
 
     with pytest.raises(
         ReportError,
         match="materialize-oolong-pairs-predictions --output",
     ):
-        load_artifacts(output, manifest)
+        load_artifacts(output, manifest, task_ids=["normalization"])
 
 
 def test_report_rejects_model_identity_on_fixture_arm(tmp_path: Path) -> None:
@@ -1337,9 +1387,7 @@ def test_artifact_accepts_falsy_inline_values_and_hash_only_values() -> None:
     lean = RunArtifact(
         **common,
         prediction_sha256=canonical_json_sha256(""),
-        prediction_byte_length=len(canonical_json_bytes("")),
         reference_sha256=canonical_json_sha256(None),
-        reference_byte_length=len(canonical_json_bytes(None)),
     )
 
     assert inline.has_inline_prediction
@@ -1349,6 +1397,28 @@ def test_artifact_accepts_falsy_inline_values_and_hash_only_values() -> None:
     assert "prediction" not in lean.to_dict()
     assert "reference" not in lean.to_dict()
     assert RunArtifact.from_dict(lean.to_dict()) == lean
+
+
+def test_real_oolong_pairs_lean_artifact_is_reproducible_from_full_values() -> None:
+    values = json.loads(OOLONG_PAIRS_FULL_VALUES_FIXTURE.read_text())
+    manifest = load_manifest(OOLONG_PAIRS_MANIFEST)
+    benchmark = next(item for item in manifest.benchmarks if item.benchmark_id == "oolong-pairs")
+    assert values["prediction_asset_sha256"] == PREDICTIONS_ASSET_SHA256
+    assert values["tasks_sha256"] == benchmark.tasks_sha256
+
+    artifact_path = OOLONG_PAIRS_ARTIFACTS / (
+        f"oolong-pairs--{values['arm_id']}--{values['task_id']}.json"
+    )
+    committed = RunArtifact.from_dict(json.loads(artifact_path.read_text()))
+    full = replace(
+        committed,
+        prediction=values["prediction"],
+        reference=values["reference"],
+        prediction_sha256=None,
+        reference_sha256=None,
+    )
+
+    assert to_lean_artifact(full) == committed
 
 
 @pytest.mark.parametrize(
@@ -1363,14 +1433,7 @@ def test_artifact_accepts_falsy_inline_values_and_hash_only_values() -> None:
             "never both",
         ),
         (
-            {"prediction_byte_length": 1, "reference": "answer"},
-            "requires SHA-256 and byte length",
-        ),
-        (
-            {
-                "prediction_sha256": "a" * 64,
-                "prediction_byte_length": 1,
-            },
+            {"prediction_sha256": "a" * 64},
             "reference must be inline or represented",
         ),
     ],

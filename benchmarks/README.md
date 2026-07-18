@@ -147,7 +147,7 @@ context, and provenance files are gitignored and never checked in.
 The `oolong_pairs_f1` scorer parses, normalizes, and deduplicates ID pairs before
 computing set precision, recall, and F1.
 
-Published OOLONG-Pairs artifacts keep only canonical hashes and byte lengths
+Published OOLONG-Pairs artifacts keep only canonical hashes
 for predictions and references. Materialize the release-pinned predictions
 before regenerating their report:
 
