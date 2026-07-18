@@ -363,8 +363,12 @@ deterministic. Scores and measured costs below are from the published
     canonical semantic-equivalence judge prompt, using `gpt-5.6-terra`. The
     deterministic exact-match secondary metric is 0.5600. The separate judge
     pass cost $0.292503; $24.54 is the Droste answer-generation cost shown in
-    the table. The paper comparison is descriptive because this run uses a
-    150-task sample rather than the paper's full evaluation.
+    the table. See the [judge-augmented summary](benchmarks/results/browsecomp-plus-1k-2026-07-18/SUMMARY.md)
+    and the separately [regenerable exact-match report](benchmarks/results/browsecomp-plus-1k-2026-07-18/report.md).
+    The paper's range was judged by Qwen3-32B, while this result was judged by
+    `gpt-5.6-terra`; judge-model leniency could explain part of the gap. Along
+    with the 150-task sample size, that makes the comparison directionally
+    informative rather than a strictly controlled methodology match.
 
 Across the published suite, Droste wins or ties on accuracy in all but CodeQA
 and is dramatically more cost-efficient wherever a direct comparison can run.

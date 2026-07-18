@@ -207,7 +207,8 @@ population-wide guarantee.
 BrowseComp-Plus tests multi-hop factual retrieval over a large document
 corpus. The published run used a deterministic 150-of-830 query sample, about
 1,000 documents per query, three arms, and one repetition on 2026-07-18
-([report](results/browsecomp-plus-1k-2026-07-18/report.md) ·
+([judge-augmented summary](results/browsecomp-plus-1k-2026-07-18/SUMMARY.md) ·
+[regenerable exact-match report](results/browsecomp-plus-1k-2026-07-18/report.md) ·
 [raw artifacts](results/browsecomp-plus-1k-2026-07-18/artifacts) ·
 [provenance](results/browsecomp-plus-1k-2026-07-18/PROVENANCE.md)).
 
@@ -236,6 +237,10 @@ tasks without predictions count as incorrect, so this is 141 correct answers
 out of all 150 scheduled tasks. The paper reports 88.0%–91.3% on
 BrowseComp-Plus; this run is 2.7 percentage points above the top of that range,
 although it uses a 150-task sample rather than the paper's full evaluation.
+The paper's range was judged by Qwen3-32B, while this result was judged by
+`gpt-5.6-terra`; judge-model leniency could account for part of the observed
+gap. Treat the comparison as directionally informative, not a strictly
+controlled methodology match.
 
 BrowseComp-Plus's official methodology uses an LLM judge for semantic
 equivalence. A `gpt-5.6-terra` pass through ModelRelay applied its canonical
@@ -639,8 +644,9 @@ uv run python -m benchmarks materialize-browsecomp-plus \
   --output benchmarks/.data/browsecomp-plus-1k-seed-166001-v1
 ```
 
-The BrowseComp-Plus report then regenerates from the committed artifacts with
-all 150 selected task IDs:
+The plain BrowseComp-Plus exact-match report then regenerates from the committed
+artifacts with all 150 selected task IDs. The judge-augmented `SUMMARY.md` is a
+separate, labeled summary and is not an output of this command:
 
 ```bash
 task_args=()

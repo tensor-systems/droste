@@ -47,7 +47,8 @@ def parse_verdict(response: str) -> tuple[bool, int]:
     """Parse the official fields, defaulting an unparseable verdict to no."""
 
     plain = response.replace("**", "").replace("__", "")
-    correct_match = _CORRECT_RE.search(plain)
+    correct_matches = list(_CORRECT_RE.finditer(plain))
+    correct_match = correct_matches[-1] if correct_matches else None
     confidence_match = _CONFIDENCE_RE.search(plain)
     correct = bool(correct_match and correct_match.group(1).lower() == "yes")
     confidence = int(confidence_match.group(1)) if confidence_match else 100
@@ -247,7 +248,7 @@ def main() -> None:
     parser.add_argument(
         "--artifacts",
         type=Path,
-        default=root / "benchmark-results/browsecomp-plus-real-150-75354f3/all-arms-final",
+        default=root / "benchmarks/results/browsecomp-plus-1k-2026-07-18/artifacts",
     )
     parser.add_argument(
         "--tasks",

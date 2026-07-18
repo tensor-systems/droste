@@ -20,10 +20,11 @@ Droste interpretive choices, not claims about the paper authors' held-out set:
    JSONL pool with a byte-offset index.  Tasks store ordered document-ID lists;
    the live harness assembles their context on demand.  This avoids duplicating
    up to 150,000 large document bodies while retaining byte-level hashes.
-5. The RLM-paper arm uses Droste's deterministic ``exact_match`` scorer, which
-   case-folds and normalizes whitespace.  BrowseComp-Plus's leaderboard uses an
-   LLM judge for semantically equivalent long-form agent responses; adopting
-   that paid, model-dependent judge would define a different benchmark arm.
+5. BrowseComp-Plus's official semantic-equivalence judge is the primary,
+   headline metric, matching the benchmark's published methodology.  The judge
+   pass is implemented separately in ``benchmarks/browsecomp_judge.py``.
+   Droste's deterministic ``exact_match`` scorer, which case-folds and
+   normalizes whitespace, remains a cheap reproducible secondary metric.
 
 The official reference decryptor at texttron/BrowseComp-Plus first Base64
 decodes each string, repeats the SHA-256 digest of the UTF-8 canary from byte
