@@ -1,0 +1,32 @@
+{
+  "arm_id": "droste-terra-luna-browsecomp-plus-1k",
+  "benchmark_id": "browsecomp-plus-1k",
+  "cost_microusd": 98382,
+  "droste_commit": "75354f3c10736d6fac517cd8e5955d62865ee845",
+  "error": null,
+  "iterations": 5,
+  "manifest_sha256": "2bc0a0010299db07fb7366c76dd7b1fa5c734859da31332ca63a3e7b0a635cba",
+  "metric": "exact_match",
+  "prediction": "Armando Vega",
+  "price_table_version": "modelrelay-pricing-sha256:3c92ae36dcb9e498e885d213e9029e82132f00235da1c4b46b919e5e23aed61b",
+  "provider": "openai",
+  "reference": "Armando Vega",
+  "root_model": "gpt-5.6-terra",
+  "schema_version": 1,
+  "score": 1.0,
+  "started_at": "2026-07-18T16:21:53.430090Z",
+  "status": "ok",
+  "subcall_model": "gpt-5.6-luna",
+  "subcalls": 1,
+  "suite_id": "rlm-paper",
+  "suite_version": "0.2.0",
+  "task_id": "494",
+  "usage": {
+    "root_input_tokens": 29294,
+    "root_output_tokens": 1492,
+    "subcall_input_tokens": 2527,
+    "subcall_output_tokens": 40,
+    "total_tokens": 33353
+  },
+  "wall_time_ms": 23293
+}

@@ -573,6 +573,9 @@ verifiers = [
 ]
 
 [package.dev-dependencies]
+benchmarks = [
+    { name = "pyarrow" },
+]
 dev = [
     { name = "pytest" },
     { name = "python-dateutil" },
@@ -588,6 +591,7 @@ requires-dist = [
 provides-extras = ["verifiers"]
 
 [package.metadata.requires-dev]
+benchmarks = [{ name = "pyarrow", specifier = ">=21.0.0" }]
 dev = [
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "python-dateutil", specifier = ">=2.9.0.post0" },

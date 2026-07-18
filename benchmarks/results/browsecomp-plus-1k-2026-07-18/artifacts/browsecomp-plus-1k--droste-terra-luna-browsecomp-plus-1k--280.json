@@ -1,0 +1,32 @@
+{
+  "arm_id": "droste-terra-luna-browsecomp-plus-1k",
+  "benchmark_id": "browsecomp-plus-1k",
+  "cost_microusd": 179820,
+  "droste_commit": "75354f3c10736d6fac517cd8e5955d62865ee845",
+  "error": null,
+  "iterations": 9,
+  "manifest_sha256": "2bc0a0010299db07fb7366c76dd7b1fa5c734859da31332ca63a3e7b0a635cba",
+  "metric": "exact_match",
+  "prediction": "Sulzeer Jeremiah Campbell (Sol Campbell)",
+  "price_table_version": "modelrelay-pricing-sha256:3c92ae36dcb9e498e885d213e9029e82132f00235da1c4b46b919e5e23aed61b",
+  "provider": "openai",
+  "reference": "Sol Campbell",
+  "root_model": "gpt-5.6-terra",
+  "schema_version": 1,
+  "score": 0.0,
+  "started_at": "2026-07-18T02:55:46.847168Z",
+  "status": "ok",
+  "subcall_model": "gpt-5.6-luna",
+  "subcalls": 1,
+  "suite_id": "rlm-paper",
+  "suite_version": "0.2.0",
+  "task_id": "280",
+  "usage": {
+    "root_input_tokens": 52352,
+    "root_output_tokens": 3231,
+    "subcall_input_tokens": 145,
+    "subcall_output_tokens": 55,
+    "total_tokens": 55783
+  },
+  "wall_time_ms": 42536
+}

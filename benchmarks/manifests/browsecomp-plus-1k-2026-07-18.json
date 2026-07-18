@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "suite_id": "rlm-paper",
+  "suite_version": "0.2.0",
+  "paper": {
+    "title": "Recursive Language Models",
+    "revision": "arXiv:2512.24601v3",
+    "url": "https://arxiv.org/abs/2512.24601v3"
+  },
+  "live_run": {
+    "enabled": false,
+    "blockers": [
+      {
+        "issue": "#81",
+        "reason": "A public model configuration and immutable live result artifacts have not been published."
+      }
+    ]
+  },
+  "benchmarks": [
+    {
+      "id": "s-niah",
+      "dataset": "RULER S-NIAH",
+      "dataset_version": "pending-pin",
+      "split": "paper-v3",
+      "scorer": "exact_match",
+      "phase": 2,
+      "status": "planned"
+    },
+    {
+      "id": "browsecomp-plus-1k",
+      "dataset": "Tevatron/browsecomp-plus + Tevatron/browsecomp-plus-corpus",
+      "dataset_version": "queries@144cff8e35b5eaef7e526346aa60774a9deb941f;corpus@b27b02bc3e45511b8b82a13e6f90ce761df726f6",
+      "split": "test/150-sampled-seed=166001/1k-documents-per-query",
+      "scorer": "exact_match",
+      "tasks_path": "../.data/browsecomp-plus-1k-seed-166001-v1/tasks.json",
+      "tasks_sha256": "73a84c0021d55d1f44559613bd04eb28a867ceddc9aed22192af96e8551dded1",
+      "phase": 3,
+      "status": "ready"
+    },
+    {
+      "id": "oolong",
+      "dataset": "oolongbench/oolong-synth",
+      "dataset_version": "f0d59eaf0febf130664cfceb710436c8e3216b2b",
+      "split": "validation/trec_coarse/context_len=131072/rows=1050-1099",
+      "scorer": "oolong_official",
+      "tasks_path": "../.data/oolong-trec-coarse-131k-v1/tasks.json",
+      "tasks_sha256": "28abaefcbcba1d843a384115a1217ea0017201b13074c95de6feb313c40c8da4",
+      "phase": 1,
+      "status": "ready"
+    },
+    {
+      "id": "oolong-pairs",
+      "dataset": "OOLONG-Pairs",
+      "dataset_version": "pending-pin",
+      "split": "paper-v3",
+      "scorer": "token_f1",
+      "phase": 1,
+      "status": "planned"
+    },
+    {
+      "id": "longbench-v2-codeqa",
+      "dataset": "LongBench-v2",
+      "dataset_version": "pending-pin",
+      "split": "CodeQA",
+      "scorer": "exact_match",
+      "phase": 3,
+      "status": "planned"
+    },
+    {
+      "id": "tag-bench",
+      "dataset": "TAG-Bench",
+      "dataset_version": "pending-pin",
+      "split": "droste-follow-on",
+      "scorer": "exact_match",
+      "phase": 2,
+      "status": "planned"
+    }
+  ],
+  "arms": [
+    {
+      "id": "direct-sol-browsecomp-plus-1k",
+      "method": "direct-model",
+      "executor": "modelrelay",
+      "model": {
+        "provider": "openai",
+        "root_model": "gpt-5.6-sol",
+        "subcall_model": null,
+        "root_reasoning_effort": "medium",
+        "subcall_reasoning_effort": null,
+        "temperature": null
+      },
+      "limits": {
+        "tokens": 12000000,
+        "subcalls": 0,
+        "depth": 0,
+        "wall_ms": 900000,
+        "root_output_tokens": 2048,
+        "subcall_output_tokens": 2048,
+        "concurrency": 1
+      }
+    },
+    {
+      "id": "direct-terra-browsecomp-plus-1k",
+      "method": "direct-model",
+      "executor": "modelrelay",
+      "model": {
+        "provider": "openai",
+        "root_model": "gpt-5.6-terra",
+        "subcall_model": null,
+        "root_reasoning_effort": "medium",
+        "subcall_reasoning_effort": null,
+        "temperature": null
+      },
+      "limits": {
+        "tokens": 12000000,
+        "subcalls": 0,
+        "depth": 0,
+        "wall_ms": 900000,
+        "root_output_tokens": 2048,
+        "subcall_output_tokens": 2048,
+        "concurrency": 1
+      }
+    },
+    {
+      "id": "droste-terra-luna-browsecomp-plus-1k",
+      "method": "droste",
+      "executor": "modelrelay",
+      "model": {
+        "provider": "openai",
+        "root_model": "gpt-5.6-terra",
+        "subcall_model": "gpt-5.6-luna",
+        "root_reasoning_effort": "medium",
+        "subcall_reasoning_effort": "none",
+        "temperature": null
+      },
+      "limits": {
+        "tokens": 2000000,
+        "subcalls": 150,
+        "depth": 1,
+        "wall_ms": 900000,
+        "root_output_tokens": 4096,
+        "subcall_output_tokens": 2048,
+        "concurrency": 8
+      }
+    }
+  ]
+}

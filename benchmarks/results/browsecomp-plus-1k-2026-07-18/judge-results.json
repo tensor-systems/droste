@@ -1,0 +1,766 @@
+{
+  "accuracy": 0.94,
+  "automatic_incorrect": 2,
+  "correct_count": 141,
+  "exact_match_accuracy": 0.56,
+  "exact_match_correct": 84,
+  "input_tokens": 66085,
+  "judge_cost_microusd": 292503,
+  "judge_model": "gpt-5.6-terra",
+  "judged_tasks": 148,
+  "max_cost_microusd": 5000000,
+  "output_tokens": 8486,
+  "results": {
+    "1000": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Matthew Arnum Barnor\n\n[correct_answer]: Matthew Arnum Barnor\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1027": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: 17\n\n[correct_answer]: 17\n\nreasoning: The response states that he was \u201c17 years old,\u201d which is semantically equivalent to the correct answer, 17.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "103": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Induction Design: A Method for Evolutionary Design\n\n[correct_answer]: Induction Design: A Method for Evolutionary Design\n\nreasoning: The extracted final answer exactly matches the provided correct answer, including the subtitle.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1034": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Nicholas Munene Mutuma\n\n[correct_answer]: Nicholas Munene Mutuma\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1048": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Francesca Biancani\n\n[correct_answer]: Francesca Biancani\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1052": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: The Legend of Scarface\n\n[correct_answer]: The Legend of Scarface\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1055": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Escaping the Memory\n\n[correct_answer]: Escaping the Memory\n\nreasoning: The extracted final answer exactly matches the provided correct answer word for word.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1068": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Clare Wigfall\n\n[correct_answer]: Clare Wigfall\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "1073": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Mahama Duwiejua\n\n[correct_answer]: Professor Mahama Duwiejua\n\nreasoning: The response gives the same individual's full personal name as the correct answer, omitting only the professional title \u201cProfessor.\u201d This is a semantically equivalent answer and does not introduce any inconsistency.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1083": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Dr. Martens\n\n[correct_answer]: Dr Martens\n\nreasoning: \u201cDr. Martens\u201d is semantically equivalent to \u201cDr Martens\u201d; the only difference is punctuation.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1085": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: The Wonders of Modern Science: Some Half Human Monsters Once Thought to Be of the Devil's Brood\n\n[correct_answer]: The Wonders of Modern Science: Some Half Human Monsters Once Thought to Be of the Devil's Brood\n\nreasoning: The extracted final answer exactly matches the provided correct answer, including wording and punctuation.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1095": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Duncan Clarke\n\n[correct_answer]: Duncan Clarke\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "11": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: The Compassionate Pugilist\n\n[correct_answer]: Compassionate Pugilist\n\nreasoning: The extracted answer matches the correct answer exactly aside from the optional leading article \u201cThe,\u201d which does not change the nickname\u2019s meaning.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1110": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Perfect Dark \u2013 Alien Conflict\n\n[correct_answer]: Perfect Dark: Alien Conflict\n\nreasoning: The extracted answer is semantically equivalent to the correct answer. The only difference is punctuation (an en dash instead of a colon), which does not change the track title.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1111": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Stephen Fontenot\n\n[correct_answer]: Stephen Fontenot\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1127": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Macrocheira kaempferi\n\n[correct_answer]: Macrocheira Kaempferi\n\nreasoning: The extracted answer matches the correct scientific name exactly aside from capitalization of the species epithet, which is a permissible formatting variation.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "113": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Paropsis dilatata\n\n[correct_answer]: Paropsis dilatata\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1135": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Bah\u00e1\u2019\u00ed Faith\n\n[correct_answer]: Bah\u00e1\u2019\u00ed\n\nreasoning: \u201cBah\u00e1\u2019\u00ed Faith\u201d is the standard full name of the religion referred to as \u201cBah\u00e1\u2019\u00ed,\u201d so it is semantically equivalent to the correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1158": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Tinsel\n\n[correct_answer]: Tinsel\n\nreasoning: The extracted final answer exactly matches the correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1163": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Mohammed Olatunde Dabiri\n\n[correct_answer]: Mohammed Olatunde Dabiri\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "1167": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Daniel '16\n\n[correct_answer]: Daniel \u201916\n\nreasoning: The extracted answer matches the correct answer. The only difference is the apostrophe character used (straight apostrophe versus typographic apostrophe), which is a harmless string variation.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1169": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Emily Aston\n\n[correct_answer]: Emily Aston\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "1187": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: The Buddhist Monuments at Sanchi\u2014specifically the Great Stupa at Sanchi, Madhya Pradesh, India.\n\n[correct_answer]: The Buddhist Monuments at Sanchi\n\nreasoning: The extracted answer identifies the Buddhist Monuments at Sanchi, which exactly matches the correct answer. The added specification of the Great Stupa at Sanchi and its location is consistent with the broader UNESCO site designation.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1194": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: KT Tunstall\n\n[correct_answer]: KT Tunstall\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1196": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Looking at History\n\n[correct_answer]: Looking at History\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1204": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Stephan Weyte\n\n[correct_answer]: Stephan Weyte\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1213": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Murder at the Windmill (1949)\n\n[correct_answer]: Murder at the Windmill\n\nreasoning: The extracted answer names \"Murder at the Windmill,\" which exactly matches the correct answer. The added release year, 1949, is consistent with the title and does not alter the answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "1219": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Pirates of the Caribbean (2003 video game)\n\n[correct_answer]: Pirates of the Caribbean\n\nreasoning: The extracted answer matches the correct answer and adds a correct, more specific clarification identifying the 2003 video game. This is semantically equivalent to the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1222": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: The Fundamentals of Bread Making: The Science of Bread\n\n[correct_answer]: The Fundamentals of Bread Making: The Science of Bread\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "1225": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Shivsagar Lake (Shivsagar Reservoir)\n\n[correct_answer]: Shivsagar Lake\n\nreasoning: The extracted answer names Shivsagar Lake, which exactly matches the correct answer. \u201cShivsagar Reservoir\u201d is an additional synonymous descriptor and does not conflict with the correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "1227": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Athene blewitti\n\n[correct_answer]: Athene blewitti\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "1237": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Francesco Cossiga\n\n[correct_answer]: Francesco Cossiga\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "1240": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Waheed Murad\n\n[correct_answer]: Waheed Murad\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1247": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Songs My Brothers Taught Me\n\n[correct_answer]: Songs My Brothers Taught Me\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1248": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Driulis Gonz\u00e1lez\n\n[correct_answer]: Driulis Gonzalez\n\nreasoning: The extracted answer matches the correct answer. The only difference is the accent mark in \u201cGonz\u00e1lez,\u201d which is a permissible spelling variation and semantically equivalent.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1250": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Ahsan Manzil (the Pink Palace) in Dhaka, Bangladesh\n\n[correct_answer]: Ahsan Manzil\n\nreasoning: The extracted answer names Ahsan Manzil, which exactly matches the correct answer. The added alternate name and location are consistent elaborations and do not change the identity of the place.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "1252": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: 13 August 2004 to 29 August 2004 (2004 Summer Olympics)\n\n[correct_answer]: August 13-August 29, 2004\n\nreasoning: The response gives the same start date, end date, and year as the correct answer. The additional identification of the event as the 2004 Summer Olympics is consistent and does not alter the answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1254": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Muhammad Qavi Khan\n\n[correct_answer]: Muhammad Qavi Khan\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1258": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Samia Suluhu Hassan\n\n[correct_answer]: Samia Suluhu Hassan\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "1262": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Storm and Silence by Rob Thier\n\n[correct_answer]: Storm and Silence\n\nreasoning: The extracted answer includes the exact correct title, \u201cStorm and Silence,\u201d and adds the author name, Rob Thier. This additional detail is consistent and does not alter the answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "1265": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Kristen Bell\n\n[correct_answer]: Kristen Bell\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "1266": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Maryam Tanveer Ali\n\n[correct_answer]: Maryam Tanveer Ali\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "131": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Parowski\n\n[correct_answer]: Parowski\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "134": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Martyna Laszcz\n\n[correct_answer]: Martyna Laszcz\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "152": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Sergio Reggiani\n\n[correct_answer]: Sergio Reggiani\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "153": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Walter Allen\n\n[correct_answer]: Walter Allen\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "156": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: \u201cThe Great Blue Heron, Patient Hunter\u201d \u2014 New Age Graphics is located in Wheaton, Maryland.\n\n[correct_answer]: The Great Blue Heron, Patient Hunter; Wheaton, MD\n\nreasoning: The article title exactly matches the correct answer. The location given as Wheaton, Maryland is semantically equivalent to Wheaton, MD. The additional business name, New Age Graphics, does not conflict with the correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "159": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: October 15, 2016\n\n[correct_answer]: October 15, 2016\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "176": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Daniel Goleman\n\n[correct_answer]: Daniel Goleman\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "178": {
+      "confidence": 100,
+      "correct": false,
+      "judge_response": "extracted_final_answer: VETLAM I\n\n[correct_answer]: VETLAM\n\nreasoning: The response adds \u201cI\u201d to the required abbreviation \u201cVETLAM.\u201d This is not an exact match and introduces an additional phase designation not present in the correct answer, so it is not semantically equivalent under the stated criteria.\n\ncorrect: no\n\nconfidence: 100"
+    },
+    "179": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Abangan 2024\n\n[correct_answer]: Abangan 2024\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "184": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Jacob W. Crisp\n\n[correct_answer]: Jacob W. Crisp\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "190": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Ameesha Patel\n\n[correct_answer]: Ameesha Patel\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "219": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Fall of the Queen Bean\n\n[correct_answer]: Fall of the Queen Bean\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "223": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: J. K. Rowling\n\n[correct_answer]: J.K. Rowling\n\nreasoning: The extracted answer is semantically equivalent to the correct answer; the difference is only spacing in the initials. The additional statement about the Robert Galbraith pseudonym is correct and does not create ambiguity.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "229": {
+      "confidence": 100,
+      "correct": false,
+      "judge_response": "No prediction: HTTP 504 timeout; counted incorrect without an LLM call."
+    },
+    "233": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Chris Jericho\n\n[correct_answer]: Chris Jericho\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "237": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Edward Winslow\n\n[correct_answer]: Edward Winslow\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "244": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Psychedelics\n\n[correct_answer]: Psychedelics\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "253": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Norman Mapeza\n\n[correct_answer]: Norman Takanyariwa Mapeza\n\nreasoning: \"Norman Mapeza\" is a shortened form of the full name \"Norman Takanyariwa Mapeza\" and refers to the same individual. The response is semantically equivalent to the correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "257": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Sasquatch Books\n\n[correct_answer]: Sasquatch Books\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "262": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Steve Falat\n\n[correct_answer]: Steve Falat\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "276": {
+      "confidence": 100,
+      "correct": false,
+      "judge_response": "extracted_final_answer: The Upper Missouri Expedition\n\n[correct_answer]: Ashley-Henry\n\nreasoning: \u201cThe Upper Missouri Expedition\u201d is not semantically equivalent to \u201cAshley-Henry.\u201d The response gives a different expedition name than the specified correct answer.\n\ncorrect: no\n\nconfidence: 100"
+    },
+    "280": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Sulzeer Jeremiah Campbell (Sol Campbell)\n\n[correct_answer]: Sol Campbell\n\nreasoning: \u201cSulzeer Jeremiah Campbell\u201d is Sol Campbell\u2019s full legal name, and the parenthetical explicitly gives \u201cSol Campbell.\u201d The response is therefore semantically equivalent to the correct answer, with accurate additional detail.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "287": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: 07/28/1865\n\n[correct_answer]: 07/28/1865\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "294": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Christian Friedrich Samuel Hahnemann\n\n[correct_answer]: Christian Friedrich Samuel Hahnemann\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "295": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Ryan Holiday\n\n[correct_answer]: Ryan Holiday\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "310": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: KeSPA Cup 2019\n\n[correct_answer]: Kespa Cup 2019\n\nreasoning: The extracted answer is semantically equivalent to the correct answer. The capitalization variation in \u201cKeSPA\u201d versus \u201cKespa\u201d does not change the tournament name.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "33": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Australian\n\n[correct_answer]: Australian\n\nreasoning: The extracted final answer exactly matches the correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "384": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: December 15, 1997\n\n[correct_answer]: December 15, 1997\n\nreasoning: The response explicitly gives \u201cDecember 15, 1997\u201d as the original broadcast date, which exactly matches the correct answer. The additional episode details do not alter the extracted final answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "387": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: 5 TB of storage\n\n[correct_answer]: 5TB\n\nreasoning: The extracted answer is semantically equivalent to the correct answer. Both specify 5 terabytes of storage; the spacing and added wording do not change the meaning.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "391": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Mar\u00eda Constanza Guzm\u00e1n\n\n[correct_answer]: Mar\u00eda Constanza Guzm\u00e1n\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "396": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Barbizon\n\n[correct_answer]: Barbizon\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "397": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: SMC-09-020\n\n[correct_answer]: SMC-09-020\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "402": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Kenya\n\n[correct_answer]: Kenya\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "413": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: 20\n\n[correct_answer]: 20\n\nreasoning: The response gives the exact same numerical answer as the correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "414": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Rebecca\n\n[correct_answer]: Rebecca\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "425": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Graham Cracker Crumble\n\n[correct_answer]: Graham Cracker Crumble\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "426": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Noor Taher\n\n[correct_answer]: Noor Taher\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "435": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: 65 albums\n\n[correct_answer]: 65\n\nreasoning: The response states \u201c65 albums,\u201d which is semantically equivalent to the correct answer of 65.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "485": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Michael\n\n[correct_answer]: Michael\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "494": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Armando Vega\n\n[correct_answer]: Armando Vega\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "495": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: 2015, Ayoyinka\n\n[correct_answer]: 2015, Ayoyinka\n\nreasoning: The response states that Mojisola Ayoyinka lost her mother in 2015 and that her last name is Ayoyinka. This exactly matches the required year and last name.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "498": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Singh Is Bliing\n\n[correct_answer]: Singh Is Bliing.\n\nreasoning: The extracted final answer matches the correct answer exactly aside from terminal punctuation.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "500": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Fort Santiago\n\n[correct_answer]: Fort Santiago\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "502": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Tobin Sprout \u2014 \u201cSerial Killer\u201d\n\n[correct_answer]: Tobin Sprout - Serial Killer\n\nreasoning: The extracted answer names the same artist and song title as the correct answer. The dash style and quotation marks are only formatting differences and do not change the meaning.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "509": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Sacrofanite\n\n[correct_answer]: Sacrofanite\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "533": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Yazan Haifawi\n\n[correct_answer]: Yazan Haifawi\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "543": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Arsenal Tula\n\n[correct_answer]: Arsenal Tula\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "548": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Andela\n\n[correct_answer]: Andela\n\nreasoning: The extracted final answer exactly matches the correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "571": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Cynarra Ferguson\n\n[correct_answer]: Cynarra Ferguson\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "577": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: DN AGRAR GROUP S.A.\n\n[correct_answer]: DN AGRAR Group\n\nreasoning: \u201cDN AGRAR GROUP S.A.\u201d is semantically equivalent to \u201cDN AGRAR Group.\u201d The response provides the company\u2019s formal legal designation, while the correct answer uses its group name.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "582": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Dame Garson\n\n[correct_answer]: Dame Garson\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "583": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: New mural in Coghlan painted by Cuore\n\n[correct_answer]: New mural in Coghlan painted by Cuore\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "584": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Particle Film Application Influences Apple Leaf Physiology, Fruit Yield, and Fruit Quality\n\n[correct_answer]: Particle Film Application Influences Apple Leaf Physiology, Fruit Yield, and Fruit Quality\n\nreasoning: The extracted final answer exactly matches the provided correct answer, including all words and phrasing.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "592": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: 29 May 2015\n\n[correct_answer]: May 29, 2015\n\nreasoning: The response gives the same calendar date as the correct answer, with only the day-month ordering differing.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "594": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: XML\n\n[correct_answer]: XML\n\nreasoning: The extracted final answer exactly matches the correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "595": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Farida Osman\n\n[correct_answer]: Farida Osman\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "60": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Advanced Coal and Energy Research Center (ACERC)\n\n[correct_answer]: Advanced Coal and Energy Research Center\n\nreasoning: The extracted answer matches the correct answer exactly in name, with the additional parenthetical acronym \u201cACERC,\u201d which is consistent and does not alter the meaning.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "601": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Alexis Nicolas\n\n[correct_answer]: Alexis Nicolas\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "618": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: 2020 Portuguese Grand Prix\n\n[correct_answer]: FORMULA 1 HEINEKEN GRANDE PR\u00c9MIO DE PORTUGAL 2020\n\nreasoning: \u201c2020 Portuguese Grand Prix\u201d is the standard English name for the FORMULA 1 HEINEKEN GRANDE PR\u00c9MIO DE PORTUGAL 2020 and is semantically equivalent to the correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "619": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Lieutenant-General Rom\u00e9o Antonius Dallaire\n\n[correct_answer]: Rom\u00e9o Antonius Dallaire\n\nreasoning: The extracted answer names Rom\u00e9o Antonius Dallaire exactly, with the additional correct military rank of Lieutenant-General. It is semantically equivalent to the correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "625": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Episode 6 \u2014 Lynn Okamoto.\n\n[correct_answer]: 6; Lynn Okamoto\n\nreasoning: The response gives episode 6 and the manga creator Lynn Okamoto, which exactly matches the correct answer. The wording and punctuation differ only superficially.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "628": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Brazuca (2017), directed by Faidon Gkretsikos\n\n[correct_answer]: Brazuca\n\nreasoning: The extracted answer identifies \u201cBrazuca,\u201d which exactly matches the correct answer. The added year and director information do not change the answer and are consistent with the film identification.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "631": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: GH\u00a241.596 million (GH\u00a241,596 thousand).\n\n[correct_answer]: GHS 41.6 million\n\nreasoning: GH\u00a241.596 million is semantically equivalent to GHS 41.6 million, with the response providing a more precise figure that rounds to 41.6 million. The currency notation GH\u00a2 corresponds to Ghanaian cedis (GHS).\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "636": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: 2011\n\n[correct_answer]: 2011\n\nreasoning: The response gives the year 2011, which exactly matches the correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "638": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Parle (Parle Products, maker of Parle-G)\n\n[correct_answer]: Parle\n\nreasoning: The extracted answer identifies Parle, which exactly matches the correct answer. The added description is consistent and does not alter the answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "643": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Alicia Moruf, PharmD, MPH, RAC-US\n\n[correct_answer]: Alicia Moruf\n\nreasoning: The extracted answer gives the same full name, Alicia Moruf, and adds professional credentials. This is a more precise version of the correct answer and is semantically equivalent.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "661": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Professor Ablade Glover\n\n[correct_answer]: Ablade Glover\n\nreasoning: \u201cProfessor Ablade Glover\u201d is semantically equivalent to \u201cAblade Glover\u201d; \u201cProfessor\u201d is a correct honorific and does not alter the identity of the answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "670": {
+      "confidence": 100,
+      "correct": false,
+      "judge_response": "extracted_final_answer: Tobias Smollett\n\n[correct_answer]: Tobias Smollet\n\nreasoning: The response gives \u201cTobias Smollett,\u201d while the correct answer is \u201cTobias Smollet.\u201d The surname differs in spelling by an additional \u201ct,\u201d so the extracted answer does not exactly match the provided correct answer.\n\ncorrect: no\n\nconfidence: 100"
+    },
+    "673": {
+      "confidence": 100,
+      "correct": false,
+      "judge_response": "extracted_final_answer: Arinimaal\n\n[correct_answer]: Arnimal\n\nreasoning: The response gives \u201cArinimaal,\u201d while the correct answer is \u201cArnimal.\u201d Although similar, the spelling differs and is not an exact or clearly established equivalent variation of the provided correct answer.\n\ncorrect: no\n\nconfidence: 100"
+    },
+    "674": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Jeremy Eder\n\n[correct_answer]: Jeremy Eder\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "678": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: The Guildhall School of Music and Drama\n\n[correct_answer]: The Guildhall School of Music and Drama\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "68": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Professor Trefor Jenkins \u2014 the Benjamin Pogrund Medal for advancing the cause of non-racialism at the University of the Witwatersrand (1998).\n\n[correct_answer]: Professor Trefor Jenkins, Benjamin Pogrund Medal for Advancing Non-Racialism\n\nreasoning: The response identifies Professor Trefor Jenkins and the Benjamin Pogrund Medal for Advancing Non-Racialism, which matches the correct answer. The added details about the University of the Witwatersrand and the year 1998 are consistent and do not alter the answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "7": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Savannah College of Art and Design\n\n[correct_answer]: Savannah College of Art and Design\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "70": {
+      "confidence": 100,
+      "correct": false,
+      "judge_response": "extracted_final_answer: Nil Nakshar Shandaney\n\n[correct_answer]: Nikhoj Sangbad\n\nreasoning: The extracted answer, \"Nil Nakshar Shandaney,\" is a different title from the correct answer, \"Nikhoj Sangbad.\" They are not semantically equivalent or spelling variations of the same TV series.\n\ncorrect: no\n\nconfidence: 100%"
+    },
+    "700": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Doctor Lautrec and the Forgotten Knights\n\n[correct_answer]: Doctor Lautrec and the Forgotten Knights\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "706": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Atsuko Nishida\n\n[correct_answer]: Atsuko Nishida\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "709": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Lewis Dunk\n\n[correct_answer]: Lewis Dunk\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "71": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: The Ballast Bank (Wexford Harbour)\n\n[correct_answer]: The Wexford Ballast Bank\n\nreasoning: The extracted answer refers to the Ballast Bank in Wexford Harbour, which is semantically equivalent to \u201cThe Wexford Ballast Bank.\u201d The parenthetical location correctly specifies Wexford Harbour and does not introduce any inconsistency.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "712": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Elaine\n\n[correct_answer]: Elaine\n\nreasoning: The extracted final answer exactly matches the correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "713": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Ka\u00ef Tomety\n\n[correct_answer]: Kai Tomety\n\nreasoning: The response gives the same full name as the correct answer, with only a diacritic added to \u201cKai.\u201d This is a permissible spelling variation and is semantically equivalent.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "720": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: 3rd Rock from the Sun \u2014 Season 1, Episode 2: \u201cPost-Nasal Dick.\u201d\n\n[correct_answer]: 3rd Rock From the Sun; Season 1; Episode 2; Post-Nasal Dick\n\nreasoning: The response identifies the same TV series, season, episode number, and episode title as the correct answer. The capitalization difference in \u201cfrom\u201d versus \u201cFrom\u201d and punctuation/formatting differences are immaterial.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "722": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Paul Segal\n\n[correct_answer]: Paul Segal\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "724": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Cecil Belfield Clarke\n\n[correct_answer]: Cecil Belfield Clarke\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "729": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Oyetayo\n\n[correct_answer]: Oyetayo\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "731": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Coprinus comatus (O.F. M\u00fcll.) Pers. \u2014 the shaggy inkcap (shaggy mane)\n\n[correct_answer]: Coprinus comatus\n\nreasoning: The extracted answer identifies the species as Coprinus comatus, matching the correct answer exactly at the species-name level. The added author citation and common names are consistent additional detail.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "79": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: University of Aberdeen\n\n[correct_answer]: University of Aberdeen\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "792": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Oral creatine supplementation: A potential adjunct therapy for rheumatoid arthritis patients\n\n[correct_answer]: Oral creatine supplementation: A potential adjunct therapy for rheumatoid arthritis patients\n\nreasoning: The extracted final answer exactly matches the provided correct answer, including the wording and punctuation.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "794": {
+      "confidence": 100,
+      "correct": false,
+      "judge_response": "No prediction: HTTP 504 timeout; counted incorrect without an LLM call."
+    },
+    "809": {
+      "confidence": 100,
+      "correct": false,
+      "judge_response": "extracted_final_answer: Muhammad\n\n[correct_answer]: Sadiq\n\nreasoning: The extracted answer \u201cMuhammad\u201d does not match or semantically equate to the correct answer \u201cSadiq.\u201d They are different names.\n\ncorrect: no\n\nconfidence: 100"
+    },
+    "814": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Holly Gauthier-Frankel (also credited as Holly G. Frankel)\n\n[correct_answer]: Holly Gauthier-Frankel\n\nreasoning: The extracted answer gives the exact correct full name, Holly Gauthier-Frankel. The additional alternate credit, \u201cHolly G. Frankel,\u201d does not conflict with the correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "826": {
+      "confidence": 100,
+      "correct": false,
+      "judge_response": "extracted_final_answer: Sunset in Biafra\n\n[correct_answer]: Sunset at Biafra\n\nreasoning: The response uses \u201cin\u201d instead of \u201cat\u201d in the title. This is a different title from the specified correct answer and is not an equivalent string variation.\n\ncorrect: no\n\nconfidence: 100"
+    },
+    "854": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: 37 kg\n\n[correct_answer]: 37kg\n\nreasoning: The response gives 37 kg, which is semantically equivalent to the correct answer 37kg; the difference is only spacing.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "865": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Vera N\u00fcnning\n\n[correct_answer]: Vera N\u00fcnning\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "872": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Motshekga\n\n[correct_answer]: Motshekga\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "883": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Oscar\n\n[correct_answer]: Oscar\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "896": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Ian Athfield\n\n[correct_answer]: Ian Athfield\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "912": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Kai Ah Hee, Alan Nakagawa, and Keali'i Bertlemann.\n\n[correct_answer]: Kai Ah Hee, Alan Nakagawa and Keali'i Bertlemann\n\nreasoning: The extracted answer lists the same three teacher names as the correct answer. The only difference is punctuation, which does not affect semantic equivalence.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "915": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Miss Ealand\n\n[correct_answer]: Miss Ealand\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "916": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Narendra Modi Stadium, Ahmedabad (formerly Motera/Sardar Patel Stadium).\n\n[correct_answer]: Narender Modi Stadium\n\nreasoning: The extracted answer refers to the same stadium as the correct answer. \u201cNarendra\u201d versus \u201cNarender\u201d is a minor spelling variation, and the added Ahmedabad location and former names are consistent with the stadium.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "920": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Aarti Bajaj\n\n[correct_answer]: Aarti Bajaj\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "921": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Brutal Sports\n\n[correct_answer]: Brutal Sports\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "925": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: The Lip\n\n[correct_answer]: The Lip\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "93": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: AdenoPlus (Rapid Pathogen Screening), a commercially available adenovirus detection device.\n\n[correct_answer]: AdenoPlus\n\nreasoning: The extracted answer identifies AdenoPlus, which exactly matches the correct answer. The added description is consistent with AdenoPlus as an adenovirus detection device.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "932": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: 10.3389/fphar.2016.00258\n\n[correct_answer]: 10.3389/fphar.2016.00258\n\nreasoning: The extracted DOI exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "947": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Sharon Olds\n\n[correct_answer]: Sharon Olds\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "950": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Snow Bros.\n\n[correct_answer]: Snow Bros.\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100%"
+    },
+    "986": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Death SS\n\n[correct_answer]: Death SS\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    },
+    "998": {
+      "confidence": 100,
+      "correct": true,
+      "judge_response": "extracted_final_answer: Majida El Roumi\n\n[correct_answer]: Majida El Roumi\n\nreasoning: The extracted final answer exactly matches the provided correct answer.\n\ncorrect: yes\n\nconfidence: 100"
+    }
+  },
+  "total_tasks": 150
+}

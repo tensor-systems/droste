@@ -202,6 +202,72 @@ This is a clean result, but its disclosed scope is small: `n=20`, with one
 repetition. It establishes the outcome of this paired run rather than a
 population-wide guarantee.
 
+### BrowseComp-Plus
+
+BrowseComp-Plus tests multi-hop factual retrieval over a large document
+corpus. The published run used a deterministic 150-of-830 query sample, about
+1,000 documents per query, three arms, and one repetition on 2026-07-18
+([judge-augmented summary](results/browsecomp-plus-1k-2026-07-18/SUMMARY.md) ·
+[regenerable exact-match report](results/browsecomp-plus-1k-2026-07-18/report.md) ·
+[raw artifacts](results/browsecomp-plus-1k-2026-07-18/artifacts) ·
+[provenance](results/browsecomp-plus-1k-2026-07-18/PROVENANCE.md)).
+
+| Arm | Root model | Subcall model | Semantic judge | Exact match | Successful | Cost | Tokens |
+|---|---|---|---:|---:|---:|---:|---:|
+| direct-sol-browsecomp-plus-1k | gpt-5.6-sol | — | N/A (context exceeds window) | N/A | 0/150 | $0.000000 | 0 |
+| direct-terra-browsecomp-plus-1k | gpt-5.6-terra | — | N/A (context exceeds window) | N/A | 0/150 | $0.000000 | 0 |
+| droste-terra-luna-browsecomp-plus-1k | gpt-5.6-terra | gpt-5.6-luna | **0.9400** | 0.5600 | 148/150 | $24.537529 | 7,970,677 |
+
+The selected contexts range from 24.1 MB to 44.4 MB, approximately
+6.0M–11.1M tokens. That is 6–10× beyond available model context windows. The
+direct arms must place the complete raw context in one call, so they cannot
+structurally attempt these tasks at any cost. All 300 direct attempts were
+rejected as `context_limit` before generation, producing zero model tokens and
+genuinely zero cost. The harness did not truncate, summarize, or otherwise
+weaken their input.
+
+The Droste arm keeps the raw context external. Local Python searches and ranks
+the 1,000 documents, preserves document IDs and excerpts for verification, and
+uses bounded `gpt-5.6-luna` subcalls only on promising evidence. No single LLM
+call receives the full context. This is the paper's core recursive-analysis
+thesis at its most extreme: direct approaches do not merely underperform; the
+problem is structurally outside their input regime, while Droste completes
+148/150 tasks and reaches 0.9400 semantic-judge accuracy for $24.54. The two
+tasks without predictions count as incorrect, so this is 141 correct answers
+out of all 150 scheduled tasks. The paper reports 88.0%–91.3% on
+BrowseComp-Plus; this run is 2.7 percentage points above the top of that range,
+although it uses a 150-task sample rather than the paper's full evaluation.
+The paper's range was judged by Qwen3-32B, while this result was judged by
+`gpt-5.6-terra`; judge-model leniency could account for part of the observed
+gap. Treat the comparison as directionally informative, not a strictly
+controlled methodology match.
+
+BrowseComp-Plus's official methodology uses an LLM judge for semantic
+equivalence. A `gpt-5.6-terra` pass through ModelRelay applied its canonical
+prompt to all 148 predictions for $0.292503. The complete judge responses are
+in [judge-results.json](results/browsecomp-plus-1k-2026-07-18/judge-results.json),
+and the exact-match score remains disclosed as a secondary metric. Exact match
+marked 57 semantically accepted predictions wrong for differences such as
+terminal punctuation, typographic apostrophes, abbreviations, and correct
+additional detail.
+
+The two unsuccessful Droste tasks, `229` and `794`, ended in legitimate HTTP
+504 timeouts. They remain typed artifacts and contribute to the reported
+150-task result: a 1.3% infrastructure-timeout rate on the only arm that could
+attempt substantive work. There were no duplicate artifacts and no HTTP 402
+failures.
+
+The query and corpus sources are the MIT-licensed
+[`Tevatron/browsecomp-plus`](https://huggingface.co/datasets/Tevatron/browsecomp-plus/tree/144cff8e35b5eaef7e526346aa60774a9deb941f)
+and
+[`Tevatron/browsecomp-plus-corpus`](https://huggingface.co/datasets/Tevatron/browsecomp-plus-corpus/tree/b27b02bc3e45511b8b82a13e6f90ce761df726f6),
+pinned independently at revisions `144cff8e35b5eaef7e526346aa60774a9deb941f`
+and `b27b02bc3e45511b8b82a13e6f90ce761df726f6`. Query IDs are sampled from
+stable lexicographic order with seed `166001`; required gold and evidence
+documents are combined with independently seeded fillers, and documents shared
+across tasks are stored once in a 77,928-document pool. The task materializer,
+task-file hash, snapshot manifest, and offline regeneration command are public.
+
 ## Zero-cost smoke run
 
 From a clean checkout:
@@ -359,6 +425,62 @@ predictions and refuses to replace an existing output directory. References
 remain deterministic outputs of the task materializer above; report generation
 never fetches either source implicitly.
 
+## Pinned BrowseComp-Plus data
+
+Install the benchmark-only Parquet reader and materialize Droste's seeded
+150-query, 1,000-document-per-query reading:
+
+```bash
+uv sync --group benchmarks
+uv run python -m benchmarks materialize-browsecomp-plus \
+  --output benchmarks/.data/browsecomp-plus-1k-seed-166001-v1
+```
+
+The pinned `rlm-paper-v1.json` manifest declares S-NIAH, BrowseComp-Plus,
+OOLONG, OOLONG-Pairs, and LongBench-v2 CodeQA `ready`, so the four sibling task
+sets must also be materialized before running or reporting BrowseComp-Plus,
+even when only the BrowseComp-Plus task ids are selected:
+
+```bash
+uv run python -m benchmarks materialize-sniah \
+  --output benchmarks/.data/sniah-noise-words-32768-50-v1
+uv run python -m benchmarks materialize-oolong \
+  --output benchmarks/.data/oolong-trec-coarse-131k-v1
+uv run python -m benchmarks materialize-oolong-pairs \
+  --output benchmarks/.data/oolong-pairs-32k-v1
+uv run python -m benchmarks materialize-longbench-codeqa \
+  --output benchmarks/.data/longbench-v2-codeqa-20-v1
+```
+
+The query and corpus revisions are pinned independently. The materializer uses
+the benchmark's published Base64-then-XOR decoder, verifies decrypted required
+documents against the plaintext corpus, and hashes the complete decrypted
+selected-query content and plaintext corpus. Query IDs are sampled from stable
+lexicographic order with seed `166001`; each query's filler-document sample has
+an independently derived seed and includes the union of every gold and evidence
+document.
+
+Documents selected by more than one task are written once to an indexed JSONL
+pool. Each task stores its exact 1,000 IDs in pinned corpus row order, and the
+live harness assembles and hashes a context file on demand. Generated data and
+assembled context caches remain under gitignored `benchmarks/.data/`.
+
+The harness retains the deterministic `exact_match` scorer (case- and
+whitespace-normalized) as a secondary diagnostic. The published headline uses
+BrowseComp-Plus's official semantic-equivalence methodology: the standalone
+[`browsecomp_judge.py`](browsecomp_judge.py) applies the canonical judge prompt
+to the original predictions and writes a separate JSON result without changing
+the run artifacts.
+
+The pinned task contexts range from about 24.1 MB to 44.4 MB (median 32.3 MB),
+or roughly 6.0M–11.1M tokens under a coarse four-bytes-per-token estimate. The
+Droste arm keeps that content external to the root prompt and searches it in
+Python. The direct arms necessarily inline it; their 12M-token authorization is
+deliberately unusual and is not evidence that the configured provider accepts
+an input that large. Before a paid pilot, preflight the provider's effective
+context window. If it is smaller, direct-arm `context_limit` artifacts are the
+honest result rather than silently truncating the benchmark.
+
 ## RLM paper suite
 
 `manifests/rlm-paper-v1.json` pins the target paper revision and names the
@@ -390,16 +512,22 @@ dataset and materializer provenance, and regenerated reports live under
 Its three arms compare direct `gpt-5.6-sol`, direct `gpt-5.6-terra`, and Droste
 with a `gpt-5.6-terra` root and `gpt-5.6-luna` subcalls.
 
-The other datasets remain `planned`. A planned benchmark cannot be run because
-it has no task path. Dataset adapters promote each benchmark to `ready` only
-after source or generator provenance, split, integrity checks, and scorer are
-pinned.
+BrowseComp-Plus is `ready` and has published results: immutable artifacts,
+dataset and sampling provenance, and regenerated reports live under
+[`results/browsecomp-plus-1k-2026-07-18/`](results/browsecomp-plus-1k-2026-07-18/).
+Its two direct arms cannot fit the 6.0M–11.1M-token contexts in a model window;
+the Droste arm searches the external context locally and delegates bounded
+evidence groups to `gpt-5.6-luna`.
+
+TAG-Bench remains `planned`. A planned benchmark cannot be run because it has
+no task path. Dataset adapters promote each benchmark to `ready` only after
+source or generator provenance, split, integrity checks, and scorer are pinned.
 
 ## Live runs
 
 The checked-in manifest pins public live configurations (models, reasoning
-efforts, budgets, concurrency) for OOLONG, S-NIAH, LongBench-v2 CodeQA, and
-OOLONG-Pairs.
+efforts, budgets, concurrency) for OOLONG, S-NIAH, LongBench-v2 CodeQA,
+OOLONG-Pairs, and BrowseComp-Plus.
 Materializing or validating the suite makes no model calls. Live runs require
 an explicit run command and a new output directory, refuse to overwrite
 artifacts, snapshot the endpoint's public price table, and reject additions if
@@ -503,6 +631,39 @@ cmp benchmarks/results/oolong-pairs-32k-2026-07-17/report.json \
   /tmp/oolong-pairs-report.json
 cmp benchmarks/results/oolong-pairs-32k-2026-07-17/report.md \
   /tmp/oolong-pairs-report.md
+```
+
+The pinned BrowseComp-Plus snapshot declares OOLONG and BrowseComp-Plus
+`ready`, so both task sets must be materialized before report regeneration:
+
+```bash
+uv sync --group benchmarks
+uv run python -m benchmarks materialize-oolong \
+  --output benchmarks/.data/oolong-trec-coarse-131k-v1
+uv run python -m benchmarks materialize-browsecomp-plus \
+  --output benchmarks/.data/browsecomp-plus-1k-seed-166001-v1
+```
+
+The plain BrowseComp-Plus exact-match report then regenerates from the committed
+artifacts with all 150 selected task IDs. The judge-augmented `SUMMARY.md` is a
+separate, labeled summary and is not an output of this command:
+
+```bash
+task_args=()
+while IFS= read -r task_id; do
+  task_args+=(--task-id "$task_id")
+done < <(jq -r '.task_id' \
+  benchmarks/results/browsecomp-plus-1k-2026-07-18/artifacts/*.json | sort -u)
+uv run python -m benchmarks report \
+  benchmarks/manifests/browsecomp-plus-1k-2026-07-18.json \
+  benchmarks/results/browsecomp-plus-1k-2026-07-18/artifacts \
+  "${task_args[@]}" \
+  --json /tmp/browsecomp-plus-report.json \
+  --markdown /tmp/browsecomp-plus-report.md
+cmp benchmarks/results/browsecomp-plus-1k-2026-07-18/report.json \
+  /tmp/browsecomp-plus-report.json
+cmp benchmarks/results/browsecomp-plus-1k-2026-07-18/report.md \
+  /tmp/browsecomp-plus-report.md
 ```
 
 These result-specific manifests are exact snapshots of the configurations that
