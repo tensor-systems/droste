@@ -349,7 +349,7 @@ def test_runner_preflight_records_declared_capacity() -> None:
     }
 
 
-def test_runner_v5_is_refused_before_trace_v3_can_be_ignored() -> None:
+def test_runner_v5_is_refused_before_trace_v4_can_be_ignored() -> None:
     response = run_worker(
         {
             "protocol_version": 5,
@@ -362,7 +362,7 @@ def test_runner_v5_is_refused_before_trace_v3_can_be_ignored() -> None:
 
     assert response["status"] == "refusal"
     assert response["error"]["code"] == "protocol_version_mismatch"
-    assert response["error"]["details"] == {"requested": 5, "supported": 7}
+    assert response["error"]["details"] == {"requested": 5, "supported": 8}
 
 
 def test_scaffold_v1_round_trip_remains_explicitly_supported() -> None:

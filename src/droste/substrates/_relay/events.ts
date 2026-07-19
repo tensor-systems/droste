@@ -87,6 +87,8 @@ function validUsageBreakdown(value: unknown): boolean {
   if (!isObject(value)) return false;
   const integerFields = [
     "input_tokens",
+    "cache_read_tokens",
+    "cache_creation_tokens",
     "output_tokens",
     "total_tokens",
     "requests",
@@ -97,7 +99,10 @@ function validUsageBreakdown(value: unknown): boolean {
       isInteger(value[field]) && Number(value[field]) >= 0
     ) &&
     Number(value.successes) <= Number(value.requests) &&
-    typeof value.complete === "boolean";
+    typeof value.complete === "boolean" &&
+    (value.complete !== true ||
+      Number(value.cache_read_tokens) + Number(value.cache_creation_tokens) <=
+        Number(value.input_tokens));
 }
 
 function validSubcallBody(body: Record<string, unknown>): boolean {
@@ -360,7 +365,7 @@ export function isRlmEvent(line: string): boolean {
         Number.isInteger(o.seq) && o.seq > 0 &&
         typeof o.timestamp === "string" &&
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(o.timestamp) &&
-        o.version === 3 &&
+        o.version === 4 &&
         o.persistence_class === PERSISTENCE_BY_TYPE[o.type] &&
         Number.isInteger(o.depth) && o.depth >= 0 &&
         (o.depth === 0

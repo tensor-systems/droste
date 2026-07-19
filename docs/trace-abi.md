@@ -1,4 +1,4 @@
-# Trace ABI v3
+# Trace ABI v4
 
 Droste exposes one append-only event stream and one policy-resolved terminal
 `RunRecord`. The engine creates values; it does not choose a database or write
@@ -15,7 +15,7 @@ does not change merely because a released fixture is added.
 
 ## Event envelope
 
-Every event is a strict v3 value with these fields:
+Every event is a strict v4 value with these fields:
 
 ```json
 {
@@ -23,7 +23,7 @@ Every event is a strict v3 value with these fields:
   "seq": 1,
   "timestamp": "2026-07-14T05:00:00Z",
   "type": "progress",
-  "version": 3,
+  "version": 4,
   "persistence_class": "transient",
   "parent_run_id": "optional-parent",
   "depth": 0,
@@ -56,7 +56,7 @@ always delivered once before `done`, even when it is not retained. `replay` is
 different: it is emitted only when the host explicitly selects replay
 retention.
 
-## Exhaustive v3 bodies
+## Exhaustive v4 bodies
 
 Every event body has a fixed top-level schema. Optional fields are marked `?`.
 Objects named below are JSON objects; all other types are primitive.
@@ -91,18 +91,23 @@ The durable `done` value contains content-free terminal status, typed error
 presence, and reconciled usage/budget/policy facts. It never copies answer,
 code, output, trajectory, error messages, error details, or executed source.
 The configurable `replay` value is the complete result snapshot for hosts that
-explicitly retain replay content.
+explicitly retain replay content. Its `result.usage` is the same resolved or
+partial projection emitted durably in `usage` and `done`, including both cache
+token classes.
 
 Billing consumes the durable `usage` value. Both `root` and `subcall` carry
-`input_tokens`, `output_tokens`, `total_tokens`, `requests`, `successes`, and
-`complete`. The top-level kind is `resolved` exactly when both scopes are
-complete; otherwise it is `partial`. Partial usage preserves known provider
-counts without substituting conservative budget reservations for actual usage.
+`input_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `output_tokens`,
+`total_tokens`, `requests`, `successes`, and `complete`. Cache tokens are
+disjoint breakdowns inside inclusive input totals; complete scopes therefore
+require their sum not to exceed `input_tokens`. They are not added again to
+`input_tokens` or `total_tokens`. The top-level kind is `resolved` exactly when
+both scopes are complete; otherwise it is `partial`. Partial usage preserves
+known provider counts without substituting conservative budget reservations for actual usage.
 Legacy/custom-client tokens that cannot be assigned safely appear under
 `unattributed.total_tokens`; the three token scopes must sum to
 `total_tokens`. None of these facts is inferred by counting stream events.
 
-The budget body remains a discriminated event in Trace ABI v3. The terminal snapshot uses
+The budget body remains a discriminated event in Trace ABI v4. The terminal snapshot uses
 `kind="snapshot"`, `source="budget_ledger"`, and `configured`, `consumed`,
 and `remaining` objects. The ledger may emit any number of
 `kind="mutation"` values with `action` (`reserve`, `commit`, `refund`, or
@@ -192,14 +197,14 @@ and sdist. Python consumers load them through package resources:
 
 ```python
 from droste.testing import (
-    runner_v7_refusal_ndjson,
-    trace_v3_execution_ndjson,
-    trace_v3_lifecycle_ndjson,
+    runner_v8_refusal_ndjson,
+    trace_v4_execution_ndjson,
+    trace_v4_lifecycle_ndjson,
 )
 
-execution_lines = trace_v3_execution_ndjson().splitlines()
-event_lines = trace_v3_lifecycle_ndjson().splitlines()
-pre_admission_refusal = runner_v7_refusal_ndjson()
+execution_lines = trace_v4_execution_ndjson().splitlines()
+event_lines = trace_v4_lifecycle_ndjson().splitlines()
+pre_admission_refusal = runner_v8_refusal_ndjson()
 ```
 
 The compact execution NDJSON contains a two-iteration root trace plus a

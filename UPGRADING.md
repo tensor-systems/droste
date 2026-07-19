@@ -11,9 +11,33 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.16.0)
+## Unreleased (post-0.17.0)
 
 No changes yet.
+
+## 0.17.0 (from 0.16.0)
+
+### Trace ABI v4 and runner protocol v8 preserve cache token classes
+
+`ExecutionStats` and durable root/subcall usage now carry
+`cache_read_tokens` and `cache_creation_tokens` inside the existing inclusive
+`input_tokens` and `total_tokens`. Do not add the cache counters to the totals
+again. ModelRelay `/responses` adapters accept absent cache fields as exact
+zero, map `cache_read_input_tokens` and `cache_write_input_tokens`, and mark
+usage partial when a present cache field is malformed.
+Retained `replay` events copy the same complete usage projection into
+`result.usage`; it reconciles exactly with the durable `usage` and `done`
+values.
+
+The strict usage body change bumps Trace ABI to v4 and the embedding runner to
+protocol v8. Request writers must send `protocol_version: 8`, event consumers
+must accept `version: 4`, and cache-aware billing consumers should read both
+cache classes from the root and subcall scopes. There is no compatibility
+decoder for Trace ABI v3 or runner protocol v7.
+
+The released conformance resources are
+`trace_v4_execution_ndjson()`, `trace_v4_lifecycle_ndjson()`, and
+`runner_v8_refusal_ndjson()` backed by the correspondingly named NDJSON files.
 
 ## 0.16.0 (from 0.15.5)
 

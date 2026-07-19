@@ -100,7 +100,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
 
 ## Trace ABI
 
-- Every structured event is a strict Trace ABI v3 value. Stamp it exactly once
+- Every structured event is a strict Trace ABI v4 value. Stamp it exactly once
   through `ExecutionContext`; do not emit raw or partially enveloped event
   dictionaries at host boundaries.
 - Treat every envelope/body, classification, and ordering change as an ABI
@@ -166,7 +166,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - A strict published event vocabulary/body change requires a Trace ABI bump and,
   when embedded in runner output, an atomic runner-protocol bump. Do not expand
   an old strict version in place or add a compatibility decoder in the engine.
-- Trace ABI v3 usage is `resolved` only when both root and subcall scopes have
+- Trace ABI v4 usage is `resolved` only when both root and subcall scopes have
   complete provider usage. Missing or malformed usage preserves any known
   counts, marks that scope `complete=false`, and makes terminal usage
   `kind="partial"`; never report conservative reservations as provider usage.
@@ -222,6 +222,17 @@ evidence with that status rather than leaving the model to interpret prefixes.
   terminal output usage. A missing or malformed delta output count must remain
   partial and settle conservatively rather than falling back to the start
   estimate.
+- `ExecutionStats` folds those same cache classes separately for root and
+  subcall scopes. Trace ABI v4 exposes them in every durable usage breakdown;
+  complete scopes require the disjoint cache classes to fit inside inclusive
+  input tokens, while partial scopes preserve independently validated counts.
+  ModelRelay names the classes `cache_read_input_tokens` and
+  `cache_write_input_tokens`; absent fields mean exact zero, but malformed
+  present fields make usage partial.
+- A retained configurable `replay` copies the already-resolved durable usage
+  projection into `result.usage`; it must stay exactly equal to terminal
+  `done.usage` so replay consumers see the same cache classes without deriving
+  them from trajectory entries.
 - Cache anchors are private root-loop metadata. Anthropic consumes them into
   `cache_control`; ModelRelay, OpenAI-compatible, runner HTTP, and Pyodide
   adapters must strip them from outbound payloads. Keep terminal extraction
@@ -277,7 +288,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
   They are assertions that the Deno/WASM host supplies those boundaries, not
   Python-side enforcement. Never weaken them or silently accept a native
   signal timeout for Pyodide.
-- Every request MUST carry `"protocol_version": 7` and one complete `budget`
+- Every request MUST carry `"protocol_version": 8` and one complete `budget`
   object. Missing/mismatched versions or incomplete budgets fail before work.
   See docs/architecture.md, "The runner protocol".
 - Version refusal precedes operation resolution and carries `operation: null`.

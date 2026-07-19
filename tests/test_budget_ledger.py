@@ -468,7 +468,14 @@ def test_root_wall_overrun_preserves_exact_terminal_usage_and_success() -> None:
 
 
 def test_root_malformed_output_preserves_usage_without_counting_success() -> None:
-    usage = TokenUsage(7, 3, 19, exact=True)
+    usage = TokenUsage(
+        7,
+        3,
+        19,
+        cache_read_tokens=4,
+        cache_creation_tokens=2,
+        exact=True,
+    )
 
     class MalformedOutputLLM:
         def responses_create(self, *args, **kwargs):
@@ -488,7 +495,12 @@ def test_root_malformed_output_preserves_usage_without_counting_success() -> Non
     assert context.stats.root_requests == 1
     assert context.stats.root_successes == 0
     assert context.stats.root_total_tokens == 19
+    assert context.stats.root_cache_read_tokens == 4
+    assert context.stats.root_cache_creation_tokens == 2
     assert context.stats.root_usage_complete is True
+    resolved = context.stats.resolved_usage(0).as_dict()
+    assert resolved["root"]["cache_read_tokens"] == 4
+    assert resolved["root"]["cache_creation_tokens"] == 2
     assert context.ledger.snapshot().consumed.tokens == 19
 
 

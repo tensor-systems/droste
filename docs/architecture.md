@@ -253,7 +253,7 @@ is intentionally a separate, content-free envelope:
 
 ```json
 {
-  "protocol_version": 7,
+  "protocol_version": 8,
   "operation": "preflight",
   "status": "success",
   "preflight": {
@@ -293,14 +293,14 @@ exceptions use the same closed five-field shape as other preflight responses;
 run exceptions use the ordinary run response shape.
 
 Completed responses also carry the policy-resolved
-[Trace ABI v3](trace-abi.md) `run_record`. Live events and terminal records use
+[Trace ABI v4](trace-abi.md) `run_record`. Live events and terminal records use
 the same strict envelope and projection. Persistence remains a host I/O
 decision; the engine never opens a trace store.
 
 The Deno/Pyodide relay keeps its three process output concerns physically
 separate. fd1 carries exactly one unary response JSON line. A required
 `DROSTE_RELAY_EVENT_FD` names one inherited writable descriptor (fd3 by
-convention) that carries canonical Trace ABI v3 NDJSON only. An external
+convention) that carries canonical Trace ABI v4 NDJSON only. An external
 launcher also includes that number in `DENO_EXTRA_STDIO_FDS`, which Deno
 consumes at startup to register inherited descriptors above fd2. Passing an
 OS-level descriptor without this Deno marker leaves it unavailable to relay
@@ -344,7 +344,7 @@ inference rather than publishing evidence that differs from execution.
 **Versioned boundary**: the request/response schema and provider contract
 are versioned, each by a single integer:
 
-- `RUNNER_PROTOCOL_VERSION` (currently 7) governs the request/response
+- `RUNNER_PROTOCOL_VERSION` (currently 8) governs the request/response
   envelope. Every request **must** carry `protocol_version` — requests are
   self-describing, the same discipline as JSON-RPC's mandatory `"jsonrpc"`
   field. A missing or mismatched version is answered with a structured
@@ -370,6 +370,9 @@ are versioned, each by a single integer:
   completeness and the top-level usage kind distinguishes resolved from
   partial provider facts. The bump prevents a v6 consumer from treating
   missing provider usage as a fully resolved zero-token fact.
+  Protocol v8 embeds Trace ABI v4, where both usage scopes add cache-read and
+  cache-creation token classes inside inclusive input totals. The bump prevents
+  a v7 consumer from silently dropping cache-rate billing evidence.
 - `PROVIDER_PROTOCOL_VERSION` (currently 4) governs manifest parsing,
   context-first provider binding, and bridge invocation facts. A mismatched
   manifest fails before a source is live.
