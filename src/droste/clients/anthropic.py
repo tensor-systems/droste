@@ -205,24 +205,18 @@ def _usage_from(data: Any) -> TokenUsage:
     if not isinstance(usage, dict):
         return TokenUsage.unavailable()
 
-    def count(name: str, *, optional: bool = False) -> int | None:
+    def count(name: str, *, optional: bool = False) -> tuple[int, bool]:
         if optional and name not in usage:
-            return 0
+            return 0, True
         value = usage.get(name)
-        return (
-            value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
-        )
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value, True
+        return 0, False
 
-    ordinary_input = count("input_tokens")
-    cache_creation = count("cache_creation_input_tokens", optional=True)
-    cache_read = count("cache_read_input_tokens", optional=True)
-    completion = count("output_tokens")
-    if None in (ordinary_input, cache_creation, cache_read, completion):
-        return TokenUsage.unavailable()
-    assert ordinary_input is not None
-    assert cache_creation is not None
-    assert cache_read is not None
-    assert completion is not None
+    ordinary_input, ordinary_complete = count("input_tokens")
+    cache_creation, cache_creation_complete = count("cache_creation_input_tokens", optional=True)
+    cache_read, cache_read_complete = count("cache_read_input_tokens", optional=True)
+    completion, completion_complete = count("output_tokens")
     prompt = ordinary_input + cache_creation + cache_read
     return TokenUsage(
         prompt_tokens=prompt,
@@ -230,7 +224,12 @@ def _usage_from(data: Any) -> TokenUsage:
         total_tokens=prompt + completion,
         cache_read_tokens=cache_read,
         cache_creation_tokens=cache_creation,
-        exact=True,
+        exact=(
+            ordinary_complete
+            and cache_creation_complete
+            and cache_read_complete
+            and completion_complete
+        ),
     )
 
 

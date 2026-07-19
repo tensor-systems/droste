@@ -13,7 +13,12 @@ from typing import Any
 from droste.clients.errors import http_error_excerpt, redact_secrets
 from droste.clients.useragent import USER_AGENT
 from droste.execution.config import DEFAULT_SUBCALL_CONCURRENCY, validate_subcall_concurrency
-from droste.protocols.llm_client import LLMUsageFailure, TokenUsage, strip_cache_anchor_markers
+from droste.protocols.llm_client import (
+    LLMUsageFailure,
+    TokenUsage,
+    strip_cache_anchor_markers,
+    token_usage_from_mapping,
+)
 from droste.protocols.subcall_capacity import SubcallInputCapacity
 from droste.protocols.subcall_client import (
     SubcallBatchFailure,
@@ -36,26 +41,7 @@ _SUBCALL_STREAM_ACCEPT = 'application/x-ndjson; profile="responses-stream/v2"'
 
 
 def _token_usage(payload: object) -> TokenUsage:
-    if not isinstance(payload, dict):
-        return TokenUsage.unavailable()
-
-    def token_count(name: str) -> int | None:
-        value = payload.get(name)
-        return (
-            value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
-        )
-
-    input_tokens = token_count("input_tokens")
-    output_tokens = token_count("output_tokens")
-    total_tokens = token_count("total_tokens")
-    if (
-        input_tokens is None
-        or output_tokens is None
-        or total_tokens is None
-        or total_tokens < input_tokens + output_tokens
-    ):
-        return TokenUsage.unavailable()
-    return TokenUsage(input_tokens, output_tokens, total_tokens, exact=True)
+    return token_usage_from_mapping(payload)
 
 
 @dataclass(frozen=True, slots=True)

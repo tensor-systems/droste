@@ -162,6 +162,25 @@ def test_partial_usage_preserves_known_counts_and_marks_each_scope_incomplete() 
     assert usage["total_tokens"] == 30
 
 
+def test_partial_usage_trace_preserves_independent_provider_counters() -> None:
+    context = create_execution_context()
+    context.record_root_attempt()
+    context.record_root_usage(TokenUsage(7, 0, 19))
+
+    usage = context.stats.resolved_usage(0).as_dict()
+
+    assert usage["kind"] == "partial"
+    assert usage["root"] == {
+        "input_tokens": 7,
+        "output_tokens": 0,
+        "total_tokens": 19,
+        "requests": 1,
+        "successes": 0,
+        "complete": False,
+    }
+    assert usage["total_tokens"] == 19
+
+
 def test_custom_environment_marks_fallback_usage_partial_without_capability_observer() -> None:
     class LegacySubcalls:
         def llm_query(self, prompt: str, context: str = "") -> str:

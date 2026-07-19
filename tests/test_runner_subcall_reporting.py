@@ -75,7 +75,7 @@ def test_http_subcall_usage_requires_explicit_provider_total() -> None:
 
 def test_http_clients_preserve_usage_when_result_is_missing(monkeypatch) -> None:
     raw = json.dumps(
-        {"usage": {"input_tokens": 7, "output_tokens": 3, "total_tokens": 19}}
+        {"usage": {"input_tokens": 7, "output_tokens": "bad", "total_tokens": 19}}
     ).encode()
 
     class Response:
@@ -101,7 +101,7 @@ def test_http_clients_preserve_usage_when_result_is_missing(monkeypatch) -> None
     )
     with pytest.raises(LLMUsageFailure, match="missing subcall result") as subcall_failure:
         subcall.llm_query_with_usage("q")
-    assert subcall_failure.value.usage == TokenUsage(7, 3, 19, exact=True)
+    assert subcall_failure.value.usage == TokenUsage(7, 0, 19)
     with pytest.raises(RuntimeError, match="missing subcall result"):
         subcall.llm_query("q")
 
@@ -122,7 +122,7 @@ def test_http_clients_preserve_usage_when_result_is_missing(monkeypatch) -> None
             model="",
             return_usage=True,
         )
-    assert root_failure.value.usage == TokenUsage(7, 3, 19, exact=True)
+    assert root_failure.value.usage == TokenUsage(7, 0, 19)
 
 
 class _StubHandler(BaseHTTPRequestHandler):

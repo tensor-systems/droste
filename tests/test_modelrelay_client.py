@@ -38,16 +38,29 @@ from droste.structured import _StructuredBatchEvidence, bind_structured_batch, s
 
 
 @pytest.mark.parametrize(
-    "payload",
+    ("payload", "expected"),
     [
-        {},
-        {"usage": {}},
-        {"usage": {"input_tokens": 1, "output_tokens": 2}},
-        {"usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 2}},
-        {"usage": {"input_tokens": 1, "output_tokens": "2", "total_tokens": 3}},
+        ({}, TokenUsage.unavailable()),
+        ({"usage": {}}, TokenUsage.unavailable()),
+        ({"usage": {"input_tokens": 1, "output_tokens": 2}}, TokenUsage(1, 2, 0)),
+        (
+            {"usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 2}},
+            TokenUsage(1, 2, 2),
+        ),
+        (
+            {"usage": {"input_tokens": 1, "output_tokens": "2", "total_tokens": 3}},
+            TokenUsage(1, 0, 3),
+        ),
+        (
+            {"usage": {"input_tokens": -1, "output_tokens": 2, "total_tokens": 7}},
+            TokenUsage(0, 2, 7),
+        ),
     ],
 )
-def test_usage_missing_or_malformed_is_unavailable(payload: object) -> None:
+def test_usage_partial_or_malformed_preserves_independent_counts(
+    payload: object, expected: TokenUsage
+) -> None:
+    assert _usage_from(payload) == expected
     assert _usage_from(payload).exact is False
 
 
@@ -436,6 +449,25 @@ def test_root_accounts_usage_before_output_validation(monkeypatch):
     assert client.total_usage.total_tokens == 10
     with pytest.raises(RuntimeError, match="missing output"):
         client.responses_create([{"role": "user", "content": "q"}], model="")
+
+
+def test_root_malformed_output_accounts_partial_known_usage(monkeypatch):
+    client = ModelRelayClient(model="root-model", api_key="mr_sk_t")
+    monkeypatch.setattr(
+        client._transport,
+        "complete",
+        lambda payload: {"usage": {"input_tokens": 7, "output_tokens": "bad", "total_tokens": 19}},
+    )
+
+    with pytest.raises(LLMUsageFailure) as failure:
+        client.responses_create(
+            [{"role": "user", "content": "q"}],
+            model="",
+            return_usage=True,
+        )
+
+    assert failure.value.usage == TokenUsage(7, 0, 19)
+    assert client.total_usage == TokenUsage(7, 0, 19)
 
 
 def test_subcall_usage_reporting_and_cost_defaults(stub_native):

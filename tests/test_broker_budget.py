@@ -304,6 +304,29 @@ def test_unavailable_item_usage_keeps_the_full_batch_reservation() -> None:
     assert deltas["token_settlement_fallback"].value == 1
 
 
+def test_partial_item_usage_preserves_known_counts_and_keeps_full_reservation() -> None:
+    context = create_execution_context(budget=_budget(subcalls=1))
+    client = _ExactSubcalls([TokenUsage(7, 0, 19)])
+
+    result = _broker(
+        context.ledger,
+        client,
+        usage_callback=context.record_subcall_usage,
+        settlement_callback=context.record_subcall_settlement,
+    ).call(LLM_QUERY_CAPABILITY.capability_id, "question")
+
+    assert result.ok is True
+    usage = context.stats.resolved_usage(0).as_dict()
+    assert usage["kind"] == "partial"
+    assert usage["subcall"]["input_tokens"] == 7
+    assert usage["subcall"]["output_tokens"] == 0
+    assert usage["subcall"]["total_tokens"] == 19
+    reserved = conservative_token_estimate({"args": ["question"], "kwargs": {}}) + 100
+    assert context.ledger.snapshot().consumed.tokens == reserved
+    deltas = {metric.name: metric for metric in result.budget_delta}
+    assert deltas["token_settlement_fallback"].value == 1
+
+
 def test_failed_batch_preserves_known_sibling_usage_through_broker() -> None:
     context = create_execution_context(budget=_budget(subcalls=3))
 

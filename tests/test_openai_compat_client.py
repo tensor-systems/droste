@@ -32,16 +32,43 @@ from droste.testing import MockEnvironment
 
 
 @pytest.mark.parametrize(
-    "payload",
+    ("payload", "expected"),
     [
-        {},
-        {"usage": {}},
-        {"usage": {"prompt_tokens": 1, "completion_tokens": 2}},
-        {"usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 2}},
-        {"usage": {"prompt_tokens": False, "completion_tokens": 2, "total_tokens": 3}},
+        ({}, TokenUsage.unavailable()),
+        ({"usage": {}}, TokenUsage.unavailable()),
+        (
+            {"usage": {"prompt_tokens": 1, "completion_tokens": 2}},
+            TokenUsage(1, 2, 0),
+        ),
+        (
+            {"usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 2}},
+            TokenUsage(1, 2, 2),
+        ),
+        (
+            {"usage": {"prompt_tokens": False, "completion_tokens": 2, "total_tokens": 3}},
+            TokenUsage(0, 2, 3),
+        ),
+        (
+            {"usage": {"prompt_tokens": 1, "completion_tokens": "bad", "total_tokens": 9}},
+            TokenUsage(1, 0, 9),
+        ),
+        (
+            {
+                "usage": {
+                    "prompt_tokens": "bad",
+                    "input_tokens": 4,
+                    "completion_tokens": 2,
+                    "total_tokens": 6,
+                }
+            },
+            TokenUsage(4, 2, 6),
+        ),
     ],
 )
-def test_usage_missing_or_malformed_is_unavailable(payload: object) -> None:
+def test_usage_partial_or_malformed_preserves_independent_counts(
+    payload: object, expected: TokenUsage
+) -> None:
+    assert _usage_from(payload) == expected
     assert _usage_from(payload).exact is False
 
 
@@ -300,6 +327,24 @@ def test_malformed_outputs_carry_exact_usage_for_root_and_subcall(monkeypatch) -
     assert subcall_failure.value.usage == TokenUsage(7, 3, 19, exact=True)
     with pytest.raises(RuntimeError, match="non-text content"):
         subcall.llm_query("q")
+
+
+def test_malformed_output_failure_carries_partial_known_usage(monkeypatch) -> None:
+    payload = {
+        "choices": [{"message": {"content": 42}}],
+        "usage": {"prompt_tokens": 7, "completion_tokens": "bad", "total_tokens": 19},
+    }
+    root = OpenAICompatClient(model="root-model", api_key="k")
+    monkeypatch.setattr(root._transport, "complete", lambda request: payload)
+
+    with pytest.raises(LLMUsageFailure) as failure:
+        root.responses_create(
+            [{"role": "user", "content": "q"}],
+            model="",
+            return_usage=True,
+        )
+
+    assert failure.value.usage == TokenUsage(7, 0, 19)
 
 
 def test_fanout_batch_preserves_usage_failure_and_original_cause(monkeypatch) -> None:

@@ -9,17 +9,21 @@ from droste.substrates.pyodide import BridgedLLMClient, _token_usage
 
 
 @pytest.mark.parametrize(
-    "payload",
+    ("payload", "expected"),
     [
-        None,
-        {},
-        {"input_tokens": 1, "output_tokens": 2},
-        {"input_tokens": -1, "output_tokens": 2, "total_tokens": 3},
-        {"input_tokens": 1, "output_tokens": 2, "total_tokens": 2},
-        {"input_tokens": True, "output_tokens": 2, "total_tokens": 3},
+        (None, TokenUsage.unavailable()),
+        ({}, TokenUsage.unavailable()),
+        ({"input_tokens": 1, "output_tokens": 2}, TokenUsage(1, 2, 0)),
+        ({"input_tokens": -1, "output_tokens": 2, "total_tokens": 3}, TokenUsage(0, 2, 3)),
+        ({"input_tokens": 1, "output_tokens": 2, "total_tokens": 2}, TokenUsage(1, 2, 2)),
+        ({"input_tokens": True, "output_tokens": 2, "total_tokens": 3}, TokenUsage(0, 2, 3)),
+        ({"input_tokens": 1, "output_tokens": "bad", "total_tokens": 9}, TokenUsage(1, 0, 9)),
     ],
 )
-def test_token_usage_missing_or_malformed_is_unavailable(payload: object) -> None:
+def test_token_usage_partial_or_malformed_preserves_independent_counts(
+    payload: object, expected: TokenUsage
+) -> None:
+    assert _token_usage(payload) == expected
     assert _token_usage(payload).exact is False
 
 
@@ -74,3 +78,22 @@ def test_bridged_client_preserves_usage_when_output_parsing_fails() -> None:
 
     assert raised.value.usage == TokenUsage(7, 3, 19, exact=True)
     assert isinstance(raised.value.cause, AttributeError)
+
+
+def test_bridged_client_preserves_partial_usage_when_output_parsing_fails() -> None:
+    def host_fetch(_method: str, _url: str, _headers: str, _body: str) -> str:
+        return json.dumps(
+            {
+                "output": [None],
+                "usage": {"input_tokens": 7, "output_tokens": "bad", "total_tokens": 19},
+            }
+        )
+
+    with pytest.raises(LLMUsageFailure) as raised:
+        BridgedLLMClient(host_fetch).responses_create(
+            [{"role": "user", "content": "q"}],
+            model="model",
+            return_usage=True,
+        )
+
+    assert raised.value.usage == TokenUsage(7, 0, 19)

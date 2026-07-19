@@ -45,7 +45,12 @@ from typing import Any
 from ..execution.budget import DEFAULT_SUBCALL_OUTPUT_TOKENS
 from ..execution.config import DEFAULT_SUBCALL_CONCURRENCY, validate_subcall_concurrency
 from ..execution.context import ExecutionContext
-from ..protocols.llm_client import LLMUsageFailure, TokenUsage, strip_cache_anchor_markers
+from ..protocols.llm_client import (
+    LLMUsageFailure,
+    TokenUsage,
+    strip_cache_anchor_markers,
+    token_usage_from_mapping,
+)
 from ..protocols.subcall_client import (
     SubcallBatchFailure,
     SubcallBatchResult,
@@ -115,33 +120,10 @@ def _message_content(data: Any, *, label: str) -> str:
 
 def _usage_from(data: Any) -> TokenUsage:
     usage = data.get("usage") if isinstance(data, dict) else None
-    if not isinstance(usage, dict):
-        return TokenUsage.unavailable()
-
-    def count(*names: str) -> int | None:
-        for name in names:
-            if name not in usage:
-                continue
-            value = usage[name]
-            return (
-                value
-                if isinstance(value, int) and not isinstance(value, bool) and value >= 0
-                else None
-            )
-        return None
-
-    prompt = count("prompt_tokens", "input_tokens")
-    completion = count("completion_tokens", "output_tokens")
-    if prompt is None or completion is None:
-        return TokenUsage.unavailable()
-    total = usage.get("total_tokens")
-    if isinstance(total, bool) or not isinstance(total, int) or total < prompt + completion:
-        return TokenUsage.unavailable()
-    return TokenUsage(
-        prompt_tokens=prompt,
-        completion_tokens=completion,
-        total_tokens=total,
-        exact=True,
+    return token_usage_from_mapping(
+        usage,
+        prompt_names=("prompt_tokens", "input_tokens"),
+        completion_names=("completion_tokens", "output_tokens"),
     )
 
 

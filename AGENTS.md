@@ -199,6 +199,20 @@ evidence with that status rather than leaving the model to interpret prefixes.
   ModelRelay/OpenAI/runner/Pyodide require explicit `total_tokens` so hidden
   reasoning is retained, while Anthropic totals all documented input/cache
   counters plus output. Batch error items always carry unavailable usage.
+- Inexact usage is partial evidence, not synonymous with unavailable usage.
+  Preserve every independently validated non-negative input, output, total,
+  and cache counter even when another field is absent, malformed, or
+  inconsistent. Zero is the typed placeholder for an unknown field only while
+  `exact=false`; never discard valid siblings or independently valid provider
+  totals. Enforce `total >= input + output` only when opting into exactness, and
+  keep full-reservation fallback settlement for every inexact tuple.
+- Use the shared mapping normalizer for OpenAI-compatible, ModelRelay, runner
+  HTTP, and Pyodide usage shapes. Anthropic remains provider-specific: absent
+  optional cache counters are reported zero, malformed present cache counters
+  make usage partial, and inclusive prompt/total values sum only the known
+  ordinary/cache/output counters. Its stream assembler must pass the raw
+  counters through the same parser rather than coercing missing values to an
+  exact zero.
 - `TokenUsage.cache_read_tokens` and `cache_creation_tokens` are non-negative
   observability breakdowns inside inclusive `prompt_tokens`/`total_tokens`; do
   not subtract them during settlement. Preserve them when copying, folding, or

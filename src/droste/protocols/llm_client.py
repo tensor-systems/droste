@@ -67,6 +67,45 @@ class LLMUsageFailure(RuntimeError):
         self.cause = cause
 
 
+def token_usage_from_mapping(
+    value: Any,
+    *,
+    prompt_names: tuple[str, ...] = ("input_tokens",),
+    completion_names: tuple[str, ...] = ("output_tokens",),
+) -> TokenUsage:
+    """Preserve independently valid provider counters from one usage mapping.
+
+    A malformed or absent counter becomes zero only as a typed placeholder;
+    ``exact=False`` distinguishes that placeholder from a reported zero. Alias
+    groups preserve the first valid value in name order but remain inexact when
+    another present alias is malformed or disagrees.
+    """
+
+    if not isinstance(value, dict):
+        return TokenUsage.unavailable()
+
+    def counter(names: tuple[str, ...]) -> tuple[int, bool]:
+        present = [value[name] for name in names if name in value]
+        valid = [
+            item
+            for item in present
+            if isinstance(item, int) and not isinstance(item, bool) and item >= 0
+        ]
+        if not valid:
+            return 0, False
+        selected = valid[0]
+        complete = len(valid) == len(present) and all(item == selected for item in valid)
+        return selected, complete
+
+    prompt, prompt_complete = counter(prompt_names)
+    completion, completion_complete = counter(completion_names)
+    total, total_complete = counter(("total_tokens",))
+    exact = (
+        prompt_complete and completion_complete and total_complete and total >= prompt + completion
+    )
+    return TokenUsage(prompt, completion, total, exact=exact)
+
+
 def total_tokens_from_usage(usage: Any) -> int:
     """Best-effort extraction of total tokens from a usage object."""
     if usage is None:

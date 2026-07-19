@@ -212,15 +212,31 @@ def test_usage_includes_cache_creation_and_cache_read_tokens(stub, stream):
 
 
 @pytest.mark.parametrize(
-    "name,value",
+    ("name", "value", "expected"),
     [
-        ("input_tokens", None),
-        ("output_tokens", True),
-        ("cache_read_input_tokens", -1),
-        ("cache_creation_input_tokens", "11"),
+        (
+            "input_tokens",
+            None,
+            TokenUsage(24, 3, 27, cache_read_tokens=13, cache_creation_tokens=11),
+        ),
+        (
+            "output_tokens",
+            True,
+            TokenUsage(31, 0, 31, cache_read_tokens=13, cache_creation_tokens=11),
+        ),
+        (
+            "cache_read_input_tokens",
+            -1,
+            TokenUsage(18, 3, 21, cache_creation_tokens=11),
+        ),
+        (
+            "cache_creation_input_tokens",
+            "11",
+            TokenUsage(20, 3, 23, cache_read_tokens=13),
+        ),
     ],
 )
-def test_usage_malformed_required_or_cache_count_is_unavailable(name, value):
+def test_usage_malformed_counter_preserves_independent_known_counts(name, value, expected):
     usage = {
         "input_tokens": 7,
         "output_tokens": 3,
@@ -229,7 +245,8 @@ def test_usage_malformed_required_or_cache_count_is_unavailable(name, value):
     }
     usage[name] = value
 
-    assert _usage_from({"usage": usage}) == TokenUsage.unavailable()
+    assert _usage_from({"usage": usage}) == expected
+    assert _usage_from({"usage": usage}).exact is False
 
 
 def test_system_message_lifted_to_top_level(stub):
@@ -438,6 +455,30 @@ def test_streaming_cache_usage_is_inclusive(stub):
     assert usage.cache_creation_tokens == 1000
 
 
+def test_streaming_malformed_cache_counter_preserves_other_known_usage(stub):
+    stub.root_responses = ["streamed"]
+    stub.usage = {
+        "input_tokens": 7,
+        "output_tokens": 3,
+        "cache_read_input_tokens": "bad",
+        "cache_creation_input_tokens": 11,
+    }
+    client = AnthropicClient(
+        model="claude-test",
+        base_url=stub.base_url,
+        api_key="sk-ant-k",
+        on_delta=lambda _text: None,
+    )
+
+    _text, usage = client.responses_create(
+        [{"role": "user", "content": "q"}],
+        model="claude-test",
+        return_usage=True,
+    )
+
+    assert usage == TokenUsage(18, 3, 21, cache_creation_tokens=11)
+
+
 def test_mid_stream_error_raises(stub):
     stub.stream_error_midway = True
     stub.root_responses = ["will not complete"]
@@ -515,6 +556,35 @@ def test_malformed_outputs_carry_exact_usage_for_root_and_subcall(monkeypatch) -
     assert subcall_failure.value.usage == expected
     with pytest.raises(RuntimeError, match="missing content blocks"):
         subcall.llm_query("q")
+
+
+def test_malformed_output_failure_carries_partial_cache_usage(monkeypatch) -> None:
+    payload = {
+        "content": None,
+        "usage": {
+            "input_tokens": 7,
+            "output_tokens": "bad",
+            "cache_read_input_tokens": 11,
+            "cache_creation_input_tokens": 5,
+        },
+    }
+    root = AnthropicClient(model="root-model", api_key="sk-ant-k")
+    monkeypatch.setattr(root._transport, "complete", lambda request: payload)
+
+    with pytest.raises(LLMUsageFailure) as failure:
+        root.responses_create(
+            [{"role": "user", "content": "q"}],
+            model="",
+            return_usage=True,
+        )
+
+    assert failure.value.usage == TokenUsage(
+        23,
+        0,
+        23,
+        cache_read_tokens=11,
+        cache_creation_tokens=5,
+    )
 
 
 def test_fanout_batch_preserves_usage_failure_and_original_cause(monkeypatch) -> None:

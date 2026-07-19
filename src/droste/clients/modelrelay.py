@@ -37,7 +37,12 @@ from ..exceptions import BatchItemError, BatchItemErrorDetails
 from ..execution.budget import DEFAULT_SUBCALL_OUTPUT_TOKENS
 from ..execution.config import validate_subcall_concurrency
 from ..execution.context import ExecutionContext
-from ..protocols.llm_client import LLMUsageFailure, TokenUsage, strip_cache_anchor_markers
+from ..protocols.llm_client import (
+    LLMUsageFailure,
+    TokenUsage,
+    strip_cache_anchor_markers,
+    token_usage_from_mapping,
+)
 from ..protocols.subcall_client import (
     SubcallBatchFailure,
     SubcallBatchResult,
@@ -146,28 +151,7 @@ def _output_text(data: Any) -> str:
 
 def _usage_from(data: Any) -> TokenUsage:
     usage = data.get("usage") if isinstance(data, dict) else None
-    if not isinstance(usage, dict):
-        return TokenUsage.unavailable()
-
-    def count(name: str) -> int | None:
-        value = usage.get(name)
-        return (
-            value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
-        )
-
-    prompt = count("input_tokens")
-    completion = count("output_tokens")
-    if prompt is None or completion is None:
-        return TokenUsage.unavailable()
-    total = usage.get("total_tokens")
-    if isinstance(total, bool) or not isinstance(total, int) or total < prompt + completion:
-        return TokenUsage.unavailable()
-    return TokenUsage(
-        prompt_tokens=prompt,
-        completion_tokens=completion,
-        total_tokens=total,
-        exact=True,
-    )
+    return token_usage_from_mapping(usage)
 
 
 class _ResponsesTransport:

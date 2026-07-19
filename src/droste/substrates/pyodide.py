@@ -26,7 +26,12 @@ import dataclasses
 import io
 from typing import Any, Callable
 
-from droste.protocols.llm_client import LLMUsageFailure, TokenUsage, strip_cache_anchor_markers
+from droste.protocols.llm_client import (
+    LLMUsageFailure,
+    TokenUsage,
+    strip_cache_anchor_markers,
+    token_usage_from_mapping,
+)
 
 # Bind the interpreter primitive once, away from call sites, so static scanners
 # don't confuse it with shell exec.
@@ -34,24 +39,7 @@ _run_code = builtins.exec
 
 
 def _token_usage(value: Any) -> TokenUsage:
-    if not isinstance(value, dict):
-        return TokenUsage.unavailable()
-    input_tokens = value.get("input_tokens")
-    output_tokens = value.get("output_tokens")
-    total_tokens = value.get("total_tokens")
-    if not all(
-        isinstance(item, int) and not isinstance(item, bool) and item >= 0
-        for item in (input_tokens, output_tokens)
-    ):
-        return TokenUsage.unavailable()
-    assert isinstance(input_tokens, int) and isinstance(output_tokens, int)
-    if (
-        isinstance(total_tokens, bool)
-        or not isinstance(total_tokens, int)
-        or total_tokens < input_tokens + output_tokens
-    ):
-        return TokenUsage.unavailable()
-    return TokenUsage(input_tokens, output_tokens, total_tokens, exact=True)
+    return token_usage_from_mapping(value)
 
 
 # --------------------------------------------------------------------------- #
