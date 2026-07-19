@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 import threading
 import time
 import urllib.error
@@ -10,7 +12,13 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-from droste.clients.errors import http_error_excerpt, redact_secrets
+from droste.clients.errors import (
+    HTTPErrorBody,
+    http_error_body_excerpt,
+    http_error_excerpt,
+    read_http_error_body,
+    redact_secrets,
+)
 from droste.clients.useragent import USER_AGENT
 from droste.execution.config import DEFAULT_SUBCALL_CONCURRENCY, validate_subcall_concurrency
 from droste.protocols.llm_client import (
@@ -38,10 +46,221 @@ _redact_secrets = redact_secrets
 _http_error_excerpt = http_error_excerpt
 
 _SUBCALL_STREAM_ACCEPT = 'application/x-ndjson; profile="responses-stream/v2"'
+_MAX_SIGNED_INT64 = 2**63 - 1
+_MIN_SIGNED_INT64 = -(2**63)
+_MIN_SIGNED_INT64_DIGITS = "9223372036854775808"
+_MAX_SIGNED_INT64_DIGITS = "9223372036854775807"
+_MAX_CONTENT_TYPE_FIELD_CHARS = 512
+_MAX_CALLBACK_JSON_DEPTH = 256
+_MAX_CALLBACK_JSON_FLOAT_CHARS = 256
+_HTTP_TOKEN = r"[!#$%&'*+.^_`|~0-9a-z-]+"
+_JSON_INTEGER = re.compile(r"-?(?:0|[1-9][0-9]*)", re.ASCII)
+_JSON_CONTENT_TYPE = re.compile(
+    rf"[ \t]*application/(?:json|{_HTTP_TOKEN}\+json)[ \t]*"
+    r'(?:;[ \t]*charset[ \t]*=[ \t]*(?:utf-8|"utf-8")[ \t]*)?',
+    re.ASCII | re.IGNORECASE,
+)
+_RUNNER_USAGE_COUNTERS = frozenset(
+    {
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cache_read_input_tokens",
+        "cache_write_input_tokens",
+        "cache_creation_input_tokens",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _InvalidJSONInteger:
+    """A syntactically valid JSON integer outside the signed-int64 contract."""
+
+
+_INVALID_JSON_INTEGER = _InvalidJSONInteger()
 
 
 def _token_usage(payload: object) -> TokenUsage:
+    if isinstance(payload, dict):
+        payload = {
+            key: None
+            if key in _RUNNER_USAGE_COUNTERS
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+            and not (_MIN_SIGNED_INT64 <= value <= _MAX_SIGNED_INT64)
+            else value
+            for key, value in payload.items()
+        }
     return token_usage_from_mapping(payload)
+
+
+def _has_json_media_type(exc: urllib.error.HTTPError) -> bool:
+    """Return whether one response Content-Type declares a JSON media type."""
+
+    try:
+        headers = getattr(exc, "headers", None) or getattr(exc, "hdrs", None)
+        if headers is None:
+            return False
+        get_all = getattr(headers, "get_all", None)
+        if callable(get_all):
+            raw_values = get_all("Content-Type") or []
+        else:
+            raw = headers.get("Content-Type")
+            raw_values = [] if raw is None else [raw]
+        if not isinstance(raw_values, (list, tuple)) or len(raw_values) != 1:
+            return False
+        raw_value = raw_values[0]
+        if (
+            not isinstance(raw_value, str)
+            or len(raw_value) > _MAX_CONTENT_TYPE_FIELD_CHARS
+            or not raw_value.isascii()
+        ):
+            return False
+        return _JSON_CONTENT_TYPE.fullmatch(raw_value) is not None
+    except Exception:
+        return False
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON constant {value!r}")
+
+
+def _parse_json_integer(value: str) -> int | _InvalidJSONInteger:
+    if _JSON_INTEGER.fullmatch(value) is None:
+        raise ValueError("invalid JSON integer lexeme")
+    negative = value.startswith("-")
+    digits = value[1:] if negative else value
+    if len(digits) > len(_MAX_SIGNED_INT64_DIGITS):
+        return _INVALID_JSON_INTEGER
+    if len(digits) == len(_MAX_SIGNED_INT64_DIGITS):
+        limit = _MIN_SIGNED_INT64_DIGITS if negative else _MAX_SIGNED_INT64_DIGITS
+        if digits > limit:
+            return _INVALID_JSON_INTEGER
+    # Bounded to 19 digits above; this never reaches Python's configurable
+    # unbounded-integer conversion limit.
+    return int(value)
+
+
+def _parse_json_float(value: str) -> float:
+    # parse_constant does not see exponent overflow: Python's default decoder
+    # turns a valid JSON lexeme such as 1e10000 into infinity. Bound the work
+    # before conversion, then reject every non-finite binary result.
+    if len(value) > _MAX_CALLBACK_JSON_FLOAT_CHARS:
+        raise ValueError("JSON float lexeme exceeds maximum length")
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError("JSON float must be finite")
+    return parsed
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON object key {key!r}")
+        value[key] = item
+    return value
+
+
+def _load_callback_json(body: bytes) -> object:
+    """Load any runner callback JSON under the one strict wire contract."""
+
+    text = body.decode("utf-8", errors="strict")
+    if text.startswith("\ufeff"):
+        raise ValueError("callback JSON must not contain a byte-order mark")
+    value = json.loads(
+        text,
+        object_pairs_hook=_unique_json_object,
+        parse_constant=_reject_json_constant,
+        parse_float=_parse_json_float,
+        parse_int=_parse_json_integer,
+    )
+    pending: list[tuple[object, int]] = [(value, 0)]
+    while pending:
+        item, depth = pending.pop()
+        if depth > _MAX_CALLBACK_JSON_DEPTH:
+            raise ValueError("callback JSON exceeds maximum depth")
+        if isinstance(item, dict):
+            pending.extend((child, depth + 1) for child in item.values())
+        elif isinstance(item, list):
+            pending.extend((child, depth + 1) for child in item)
+    return value
+
+
+def _contains_invalid_json_integer(value: object) -> bool:
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if item is _INVALID_JSON_INTEGER:
+            return True
+        if isinstance(item, dict):
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+    return False
+
+
+def _has_invalid_integer_outside_usage_counters(payload: dict[str, Any]) -> bool:
+    for key, value in payload.items():
+        if key != "usage" and _contains_invalid_json_integer(value):
+            return True
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return _contains_invalid_json_integer(usage)
+    for key, value in usage.items():
+        if value is _INVALID_JSON_INTEGER and key in _RUNNER_USAGE_COUNTERS:
+            continue
+        if _contains_invalid_json_integer(value):
+            return True
+    return False
+
+
+def _load_callback_object_with_usage(
+    body: bytes,
+    operation: str,
+) -> tuple[dict[str, Any], TokenUsage]:
+    try:
+        value = _load_callback_json(body)
+    except (UnicodeError, ValueError, RecursionError, OverflowError) as exc:
+        raise RuntimeError(f"{operation} returned malformed JSON") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{operation} returned a non-object JSON envelope")
+    usage = _token_usage(value.get("usage"))
+    if _has_invalid_integer_outside_usage_counters(value):
+        raise LLMUsageFailure(
+            usage,
+            RuntimeError(
+                f"{operation} returned an out-of-range integer outside a recognized usage counter"
+            ),
+        )
+    return value, usage
+
+
+def _callback_http_failure(
+    exc: urllib.error.HTTPError,
+    operation: str,
+) -> tuple[RuntimeError, TokenUsage | None]:
+    """Build one bounded callback error and preserve its structured usage field."""
+
+    captured: HTTPErrorBody = read_http_error_body(exc)
+    status = getattr(exc, "code", 0)
+    excerpt = http_error_body_excerpt(captured.body)
+    detail = f": {excerpt}" if excerpt else f": {exc}"
+    cause = RuntimeError(f"{operation} failed with HTTP {status}{detail}")
+    if not captured.complete or not captured.body or not _has_json_media_type(exc):
+        return cause, None
+    try:
+        payload = _load_callback_json(captured.body)
+    except (UnicodeError, ValueError, RecursionError, OverflowError):
+        return cause, None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("error") != "api_error"
+        or not isinstance(payload.get("usage"), dict)
+        or _has_invalid_integer_outside_usage_counters(payload)
+    ):
+        return cause, None
+    return cause, _token_usage(payload["usage"])
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,12 +354,11 @@ class HTTPSubcallClient(SubcallClient):
             with urllib.request.urlopen(req, timeout=60) as resp:
                 content_type = str(resp.headers.get("Content-Type") or "")
                 if "application/x-ndjson" not in content_type.lower():
-                    raw = resp.read().decode("utf-8")
-                    data = json.loads(raw)
-                    usage = self._record_usage(
-                        data.get("usage") if isinstance(data, dict) else None
+                    data, usage = _load_callback_object_with_usage(
+                        resp.read(),
+                        "llm_query",
                     )
-                    result = data.get("result") if isinstance(data, dict) else None
+                    result = data.get("result")
                     if not isinstance(result, str):
                         raise LLMUsageFailure(usage, RuntimeError("missing subcall result"))
                     return SubcallQueryResult(result, usage)
@@ -151,21 +369,33 @@ class HTTPSubcallClient(SubcallClient):
                 completion_content = ""
                 completion_usage: object = None
                 for raw_line in resp:
-                    line = raw_line.decode("utf-8", errors="replace").strip()
-                    if not line:
+                    if not raw_line.strip(b" \t\r\n"):
                         continue
                     try:
-                        event = json.loads(line)
-                    except json.JSONDecodeError as exc:
+                        event = _load_callback_json(raw_line)
+                    except (UnicodeError, ValueError, RecursionError, OverflowError) as exc:
                         raise RuntimeError("llm_query returned malformed stream data") from exc
                     if not isinstance(event, dict):
                         raise RuntimeError("llm_query returned a non-object stream event")
                     event_type = event.get("type")
+                    if _has_invalid_integer_outside_usage_counters(event):
+                        cause = RuntimeError(
+                            "llm_query stream event contained an out-of-range integer "
+                            "outside a recognized usage counter"
+                        )
+                        if event_type in ("error", "completion") and isinstance(
+                            event.get("usage"), dict
+                        ):
+                            raise LLMUsageFailure(self._record_usage(event["usage"]), cause)
+                        raise cause
                     if event_type == "error":
-                        message = str(event.get("message") or "stream error")
-                        code = str(event.get("code") or "")
+                        message = _redact_secrets(str(event.get("message") or "stream error"))[:500]
+                        code = _redact_secrets(str(event.get("code") or ""))[:100]
                         detail = f" ({code})" if code else ""
-                        raise RuntimeError(f"llm_query streamed an error{detail}: {message[:500]}")
+                        cause = RuntimeError(f"llm_query streamed an error{detail}: {message}")
+                        if "usage" in event:
+                            raise LLMUsageFailure(self._record_usage(event["usage"]), cause)
+                        raise cause
                     if event_type == "update":
                         delta = event.get("delta")
                         if delta is not None:
@@ -184,10 +414,10 @@ class HTTPSubcallClient(SubcallClient):
                     usage,
                 )
         except urllib.error.HTTPError as exc:
-            status = getattr(exc, "code", 0)
-            excerpt = _http_error_excerpt(exc)
-            detail = f": {excerpt}" if excerpt else f": {exc}"
-            raise RuntimeError(f"llm_query failed with HTTP {status}{detail}") from exc
+            cause, usage = _callback_http_failure(exc, "llm_query")
+            if usage is not None:
+                raise LLMUsageFailure(usage, cause) from None
+            raise cause from exc
         except RuntimeError:
             raise
         except Exception as exc:
@@ -380,17 +610,21 @@ class RootLLMClient:
         )
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
-                raw = resp.read().decode("utf-8")
+                raw = resp.read()
         except urllib.error.HTTPError as exc:
-            status = getattr(exc, "code", 0)
-            excerpt = _http_error_excerpt(exc)
-            detail = f": {excerpt}" if excerpt else f": {exc}"
-            raise RuntimeError(f"root llm failed with HTTP {status}{detail}") from exc
+            cause, usage = _callback_http_failure(exc, "root llm")
+            if return_usage and usage is not None:
+                raise LLMUsageFailure(usage, cause) from None
+            raise cause from exc
         except Exception as exc:
             raise RuntimeError(f"root llm failed: {exc}") from exc
-        data = json.loads(raw)
-        usage = _token_usage(data.get("usage") if isinstance(data, dict) else None)
-        result = data.get("result") if isinstance(data, dict) else None
+        try:
+            data, usage = _load_callback_object_with_usage(raw, "root llm")
+        except LLMUsageFailure as exc:
+            if return_usage:
+                raise
+            raise exc.cause from exc
+        result = data.get("result")
         if not isinstance(result, str):
             error = RuntimeError("missing root result")
             if return_usage:

@@ -7,6 +7,8 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from droste.environments import RunnerEnvironment
 from droste.loop.trajectory import IterationRecord
 from droste.protocols.llm_client import CACHE_ANCHOR_MARKER, TokenUsage
@@ -55,6 +57,15 @@ def test_runner_usage_parser_preserves_independently_valid_partial_counts() -> N
         {"input_tokens": False, "output_tokens": 3, "total_tokens": 19}
     ) == TokenUsage(0, 3, 19)
     assert _token_usage({"input_tokens": 7, "output_tokens": 3}) == TokenUsage(7, 3, 0)
+
+
+@pytest.mark.parametrize("out_of_range", [-(2**63) - 1, 2**63])
+def test_runner_usage_parser_rejects_both_signed_int64_overflow_directions(
+    out_of_range: int,
+) -> None:
+    assert _token_usage(
+        {"input_tokens": out_of_range, "output_tokens": 3, "total_tokens": 5}
+    ) == TokenUsage(0, 3, 5, exact=False)
 
 
 def test_cli_does_not_import_runner_package_for_environment() -> None:

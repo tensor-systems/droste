@@ -26,9 +26,12 @@ import { streamResponses } from "./stream.ts";
 import {
   isModelRelayResponsesCall,
   isRunnerCallback,
+  redactRelayErrorText,
+  shouldReturnRunnerCallbackFailureBody,
   splitCredentials,
   stripAndInjectAuth,
   stripAndInjectBearer,
+  validateAndRedactRunnerCallbackFailureBody,
 } from "./broker.ts";
 import { isRlmEvent } from "./events.ts";
 import {
@@ -63,6 +66,56 @@ const relayRunId = crypto.randomUUID();
 let relaySeq = 0;
 
 const _enc = new TextEncoder();
+const MAX_HTTP_ERROR_BODY_BYTES = 64 * 1024;
+const UTF8_BOM = [0xef, 0xbb, 0xbf] as const;
+
+async function readBoundedResponseText(
+  response: Response,
+  limit = MAX_HTTP_ERROR_BODY_BYTES,
+): Promise<{ text: string; complete: boolean }> {
+  if (response.body === null) return { text: "", complete: true };
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  let complete = true;
+  while (true) {
+    const item = await reader.read();
+    if (item.done) break;
+    const remaining = limit - length;
+    if (item.value.byteLength > remaining) {
+      if (remaining > 0) chunks.push(item.value.subarray(0, remaining));
+      length = limit;
+      complete = false;
+      await reader.cancel();
+      break;
+    }
+    chunks.push(item.value);
+    length += item.value.byteLength;
+  }
+  const body = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  if (!complete) return { text: "", complete: false };
+  if (
+    body.byteLength >= UTF8_BOM.length &&
+    UTF8_BOM.every((byte, index) => body[index] === byte)
+  ) {
+    throw new Error(
+      "runner callback failure body must not contain a UTF-8 BOM",
+    );
+  }
+  return {
+    // Preserve any BOM as U+FEFF so the JSON grammar validator rejects it even
+    // if the explicit byte check above is changed; default TextDecoder strips it.
+    text: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      body,
+    ),
+    complete: true,
+  };
+}
 
 // Fully resolve symlinks to a real on-disk path, returning the input unchanged
 // if it cannot be resolved (e.g. the file does not exist yet).
@@ -456,15 +509,54 @@ const BRIDGE_LEGACY = Deno.env.get("RLM_BRIDGE") === "legacy";
 const { creds, sandboxRequest } = splitCredentials(request);
 
 // Host-brokered ModelRelay transport (Pyodide has no network of its own).
-// The last HTTP error status (0 = none) is captured structurally here, where
-// `r.status` is available, and injected into the HostResponse error below — so
-// callers (e.g. the Swift app) can branch on it (402 = out of balance) without
-// parsing the human-readable message string. Fresh per process (one run/query).
-let lastHttpErrorStatus = 0;
+// HTTP status provenance has an explicit per-fetch lifecycle. A new fetch
+// supersedes handled provenance; a generation prevents a late completion from
+// an older overlapping fetch from becoming current. Typed callback values are
+// eligible only when the adapter invocation exits by exception immediately
+// after receiving them. A normal adapter return consumes them as handled.
+type HTTPFailureDelivery = "transport-exception" | "typed-callback-value";
+type HTTPFailureAssociation = Readonly<{
+  fetchID: number;
+  status: number;
+  delivery: HTTPFailureDelivery;
+}>;
+
+let currentFetchID = 0;
+let currentHTTPFailure: HTTPFailureAssociation | null = null;
+
+function beginHostFetch(): number {
+  currentFetchID += 1;
+  currentHTTPFailure = null;
+  return currentFetchID;
+}
+
+function associateHTTPFailure(
+  fetchID: number,
+  status: number,
+  delivery: HTTPFailureDelivery,
+): void {
+  if (fetchID === currentFetchID) {
+    currentHTTPFailure = { fetchID, status, delivery };
+  }
+}
+
+function finishHTTPFailureAssociation(adapterRaised: boolean): number {
+  const association = currentHTTPFailure;
+  currentHTTPFailure = null;
+  if (
+    association === null ||
+    (association.delivery === "typed-callback-value" && !adapterRaised)
+  ) {
+    return 0;
+  }
+  return association.status;
+}
+
 py.globals.set(
   "host_fetch",
   async (m: string, u: string, h: string, b: string) => {
     if (eventChannel.failure !== null) throw eventChannel.failure;
+    const fetchID = beginHostFetch();
     const headers = JSON.parse(h);
     // A′: host auth is authoritative — drop whatever auth header the sandbox sent
     // and inject the held credential. Scoped to the exact `POST /api/v1/responses`
@@ -494,13 +586,61 @@ py.globals.set(
       headers["Accept"] = 'application/x-ndjson; profile="responses-stream/v2"';
     }
     const r = await fetch(u, { method: m, headers, body: b });
-    // Surface HTTP errors instead of returning an error/empty body that the
-    // Python client would blindly json.loads() into a cryptic JSONDecodeError.
+    // Exact runner callback JSON failures are protocol values for Python.
+    // Every other HTTP error stays a thrown, bounded transport failure.
     if (!r.ok) {
-      lastHttpErrorStatus = r.status;
-      const text = await r.text();
+      // Set provenance before touching the body: read/decode/cancellation
+      // failures are still this HTTP failure and must retain its status.
+      associateHTTPFailure(fetchID, r.status, "transport-exception");
+      const contentType = r.headers.get("content-type") || "";
+      const typedCallback = shouldReturnRunnerCallbackFailureBody(
+        m,
+        u,
+        contentType,
+        [
+          request.root_endpoint,
+          request.subcall_endpoint,
+          request.subcall_batch_endpoint,
+        ],
+      );
+      if (typedCallback) {
+        try {
+          const failureBody = await readBoundedResponseText(r);
+          if (!failureBody.complete) {
+            throw new Error("incomplete callback body");
+          }
+          // Keep exact number lexemes raw; only decoded JSON string tokens may
+          // be rewritten. The returned value keeps a fetch-scoped status
+          // association until the adapter invocation surfaces or handles it.
+          const safeBody = validateAndRedactRunnerCallbackFailureBody(
+            failureBody.text,
+            [creds.apiKey, creds.customerToken, creds.runnerToken],
+          );
+          associateHTTPFailure(fetchID, r.status, "typed-callback-value");
+          return safeBody;
+        } catch {
+          // Fall through to a body-free transport error. Invalid UTF-8,
+          // malformed JSON, short reads, and oversize bodies never cross into
+          // the untrusted interpreter.
+        }
+      } else {
+        try {
+          await r.body?.cancel();
+        } catch {
+          // The status was captured before cancellation and remains the only
+          // diagnostic allowed to cross this boundary.
+        }
+      }
+      const redactedStatusText = redactRelayErrorText(r.statusText, [
+        creds.apiKey,
+        creds.customerToken,
+        creds.runnerToken,
+      ]).replace(/\s+/g, " ").trim().slice(0, 120);
+      const statusText = /^[A-Za-z .'-]{1,120}$/.test(redactedStatusText)
+        ? redactedStatusText
+        : "";
       throw new Error(
-        `ModelRelay HTTP ${r.status} ${r.statusText}: ${text.slice(0, 1000)}`,
+        `ModelRelay HTTP ${r.status}${statusText ? ` ${statusText}` : ""}`,
       );
     }
     // Stream only when we asked for it AND the server actually returned ndjson;
@@ -531,11 +671,13 @@ py.globals.set("adapter_module_name", adapterModule);
 py.globals.set("bridge_call", bridgeCall);
 py.globals.set("duplex_bridge_call", duplexBridgeCall);
 py.globals.set("bridge_meta_json", bridgeMetaJson ?? "null");
-// A callable, not a value snapshot: lastHttpErrorStatus is still 0 at this
-// point (host_fetch, which sets it, hasn't run yet — it runs synchronously
-// *inside* the runPythonAsync call below via run_sync). The Python template
-// calls this after computing resp, to read the CURRENT value.
-py.globals.set("get_last_http_error_status", () => lastHttpErrorStatus);
+// A callable, not a value snapshot: host_fetch runs synchronously inside the
+// adapter through run_sync. The template settles the one current association
+// after it knows whether the adapter returned normally or raised.
+py.globals.set(
+  "finish_http_failure_association",
+  (adapterRaised: boolean) => finishHTTPFailureAssociation(adapterRaised),
+);
 
 // The status enrichment (attaching the captured HTTP status, e.g. 402 = out
 // of balance, to resp["error"]) happens INSIDE this same Python template,
@@ -575,8 +717,11 @@ try:
             duplex_bridge_call=_duplex_bridge_call, meta=_meta,
         )
 except Exception as e:
+    _adapter_raised = True
     resp = build_exception_response(e, traceback.format_exc(), operation=_operation)
-_status = get_last_http_error_status()
+else:
+    _adapter_raised = False
+_status = finish_http_failure_association(_adapter_raised)
 if _status and isinstance(resp.get("error"), dict):
     resp["error"]["status"] = _status
 # Runner responses use the same deterministic UTF-8 representation as the

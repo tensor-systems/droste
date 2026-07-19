@@ -169,7 +169,9 @@ function startMockModelRelay(code = QUERY_CODE): Promise<
 // resp.error.status) happens without any JS-side re-parsing of the adapter's
 // response, per the same adapter-agnostic-split finding the precision test above
 // guards on the success path.
-function startFailingMockModelRelay(): Promise<
+function startFailingMockModelRelay(
+  mode: "small" | "non-json" | "oversized" = "small",
+): Promise<
   { port: number; shutdown: () => Promise<void> }
 > {
   const server = Deno.serve(
@@ -179,6 +181,28 @@ function startFailingMockModelRelay(): Promise<
         req.method === "POST" &&
         new URL(req.url).pathname.endsWith("/responses")
       ) {
+        if (mode === "non-json") {
+          return new Response(
+            String
+              .raw`provider echoed api\/secret and cl\u00e9\ud83d\ude00secret`,
+            {
+              status: 402,
+              statusText: String.raw`api\/secret`,
+              headers: { "Content-Type": "text/plain" },
+            },
+          );
+        }
+        if (mode === "oversized") {
+          return new Response(
+            `{"padding":"${"p".repeat(70 * 1024)}",` +
+              String.raw`"late":"api\/secret cl\u00e9\ud83d\ude00secret"}`,
+            {
+              status: 402,
+              statusText: String.raw`cl\u00e9\ud83d\ude00secret`,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
         return Response.json({ error: "insufficient balance" }, {
           status: 402,
         });
@@ -189,6 +213,167 @@ function startFailingMockModelRelay(): Promise<
   return Promise.resolve({
     port: (server.addr as Deno.NetAddr).port,
     shutdown: () => server.shutdown(),
+  });
+}
+
+function startFailingRunnerCallback(
+  mode:
+    | "typed"
+    | "malformed"
+    | "invalid-utf8"
+    | "utf8-bom"
+    | "oversized"
+    | "unsupported-content-type"
+    | "ndjson-content-type"
+    | "error-object"
+    | "wrong-discriminator"
+    | "missing-usage"
+    | "nonmapping-usage"
+    | "duplicate-key"
+    | "overflow-float"
+    | "out-of-range-extra" = "typed",
+): Promise<{
+  port: number;
+  authorization: Promise<string | null>;
+  shutdown: () => Promise<void>;
+}> {
+  let recordAuthorization!: (value: string | null) => void;
+  const authorization = new Promise<string | null>((resolve) => {
+    recordAuthorization = resolve;
+  });
+  const server = Deno.serve(
+    { port: 0, hostname: "127.0.0.1", onListen: () => {} },
+    (req) => {
+      const pathname = new URL(req.url).pathname;
+      if (
+        req.method === "POST" &&
+        ["/root", "/subcall", "/subcall/batch"].includes(pathname)
+      ) {
+        recordAuthorization(req.headers.get("authorization"));
+        const padding = "p".repeat((mode === "oversized" ? 70 : 60) * 1024);
+        const closedSuffix =
+          '"late_secret":"runner\\/secret","unicode_secret":"cl\\u00e9\\ud83d\\ude00secret"}';
+        const openSuffix =
+          '"late_secret":"runner\\/secret","unicode_secret":"cl\\u00e9\\ud83d\\ude00secret';
+        const canonical =
+          '{"error":"api_error","code":"PROVIDER_ERROR","message":"provider failed",' +
+          '"usage":{"input_tokens":9223372036854775807,"output_tokens":0,' +
+          `"total_tokens":9223372036854775807},"padding":"${padding}",` +
+          (mode === "malformed" ? openSuffix : closedSuffix);
+        const text = mode === "error-object"
+          ? '{"error":{"type":"ProviderError","message":"provider failed"},' +
+            '"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5},' +
+            closedSuffix
+          : mode === "wrong-discriminator"
+          ? '{"error":"proxy_error","usage":{"input_tokens":2,' +
+            '"output_tokens":3,"total_tokens":5},' + closedSuffix
+          : mode === "missing-usage"
+          ? '{"error":"api_error","message":"provider failed",' + closedSuffix
+          : mode === "nonmapping-usage"
+          ? '{"error":"api_error","usage":[2,3,5],' + closedSuffix
+          : mode === "duplicate-key"
+          ? '{"error":"api_error","error":"api_error","usage":{},' +
+            closedSuffix
+          : mode === "overflow-float"
+          ? '{"error":"api_error","retry_after":1e10000,"usage":{},' +
+            closedSuffix
+          : mode === "out-of-range-extra"
+          ? `{"error":"api_error","attempt":${"9".repeat(5_000)},` +
+            '"usage":{},' + closedSuffix
+          : canonical;
+        const encoded = new TextEncoder().encode(text);
+        const body = mode === "invalid-utf8"
+          ? new Uint8Array([...encoded, 0x80])
+          : mode === "utf8-bom"
+          ? new Uint8Array([0xef, 0xbb, 0xbf, ...encoded])
+          : text;
+        return new Response(
+          body,
+          {
+            status: 502,
+            headers: {
+              "Content-Type": mode === "unsupported-content-type"
+                ? "application/json; charset=iso-8859-1"
+                : mode === "ndjson-content-type"
+                ? "application/x-ndjson"
+                : "application/json",
+            },
+          },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    },
+  );
+  return Promise.resolve({
+    port: (server.addr as Deno.NetAddr).port,
+    authorization,
+    shutdown: () => server.shutdown(),
+  });
+}
+
+function startRecoveringRunnerCallback(): Promise<{
+  port: number;
+  shutdown: () => Promise<void>;
+}> {
+  let calls = 0;
+  const server = Deno.serve(
+    { port: 0, hostname: "127.0.0.1", onListen: () => {} },
+    (req) => {
+      if (req.method !== "POST" || new URL(req.url).pathname !== "/subcall") {
+        return new Response("not found", { status: 404 });
+      }
+      calls += 1;
+      if (calls === 1) {
+        return new Response(String.raw`api\/secret cl\u00e9 secret`, {
+          status: 502,
+          headers: { "Content-Type": "text/plain" },
+        });
+      }
+      return Response.json({ ok: true });
+    },
+  );
+  return Promise.resolve({
+    port: (server.addr as Deno.NetAddr).port,
+    shutdown: () => server.shutdown(),
+  });
+}
+
+function startShortRunnerCallback(): Promise<{
+  port: number;
+  shutdown: () => Promise<void>;
+}> {
+  const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
+  const body =
+    '{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},' +
+    String.raw`"late_secret":"runner\/secret"}`;
+  const serve = (async () => {
+    try {
+      for await (const connection of listener) {
+        const request = new Uint8Array(8 * 1024);
+        await connection.read(request);
+        const headers = "HTTP/1.1 502 Bad Gateway\r\n" +
+          "Content-Type: application/json\r\n" +
+          `Content-Length: ${
+            new TextEncoder().encode(body).byteLength + 32
+          }\r\n` +
+          "Connection: close\r\n\r\n";
+        const response = new TextEncoder().encode(headers + body);
+        let written = 0;
+        while (written < response.byteLength) {
+          written += await connection.write(response.subarray(written));
+        }
+        connection.close();
+      }
+    } catch (error) {
+      if (!(error instanceof Deno.errors.BadResource)) throw error;
+    }
+  })();
+  return Promise.resolve({
+    port: (listener.addr as Deno.NetAddr).port,
+    shutdown: async () => {
+      listener.close();
+      await serve;
+    },
   });
 }
 
@@ -272,6 +457,11 @@ async function buildTempSources(): Promise<string> {
   await copy(
     `${HERE}_large_event_adapter.py`,
     `${dir}/_large_event_adapter.py`,
+    { overwrite: true },
+  );
+  await copy(
+    `${HERE}_callback_failure_adapter.py`,
+    `${dir}/_callback_failure_adapter.py`,
     { overwrite: true },
   );
   return dir;
@@ -1079,6 +1269,244 @@ Deno.test({
         resp.error && (resp.error as Record<string, unknown>).status,
         402,
       );
+    } finally {
+      await shutdown();
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "relay.ts: generic direct failures never surface encoded response bodies",
+  fn: async () => {
+    for (const mode of ["non-json", "oversized"] as const) {
+      const { port, shutdown } = await startFailingMockModelRelay(mode);
+      try {
+        const sourcesDir = await buildTempSources();
+        const dbPath = await buildTempDb();
+        const { lastLine } = await runRelayRaw(
+          sourcesDir,
+          {
+            question: "how many widgets are there",
+            db_path: dbPath,
+            root_model: "test-model",
+            base_url: `http://127.0.0.1:${port}/api/v1`,
+            api_key: "api/secret",
+            customer_token: "clé😀secret",
+            auth_type: "api_key",
+            budget: TEST_BUDGET,
+          },
+          port,
+          {},
+        );
+        assert(!lastLine.includes("api/secret"));
+        assert(!lastLine.includes("api\\/secret"));
+        assert(!lastLine.includes("clé😀secret"));
+        assert(!lastLine.includes("cl\\u00e9"));
+        assert(!lastLine.includes("padding"));
+        const response = JSON.parse(lastLine);
+        assertEquals(response.error.status, 402);
+        assert(
+          String(response.error.message).includes("ModelRelay HTTP 402"),
+        );
+      } finally {
+        await shutdown();
+      }
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "relay.ts: canonical root/subcall/batch failure reaches Python without JS parsing",
+  fn: async () => {
+    for (
+      const [endpointKey, path] of [
+        ["root_endpoint", "/root"],
+        ["subcall_endpoint", "/subcall"],
+        ["subcall_batch_endpoint", "/subcall/batch"],
+      ] as const
+    ) {
+      const { port, authorization, shutdown } =
+        await startFailingRunnerCallback();
+      try {
+        const sourcesDir = await buildTempSources();
+        const { lastLine } = await runRelayRaw(
+          sourcesDir,
+          {
+            [endpointKey]: `http://127.0.0.1:${port}${path}`,
+            callback_endpoint_key: endpointKey,
+            token: "runner/secret",
+            // The shorter held API key overlaps the runner token and appears
+            // first in the relay's credential list. Redaction must still remove
+            // the union of all matches without leaking the `/secret` suffix.
+            api_key: "runner",
+            customer_token: "clé😀secret",
+          },
+          port,
+          {},
+          "_callback_failure_adapter",
+        );
+        assertEquals(await authorization, "Bearer runner/secret");
+        assert(
+          lastLine.includes(
+            '"received_usage":{"input_tokens":9223372036854775807,"output_tokens":0,"total_tokens":9223372036854775807}',
+          ),
+          `expected raw callback usage in adapter response, got:\n${lastLine}`,
+        );
+        const response = JSON.parse(lastLine);
+        assertEquals(response.received_late_secret, "[redacted]");
+        assertEquals(response.received_unicode_secret, "[redacted]");
+        assert(!lastLine.includes("runner/secret"));
+        assert(!lastLine.includes("clé😀secret"));
+        assertEquals(
+          response.error.message,
+          "local validation failed after callback was handled",
+        );
+        assert(!("status" in response.error));
+      } finally {
+        await shutdown();
+      }
+    }
+  },
+});
+
+Deno.test({
+  name: "relay.ts: immediate typed callback error preserves envelope status",
+  fn: async () => {
+    const { port, shutdown } = await startFailingRunnerCallback();
+    try {
+      const sourcesDir = await buildTempSources();
+      const { lastLine } = await runRelayRaw(
+        sourcesDir,
+        {
+          subcall_endpoint: `http://127.0.0.1:${port}/subcall`,
+          token: "runner/secret",
+          api_key: "clé😀secret",
+          surface_callback_error: true,
+        },
+        port,
+        {},
+        "_callback_failure_adapter",
+      );
+      const response = JSON.parse(lastLine);
+      assertEquals(response.error.type, "ProviderError");
+      assertEquals(response.error.message, "provider failed");
+      assertEquals(response.error.status, 502);
+      assert(!lastLine.includes("runner/secret"));
+      assert(!lastLine.includes("clé😀secret"));
+    } finally {
+      await shutdown();
+    }
+  },
+});
+
+Deno.test({
+  name: "relay.ts: unsafe callback bodies fail closed before Python",
+  fn: async () => {
+    for (
+      const mode of [
+        "malformed",
+        "invalid-utf8",
+        "utf8-bom",
+        "oversized",
+        "unsupported-content-type",
+        "ndjson-content-type",
+        "error-object",
+        "wrong-discriminator",
+        "missing-usage",
+        "nonmapping-usage",
+        "duplicate-key",
+        "overflow-float",
+        "out-of-range-extra",
+      ] as const
+    ) {
+      const { port, authorization, shutdown } =
+        await startFailingRunnerCallback(mode);
+      try {
+        const sourcesDir = await buildTempSources();
+        const { lastLine } = await runRelayRaw(
+          sourcesDir,
+          {
+            subcall_endpoint: `http://127.0.0.1:${port}/subcall`,
+            token: "runner/secret",
+            api_key: "clé😀secret",
+          },
+          port,
+          {},
+          "_callback_failure_adapter",
+        );
+        assertEquals(await authorization, "Bearer runner/secret");
+        assert(!lastLine.includes("runner/secret"));
+        assert(!lastLine.includes("runner\\/secret"));
+        assert(!lastLine.includes("clé😀secret"));
+        assert(!lastLine.includes("cl\\u00e9"));
+        assert(!lastLine.includes("received_usage"));
+        const response = JSON.parse(lastLine);
+        assertEquals(response.error.status, 502);
+        assert(
+          String(response.error.message).includes("ModelRelay HTTP 502"),
+        );
+      } finally {
+        await shutdown();
+      }
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "relay.ts: short callback body read retains status without crossing body",
+  fn: async () => {
+    const { port, shutdown } = await startShortRunnerCallback();
+    try {
+      const sourcesDir = await buildTempSources();
+      const { lastLine } = await runRelayRaw(
+        sourcesDir,
+        {
+          subcall_endpoint: `http://127.0.0.1:${port}/subcall`,
+          token: "runner/secret",
+        },
+        port,
+        {},
+        "_callback_failure_adapter",
+      );
+      assert(!lastLine.includes("runner/secret"));
+      assert(!lastLine.includes("runner\\/secret"));
+      assert(!lastLine.includes("received_usage"));
+      const response = JSON.parse(lastLine);
+      assertEquals(response.error.status, 502);
+      assert(String(response.error.message).includes("ModelRelay HTTP 502"));
+    } finally {
+      await shutdown();
+    }
+  },
+});
+
+Deno.test({
+  name: "relay.ts: later successful fetch clears handled transport status",
+  fn: async () => {
+    const { port, shutdown } = await startRecoveringRunnerCallback();
+    try {
+      const sourcesDir = await buildTempSources();
+      const { lastLine } = await runRelayRaw(
+        sourcesDir,
+        {
+          subcall_endpoint: `http://127.0.0.1:${port}/subcall`,
+          token: "runner/secret",
+          recover_transport: true,
+        },
+        port,
+        {},
+        "_callback_failure_adapter",
+      );
+      assert(!lastLine.includes("runner/secret"));
+      const response = JSON.parse(lastLine);
+      assertEquals(
+        response.error.message,
+        "local validation failed after transport recovery",
+      );
+      assert(!("status" in response.error));
     } finally {
       await shutdown();
     }

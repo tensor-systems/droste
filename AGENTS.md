@@ -259,6 +259,67 @@ evidence with that status rather than leaving the model to interpret prefixes.
   client methods preserve the original exception type. Usage is billable even
   when output is malformed, but `root_successes`/`successful_calls` count only
   usable outputs and therefore must not increment on this path.
+- Runner callback non-2xx JSON envelopes may carry a structured `usage` field.
+  Read the error body once under a hard byte limit, parse usage only when the
+  full body is available, and require received bytes to agree with every valid
+  `Content-Length`. A short close or malformed/negative/conflicting framing is
+  incomplete; bound header field/count/digit parsing before integer conversion
+  so arbitrarily long declarations also fail closed without raising. Transfer
+  framing is trustworthy only when the header is absent (close-delimited) or
+  urllib exposes exactly one case-insensitive `chunked` value; reject every
+  other coding, comma list, repeated field, malformed token/whitespace, and
+  `Content-Length` plus `Transfer-Encoding`. Chunked and no-length responses
+  are complete only at clean EOF.
+- Native callback failure usage additionally requires exactly one JSON media
+  type (`application/json` or `application/<nonempty-token>+json`). Its only
+  supported parameter is one case-insensitive `charset=utf-8`; the UTF-8 value
+  may be a token or a simple quoted string. Reject every other charset,
+  parameter, duplicate, conflict, or malformed parameter syntax. Then require
+  strict UTF-8 without a BOM, finite JSON numbers, unique object keys at every
+  depth, and bounded nesting.
+  Decode from text explicitly so Python cannot auto-detect UTF-16/32, and keep
+  integer tokens as Python integers so the complete signed-int64 range stays
+  exact. The strict decoder's `parse_int` must compare integer lexemes by bounded
+  length/digits before calling `int`; never disable or mutate Python's global
+  integer-string limit. Out-of-int64 lexemes become a typed nonnumeric sentinel.
+  Permit that sentinel only as the direct value of a recognized usage counter,
+  where it is malformed partial evidence: preserve valid sibling counters but
+  never use the tuple for exact settlement. A sentinel anywhere else in the
+  envelope invalidates the schema. Apply the same runner-wire counter bound to
+  JSON success and NDJSON usage paths.
+  `parse_constant` does not catch a valid exponent lexeme that Python converts
+  to infinity (for example, `1e10000`), so the shared loader must also bound
+  `parse_float` lexeme length and reject non-finite results. Ordinary bounded
+  finite floats remain valid JSON outside usage counters; a float used as a
+  direct token counter is malformed partial evidence, not an integer count.
+  All native runner callback JSON—root/subcall success, typed non-2xx failure,
+  and every NDJSON event—must pass through this one loader. Do not add a raw
+  `json.loads`, replacement UTF-8 decode, or per-path depth/duplicate parser.
+  A successful unary/completion event with an out-of-range direct usage counter
+  keeps its usable result and partial siblings but settles conservatively; an
+  NDJSON error raises `LLMUsageFailure` with that partial usage. urllib owns
+  successful-response framing/clean-EOF enforcement; the strict body loader is
+  independent of whether the established success callback returned unary JSON
+  or negotiated NDJSON.
+  Native `HTTPSubcallClient.llm_batch*` has no separate batch HTTP endpoint or
+  response parser: `_run_batch` is bounded client-side fan-out over
+  `llm_query_with_usage`, and every item posts the same unary payload to
+  `subcall_endpoint`. Therefore JSON, NDJSON, and typed non-2xx strictness and
+  usage attribution are per-item through the shared loader. Do not invent a
+  second native batch wire path; `subcall_batch_endpoint` is a hosted-adapter
+  callback concern. A fail-fast batch settles to provider totals only when all
+  ordered item usage is exact; any partial/unavailable item keeps the full
+  vector reservation.
+  The trusted envelope is a top-level object with `error == "api_error"` and a
+  mapping-valued `usage`; a usage-shaped object without that discriminator is
+  not protocol evidence. Raise `LLMUsageFailure` from usage-aware native
+  root/subcall methods. A present malformed usage mapping remains inexact
+  evidence; an absent, wrongly typed, duplicate-key, non-JSON, or incomplete
+  mapping remains a plain error so the broker keeps the full reservation.
+  The raw-mapping `_token_usage` guard mirrors the wire contract symmetrically:
+  integer values below signed-int64 minimum or above signed-int64 maximum are
+  malformed counters. Negative in-range counters remain invalid because token
+  usage itself is non-negative.
 - A completed root provider response is a success/usage fact before final
   ledger reconciliation. Record normalized root usage before `commit()` so a
   later token or wall overrun preserves exact terminal usage (or marks malformed
@@ -309,7 +370,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - The runner wraps `droste` and supplies an HTTP `LLMClient` + `SubcallClient` plus a sandboxed `RunnerEnvironment`.
 - Timeouts in `RunnerEnvironment.execute` use `signal.setitimer` and restore the previous handler (`old_handler`) after each execution to avoid clobbering host signal handlers.
 - `droste_runner` expects HTTP endpoints for root and subcall execution (`root_endpoint`/`subcall_endpoint` + `token`).
-- Hosted subcalls negotiate `responses-stream/v2` NDJSON, ignore keepalive and reasoning events, assemble text from `update.delta`, require a terminal `completion`, and fail on error or truncated streams. Servers may still return plain JSON for compatibility with non-streaming local callback handlers.
+- Hosted subcalls negotiate `responses-stream/v2` NDJSON, ignore keepalive and reasoning events, assemble text from `update.delta`, require a terminal `completion`, and fail on error or truncated streams. An `error` event with `usage` must raise `LLMUsageFailure`; missing/malformed usage still forces conservative settlement. Servers may still return plain JSON for compatibility with non-streaming local callback handlers.
 - `adapter_module` lets callers delegate the runner to a custom module with `run(request)` (used by in-process embedders).
 
 ## Capability Broker ABI
@@ -520,6 +581,37 @@ uv pip install --no-index --find-links wheelhouse droste
   sandbox request and injects it only for exact root/subcall callback URLs from
   the trusted envelope. Requests without `db_path` skip the DB-service setup
   entirely, allowing context-only hosted adapters.
+- On non-2xx, return a complete bounded JSON body to Python only for the exact
+  root/subcall/batch callback URLs and the same narrow JSON Content-Type grammar
+  as the native client (including its UTF-8-only parameter allowlist). Keep it
+  as raw text so int64 usage counters never cross JavaScript numbers. Require
+  fatal UTF-8 decoding, reject UTF-8 BOM bytes explicitly (and configure the
+  decoder to preserve rather than silently strip a BOM), validate the full JSON
+  grammar, decode/redact only string tokens, and copy number tokens byte-for-byte;
+  this catches slash/Unicode/
+  surrogate escape spellings without corrupting numeric-looking usage.
+  Before returning a body as a value, the relay must prove the same trusted
+  envelope as native Python: one top-level object, `error == "api_error"`, a
+  mapping-valued `usage`, unique decoded keys, finite bounded floats, and no
+  out-of-int64 integer outside a direct recognized usage counter. Endpoint and
+  media type alone are never body authority. Validate integer bounds lexically
+  and retain raw number lexemes; do not round-trip the envelope through a JS
+  number or include invalid-body details in the transport exception.
+  Normalize held secrets to unique nonempty values and redact the simultaneous
+  union of all matches in each decoded string. Never perform caller-order
+  replacement: overlapping prefix/suffix credentials must redact as one span so
+  neither fragments nor encoded spellings cross into Python or diagnostics.
+  Invalid UTF-8, malformed, non-typed,
+  oversized, short-read, and unreadable bodies never cross into Python at all;
+  their exception exposes only HTTP status plus a bounded, normalized ASCII
+  reason phrase (or status alone when the reason is unusual), never a body
+  excerpt. Capture status immediately on non-2xx before reading and associate
+  it with that fetch generation and delivery kind. A later fetch supersedes
+  the association; an adapter that returns normally after receiving a typed
+  callback value consumes it as handled, while an immediate adapter exception
+  may attach that callback's status to the final error. Body-free transport
+  exceptions retain their status. Settle the association once when the adapter
+  invocation finishes so stale provenance cannot annotate a later local error.
 - Database-backed Pyodide requests have exactly one data path: the trusted
   provider interpreter and broker bridge. Never restore `RLM_DB_SERVICE`, mount
   a database directory into the untrusted interpreter, pass `db_path` through
