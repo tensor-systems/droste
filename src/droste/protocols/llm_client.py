@@ -72,20 +72,30 @@ def token_usage_from_mapping(
     *,
     prompt_names: tuple[str, ...] = ("input_tokens",),
     completion_names: tuple[str, ...] = ("output_tokens",),
+    cache_read_names: tuple[str, ...] = ("cache_read_input_tokens",),
+    cache_creation_names: tuple[str, ...] = (
+        "cache_write_input_tokens",
+        "cache_creation_input_tokens",
+    ),
 ) -> TokenUsage:
     """Preserve independently valid provider counters from one usage mapping.
 
     A malformed or absent counter becomes zero only as a typed placeholder;
     ``exact=False`` distinguishes that placeholder from a reported zero. Alias
     groups preserve the first valid value in name order but remain inexact when
-    another present alias is malformed or disagrees.
+    another present alias is malformed or disagrees. Cache counters are
+    optional exact-zero breakdowns inside inclusive prompt usage; a malformed
+    present cache field or a cache sum above the prompt total makes the tuple
+    partial without discarding independently valid siblings.
     """
 
     if not isinstance(value, dict):
         return TokenUsage.unavailable()
 
-    def counter(names: tuple[str, ...]) -> tuple[int, bool]:
+    def counter(names: tuple[str, ...], *, optional: bool = False) -> tuple[int, bool]:
         present = [value[name] for name in names if name in value]
+        if optional and not present:
+            return 0, True
         valid = [
             item
             for item in present
@@ -100,10 +110,25 @@ def token_usage_from_mapping(
     prompt, prompt_complete = counter(prompt_names)
     completion, completion_complete = counter(completion_names)
     total, total_complete = counter(("total_tokens",))
+    cache_read, cache_read_complete = counter(cache_read_names, optional=True)
+    cache_creation, cache_creation_complete = counter(cache_creation_names, optional=True)
     exact = (
-        prompt_complete and completion_complete and total_complete and total >= prompt + completion
+        prompt_complete
+        and completion_complete
+        and total_complete
+        and cache_read_complete
+        and cache_creation_complete
+        and total >= prompt + completion
+        and cache_read + cache_creation <= prompt
     )
-    return TokenUsage(prompt, completion, total, exact=exact)
+    return TokenUsage(
+        prompt,
+        completion,
+        total,
+        cache_read_tokens=cache_read,
+        cache_creation_tokens=cache_creation,
+        exact=exact,
+    )
 
 
 def total_tokens_from_usage(usage: Any) -> int:

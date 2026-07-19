@@ -225,22 +225,33 @@ def test_exact_batch_overrun_reaches_ledger_with_summed_actual_usage() -> None:
 
 
 def test_exact_batch_sums_item_usage_and_refunds_for_near_budget_reuse() -> None:
-    ledger = BudgetLedger(_budget(subcalls=3))
+    context = create_execution_context(budget=_budget(subcalls=3))
     client = _ExactSubcalls(
         [
-            TokenUsage(5, 2, 7, exact=True),
-            TokenUsage(6, 3, 19, exact=True),
-            TokenUsage(4, 1, 5, exact=True),
+            TokenUsage(5, 2, 7, cache_read_tokens=2, exact=True),
+            TokenUsage(6, 3, 19, cache_creation_tokens=4, exact=True),
+            TokenUsage(4, 1, 5, cache_read_tokens=1, exact=True),
         ]
     )
-    broker = _broker(ledger, client)
+    broker = _broker(
+        context.ledger,
+        client,
+        usage_callback=context.record_subcall_usage,
+        settlement_callback=context.record_subcall_settlement,
+    )
 
     first = broker.call(LLM_BATCH_CAPABILITY.capability_id, ["one", "two"])
+    assert first.ok is True
+    assert context.stats.subcall_cache_read_tokens == 2
+    assert context.stats.subcall_cache_creation_tokens == 4
+
     second = broker.call(LLM_QUERY_CAPABILITY.capability_id, "three")
 
     assert first.ok is True and second.ok is True
-    assert ledger.snapshot().consumed.tokens == 33
-    assert ledger.snapshot().consumed.subcalls == 3
+    assert context.stats.subcall_cache_read_tokens == 4
+    assert context.stats.subcall_cache_creation_tokens == 4
+    assert context.ledger.snapshot().consumed.tokens == 33
+    assert context.ledger.snapshot().consumed.subcalls == 3
 
 
 def test_concurrent_exact_queries_serialize_usage_callback_and_reconcile_totals() -> None:
@@ -343,9 +354,9 @@ def test_failed_batch_preserves_known_sibling_usage_through_broker() -> None:
 
     client = PartialBatch(
         [
-            TokenUsage(2, 1, 11, exact=True),
+            TokenUsage(2, 1, 11, cache_read_tokens=1, exact=True),
             TokenUsage.unavailable(),
-            TokenUsage(3, 2, 13, exact=True),
+            TokenUsage(3, 2, 13, cache_creation_tokens=2, exact=True),
         ]
     )
     result = _broker(
@@ -361,10 +372,14 @@ def test_failed_batch_preserves_known_sibling_usage_through_broker() -> None:
     assert context.stats.calls_made == 3
     assert context.stats.successful_calls == 2
     assert context.stats.subcall_total_tokens == 24
+    assert context.stats.subcall_cache_read_tokens == 1
+    assert context.stats.subcall_cache_creation_tokens == 2
     assert context.stats.subcall_usage_complete is False
     resolved = context.stats.resolved_usage(0).as_dict()
     assert resolved["kind"] == "partial"
     assert resolved["subcall"]["total_tokens"] == 24
+    assert resolved["subcall"]["cache_read_tokens"] == 1
+    assert resolved["subcall"]["cache_creation_tokens"] == 2
 
 
 def test_fail_fast_batch_carries_all_public_errors_and_original_first_cause() -> None:

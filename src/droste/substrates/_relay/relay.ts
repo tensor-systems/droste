@@ -402,7 +402,7 @@ function writeRelayEvent(obj: Record<string, unknown>): void {
     depth: 1,
     seq: ++relaySeq,
     timestamp: new Date().toISOString(),
-    version: 3,
+    version: 4,
     persistence_class: "transient",
   };
   eventChannel.writeFrame(JSON.stringify(event));

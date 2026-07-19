@@ -97,6 +97,8 @@ class ExecutionContext:
         if not usage.exact:
             self.stats.root_usage_complete = False
         self.stats.root_input_tokens += usage.prompt_tokens
+        self.stats.root_cache_read_tokens += usage.cache_read_tokens
+        self.stats.root_cache_creation_tokens += usage.cache_creation_tokens
         self.stats.root_output_tokens += usage.completion_tokens
         self.stats.root_total_tokens += usage.total_tokens
         self.stats.total_tokens += usage.total_tokens
@@ -116,6 +118,8 @@ class ExecutionContext:
         if not usage.exact:
             self.stats.subcall_usage_complete = False
         self.stats.subcall_input_tokens += usage.prompt_tokens
+        self.stats.subcall_cache_read_tokens += usage.cache_read_tokens
+        self.stats.subcall_cache_creation_tokens += usage.cache_creation_tokens
         self.stats.subcall_output_tokens += usage.completion_tokens
         self.stats.subcall_total_tokens += usage.total_tokens
         self.stats.total_tokens += usage.total_tokens

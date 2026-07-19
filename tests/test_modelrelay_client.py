@@ -72,6 +72,55 @@ def test_usage_accepts_complete_zero_and_preserves_hidden_total() -> None:
     assert hidden.exact is True and hidden.total_tokens == 19
 
 
+def test_usage_preserves_modelrelay_cache_classes_inside_inclusive_input() -> None:
+    usage = _usage_from(
+        {
+            "usage": {
+                "input_tokens": 20,
+                "cache_read_input_tokens": 7,
+                "cache_write_input_tokens": 3,
+                "output_tokens": 4,
+                "total_tokens": 24,
+            }
+        }
+    )
+
+    assert usage == TokenUsage(
+        20,
+        4,
+        24,
+        cache_read_tokens=7,
+        cache_creation_tokens=3,
+        exact=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "read", "creation"),
+    [
+        ("cache_read_input_tokens", "bad", 0, 0),
+        ("cache_write_input_tokens", -1, 0, 0),
+    ],
+)
+def test_usage_malformed_present_cache_class_forces_partial(
+    field: str, value: object, read: int, creation: int
+) -> None:
+    payload = {
+        "usage": {
+            "input_tokens": 20,
+            "output_tokens": 4,
+            "total_tokens": 24,
+            field: value,
+        }
+    }
+
+    usage = _usage_from(payload)
+
+    assert usage.cache_read_tokens == read
+    assert usage.cache_creation_tokens == creation
+    assert usage.exact is False
+
+
 class StubResponsesServer:
     """Minimal native /responses stub.
 
