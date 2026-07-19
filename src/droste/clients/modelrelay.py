@@ -658,7 +658,11 @@ class ModelRelaySubcallClient(SubcallClient):
 
         def fail_with_partial_usage(error: Exception) -> NoReturn:
             raise SubcallBatchFailure(
-                SubcallBatchResult(tuple(results), (), tuple(usage)),
+                SubcallBatchResult(
+                    tuple(results),
+                    structured_subcall_errors(tuple(errors)),
+                    tuple(usage),
+                ),
                 error,
             ) from None
 

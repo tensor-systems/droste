@@ -593,6 +593,21 @@ def _native_success_result(index: int) -> dict[str, object]:
     }
 
 
+def _native_error_result(index: int) -> dict[str, object]:
+    return {
+        "id": str(index),
+        "status": "error",
+        "error": {
+            "message": f"failed-{index}",
+            "code": "PROVIDER_ERROR",
+            "status": 502,
+            "request_id": f"req-{index}",
+            "layer": "gateway",
+            "retryable": True,
+        },
+    }
+
+
 @pytest.mark.parametrize(
     ("malformed", "message"),
     [
@@ -627,6 +642,49 @@ def test_native_batch_structural_failure_preserves_earlier_usage(
     assert context.stats.calls_made == 2
     assert context.stats.successful_calls == 1
     assert client.total_usage.total_tokens == 10
+
+
+@pytest.mark.parametrize(
+    ("raw_results", "message"),
+    [
+        ([_native_error_result(0), None], "non-object result"),
+        ([_native_error_result(0)], r"missing result ids \[1\]"),
+    ],
+)
+def test_native_batch_structural_failure_preserves_earlier_public_error(
+    monkeypatch, raw_results, message
+) -> None:
+    context = create_execution_context()
+    client = ModelRelaySubcallClient(model="sub-model", context=context, api_key="mr_sk_t")
+    monkeypatch.setattr(
+        client._transport,
+        "complete",
+        lambda payload, **kwargs: {"id": "batch-1", "results": raw_results},
+    )
+
+    with pytest.raises(SubcallBatchFailure, match=message) as failure:
+        client.llm_batch_with_usage(["a", "b"])
+
+    assert failure.value.result.errors == (
+        {
+            "index": 0,
+            "error": "llm_batch item 0 failed (PROVIDER_ERROR): failed-0",
+            "details": {
+                "request_id": "req-0",
+                "batch_id": "batch-1",
+                "item_id": "0",
+                "layer": "gateway",
+                "status_code": 502,
+                "code": "PROVIDER_ERROR",
+                "retryable": True,
+            },
+        },
+    )
+    assert failure.value.result.usage == (
+        TokenUsage.unavailable(),
+        TokenUsage.unavailable(),
+    )
+    assert type(failure.value.cause) is RuntimeError
 
 
 def test_native_batch_final_missing_id_preserves_earlier_usage_and_public_error(
