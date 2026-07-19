@@ -803,6 +803,38 @@ def test_live_window_elides_only_byte_identical_drafts_and_keeps_records_canonic
     )
 
 
+def test_real_loop_freezes_elided_refinement_across_later_distances() -> None:
+    llm = RecordingLLMClient(
+        _responses(
+            _draft_response("A", "1"),
+            _draft_response("A", "2"),
+            _draft_response("B", "3"),
+            _draft_response("B", "4"),
+            _draft_response("B", "5"),
+            _draft_response("done", "6", ready=True),
+        )
+    )
+
+    result = run_rlm(
+        question="Freeze a synthetic transcript window.",
+        environment=SequencedOutputEnvironment(),
+        root_llm=llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(),
+    )
+
+    templates = load_builtin_prompt_catalog().bindings[0].pack.templates
+    first_observation = llm.calls[4][5]["content"]
+    farther_observation = llm.calls[5][5]["content"]
+    assert result.ready
+    assert first_observation == farther_observation
+    assert templates.unchanged_draft_elision in first_observation
+    assert templates.historical_stdout_elision in first_observation
+    assert "2" * 3000 not in first_observation
+    assert llm.calls[4][4] == llm.calls[5][4]
+    assert llm.calls[4][4]["content"].startswith("```python\n")
+
+
 def test_missing_code_repair_adopts_full_canonical_history_after_windowing(
     monkeypatch,
 ) -> None:

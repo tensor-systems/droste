@@ -215,9 +215,11 @@ def project_live_transcript(
 ) -> tuple[list[dict[str, Any]], int | None]:
     """Build the outbound-only live transcript and its stable frontier.
 
-    The last two completed iterations remain verbatim. Older refinements use
-    their already-frozen replacement. The canonical messages and entry values
-    are never mutated or aliased by the returned dictionaries.
+    The last two completed iterations remain verbatim. Older refinement user
+    messages use their already-frozen replacement. Assistant code blocks and
+    repair exchanges deliberately remain verbatim because they are
+    non-redundant attempt context. The canonical messages and entry values are
+    never mutated or aliased by the returned dictionaries.
     """
     outbound: list[dict[str, Any]] = [dict(message) for message in messages]
     stable_count = max(0, len(window_entries) - LIVE_TRANSCRIPT_VERBATIM_ITERATIONS)

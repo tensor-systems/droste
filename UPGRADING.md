@@ -27,6 +27,13 @@ and repair adoption retain the complete message history. Once windowing is
 active, Anthropic cache anchors mark the system prompt and stable elision
 frontier rather than the mutable tail.
 
+Assistant code blocks and canonical repair exchanges, including adopted
+missing-code repair messages, are deliberately outside this windowing scope
+and remain verbatim at every distance. They preserve nonredundant evidence
+about attempted programs and repair instructions, while only historical stdout
+and byte-identical draft repeats are treated as disposable; code-heavy
+transcripts can therefore continue to grow even after windowing activates.
+
 ## 0.16.0 (from 0.15.5)
 
 ### Anthropic prompt caching and inclusive usage
