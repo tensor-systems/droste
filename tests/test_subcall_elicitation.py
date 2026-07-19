@@ -22,7 +22,7 @@ from droste import (
     run_rlm,
 )
 from droste.loop.rlm import EMPTY_OUTPUT_NUDGE
-from droste.prompts import TIPS_PROFILES, SystemPromptBuilder
+from droste.prompts import TIPS_PROFILES, SystemPromptBuilder, load_builtin_prompt_catalog
 from droste.protocols.environment import ExecutionResult
 from droste.protocols.llm_client import CACHE_ANCHOR_MARKER, TokenUsage
 from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
@@ -347,7 +347,7 @@ def test_runner_complete_default_budget_allows_subcalls() -> None:
     assert response["answer"] == "got: sub"
     assert response["subcalls"] == 1
     assert response["prompt_pack"]["id"] == "droste.generic.full"
-    assert response["prompt_pack"]["revision"] == "1.0.3"
+    assert response["prompt_pack"]["revision"] == "2.0.0"
     assert response["prompt_pack"]["profile"] == "full"
     assert response["prompt_pack"]["resolution_tier"] == "generic"
     assert response["prompt_pack"]["model_family"] == "generic"
@@ -743,6 +743,138 @@ answer['ready'] = True
         False,
     ]
     assert CACHE_ANCHOR_MARKER not in json.dumps([asdict(record) for record in result.trajectory])
+
+
+def _draft_response(draft: str, output_character: str, *, ready: bool = False) -> str:
+    return (
+        "```python\n"
+        f"answer['content'] = {draft!r}\n"
+        f"answer['ready'] = {ready!r}\n"
+        f"output_character = {output_character!r}\n"
+        "```"
+    )
+
+
+class SequencedOutputEnvironment(MockEnvironment):
+    def execute(self, code: str) -> ExecutionResult:
+        super().execute(code)
+        output_character = str(self.globals()["output_character"])
+        return ExecutionResult(
+            stdout=output_character * 3000,
+            stderr="",
+            timed_out=False,
+            exit_code=0,
+            files_written=[],
+        )
+
+
+def test_live_window_elides_only_byte_identical_drafts_and_keeps_records_canonical() -> None:
+    llm = RecordingLLMClient(
+        _responses(
+            _draft_response("A", "1"),
+            _draft_response("A", "2"),
+            _draft_response("B", "3"),
+            _draft_response("B", "4"),
+            _draft_response("B", "5"),
+            _draft_response("B", "6"),
+            _draft_response("B", "7", ready=True),
+        )
+    )
+
+    result = run_rlm(
+        question="Build a synthetic draft.",
+        environment=SequencedOutputEnvironment(),
+        root_llm=llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(),
+    )
+
+    templates = load_builtin_prompt_catalog().bindings[0].pack.templates
+    sixth_call = llm.calls[5]
+    assert templates.unchanged_draft_elision in sixth_call[5]["content"]
+    assert templates.unchanged_draft_elision not in sixth_call[7]["content"]
+    assert "Current accumulated answer:\n```\nB\n```" in sixth_call[7]["content"]
+    assert templates.historical_stdout_elision in sixth_call[7]["content"]
+    assert templates.unchanged_draft_elision not in json.dumps(
+        [asdict(record) for record in result.trajectory]
+    )
+    assert templates.historical_stdout_elision not in json.dumps(
+        [asdict(record) for record in result.trajectory]
+    )
+
+
+def test_real_loop_freezes_elided_refinement_across_later_distances() -> None:
+    llm = RecordingLLMClient(
+        _responses(
+            _draft_response("A", "1"),
+            _draft_response("A", "2"),
+            _draft_response("B", "3"),
+            _draft_response("B", "4"),
+            _draft_response("B", "5"),
+            _draft_response("done", "6", ready=True),
+        )
+    )
+
+    result = run_rlm(
+        question="Freeze a synthetic transcript window.",
+        environment=SequencedOutputEnvironment(),
+        root_llm=llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(),
+    )
+
+    templates = load_builtin_prompt_catalog().bindings[0].pack.templates
+    first_observation = llm.calls[4][5]["content"]
+    farther_observation = llm.calls[5][5]["content"]
+    assert result.ready
+    assert first_observation == farther_observation
+    assert templates.unchanged_draft_elision in first_observation
+    assert templates.historical_stdout_elision in first_observation
+    assert "2" * 3000 not in first_observation
+    assert llm.calls[4][4] == llm.calls[5][4]
+    assert llm.calls[4][4]["content"].startswith("```python\n")
+
+
+def test_missing_code_repair_adopts_full_canonical_history_after_windowing(
+    monkeypatch,
+) -> None:
+    from droste.loop import rlm as rlm_module
+
+    captured_repairs: list[list[dict[str, str]]] = []
+    original_builder = rlm_module.build_missing_code_repair_messages
+
+    def capture_repair(messages, response, *, repair_prompt=None):
+        repair = original_builder(messages, response, repair_prompt=repair_prompt)
+        captured_repairs.append(repair)
+        return repair
+
+    monkeypatch.setattr(rlm_module, "build_missing_code_repair_messages", capture_repair)
+    llm = RecordingLLMClient(
+        _responses(
+            _draft_response("A", "1"),
+            _draft_response("A", "2"),
+            _draft_response("B", "3"),
+            _draft_response("B", "4"),
+            "I forgot the code block.",
+            _draft_response("done", "5", ready=True),
+        )
+    )
+
+    result = run_rlm(
+        question="Repair a synthetic draft.",
+        environment=SequencedOutputEnvironment(),
+        root_llm=llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(),
+    )
+
+    templates = load_builtin_prompt_catalog().bindings[0].pack.templates
+    assert len(captured_repairs) == 1
+    assert result.trajectory[-1].llm_input == captured_repairs[0]
+    assert "1" * 3000 in captured_repairs[0][3]["content"]
+    assert "1" * 3000 not in llm.calls[-1][3]["content"]
+    assert templates.historical_stdout_elision in llm.calls[-1][3]["content"]
+    assert templates.historical_stdout_elision not in json.dumps(captured_repairs[0])
 
 
 def test_terminal_finalization_root_failure_is_observable_without_changing_policy() -> None:

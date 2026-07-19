@@ -25,10 +25,10 @@ inference facts.
   "engine": {"version": "0.10.6", "source_revision": null},
   "abis": {
     "kernel": 1, "capability": 1, "trace": 1,
-    "prompt_pack": 1, "provider": 4, "runner": 5
+    "prompt_pack": 2, "provider": 4, "runner": 5
   },
   "prompt_pack": {
-    "id": "droste.generic.full", "revision": "1.0.2",
+    "id": "droste.generic.full", "revision": "2.0.0",
     "profile": "full", "content_hash": "sha256:<64 lowercase hex>"
   },
   "capabilities": {

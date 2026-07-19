@@ -17,7 +17,7 @@ from pathlib import Path
 from string import Formatter
 from typing import Any, Literal, Mapping
 
-PROMPT_PACK_SCHEMA_VERSION = 1
+PROMPT_PACK_SCHEMA_VERSION = 2
 PROMPT_SLOT_NAMES = frozenset({"capabilities", "budget", "question", "history", "output_contract"})
 DEFAULT_PROMPT_PROFILE = "full"
 _CONTENT_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -36,6 +36,8 @@ _TEMPLATE_FIELDS = (
     "error_repair",
     "extract_system",
     "extract_user",
+    "historical_stdout_elision",
+    "unchanged_draft_elision",
 )
 _PROMPT_PACK_FIELDS = frozenset(
     {
@@ -58,16 +60,18 @@ _REQUIRED_TEMPLATE_SLOTS = {
     "error_repair": frozenset({"history", "output_contract"}),
     "extract_system": frozenset({"output_contract"}),
     "extract_user": frozenset({"question", "history"}),
+    "historical_stdout_elision": frozenset(),
+    "unchanged_draft_elision": frozenset(),
 }
 _BUILTIN_PACK_FILES = (
-    "generic-full-v1.toml",
-    "generic-minimal-v1.toml",
-    "generic-none-v1.toml",
+    "generic-full-v2.toml",
+    "generic-minimal-v2.toml",
+    "generic-none-v2.toml",
 )
 _BUILTIN_PACK_BY_PROFILE = {
-    "full": "generic-full-v1.toml",
-    "minimal": "generic-minimal-v1.toml",
-    "none": "generic-none-v1.toml",
+    "full": "generic-full-v2.toml",
+    "minimal": "generic-minimal-v2.toml",
+    "none": "generic-none-v2.toml",
 }
 
 ResolutionTier = Literal[
@@ -111,6 +115,8 @@ class PromptTemplates:
     error_repair: str
     extract_system: str
     extract_user: str
+    historical_stdout_elision: str
+    unchanged_draft_elision: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +293,8 @@ def _validate_template(name: str, template: str) -> None:
     if missing:
         rendered = ", ".join(f"{{{slot}}}" for slot in missing)
         raise PromptPackError(f"templates.{name} is missing required slots: {rendered}")
+    if name in {"historical_stdout_elision", "unchanged_draft_elision"} and slots:
+        raise PromptPackError(f"templates.{name} must not use prompt slots")
 
 
 def _canonical_prompt_pack_value(pack: PromptPack) -> dict[str, Any]:

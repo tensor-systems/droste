@@ -13,7 +13,26 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.17.0)
 
-No changes yet.
+### Prompt-pack schema v2 supplies transcript-elision text
+
+Live root transcripts now retain the last two completed iterations verbatim,
+then use the resolved pack's `historical_stdout_elision` and
+`unchanged_draft_elision` templates when older refinements enter the stable
+window. Complete caller and consumer prompt packs must upgrade to
+`schema_version = 2` and provide both non-empty templates. The built-in pack
+IDs and profile fallback order are unchanged; their revisions are now `2.0.0`.
+
+Windowing affects only outbound root requests. Canonical trajectory snapshots
+and repair adoption retain the complete message history. Once windowing is
+active, Anthropic cache anchors mark the system prompt and stable elision
+frontier rather than the mutable tail.
+
+Assistant code blocks and canonical repair exchanges, including adopted
+missing-code repair messages, are deliberately outside this windowing scope
+and remain verbatim at every distance. They preserve nonredundant evidence
+about attempted programs and repair instructions, while only historical stdout
+and byte-identical draft repeats are treated as disposable; code-heavy
+transcripts can therefore continue to grow even after windowing activates.
 
 ## 0.17.0 (from 0.16.0)
 

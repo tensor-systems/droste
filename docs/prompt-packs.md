@@ -37,7 +37,7 @@ appear together. An optional top-level `content_sha256` may declare the expected
 canonical digest; loading rejects a malformed or mismatched declaration.
 
 ```toml
-schema_version = 1
+schema_version = 2
 id = "example.analysis.full"
 revision = "2026-07-14.1"
 profile = "full"
@@ -65,10 +65,19 @@ Repair the attempt. {output_contract}"""
 extract_system = """Use only supported evidence. {output_contract}"""
 extract_user = """Question: {question}
 {history}"""
+historical_stdout_elision = "\n... [historical stdout elided] ...\n"
+unchanged_draft_elision = """[unchanged draft elided; see prior snapshot]"""
 ```
 
 Literal braces authored in a template use normal Python-format escaping (`{{`
 and `}}`). Braces in slot values need no escaping.
+
+Live root calls keep the last two completed iterations verbatim. When an older
+refinement leaves that window, its stdout is reduced to a deterministic
+head/tail projection around `historical_stdout_elision`. Its accumulated draft
+is replaced by `unchanged_draft_elision` only when it is exactly equal to the
+prior snapshot; changed drafts stay verbatim. These two constant templates must
+not introduce new slots.
 
 ## Canonical content identity
 

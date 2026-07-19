@@ -12,12 +12,15 @@ from droste.execution.context import create_execution_context
 from droste.loop.step import (
     EMPTY_OUTPUT_NUDGE,
     StepOutcome,
+    TranscriptWindowEntry,
     build_error_repair_messages,
     build_initial_messages,
     build_missing_code_repair_messages,
     build_refinement_messages,
     call_root,
+    elide_historical_stdout,
     finalize,
+    project_live_transcript,
     record_iteration,
 )
 from droste.loop.trajectory import IterationRecord
@@ -201,6 +204,86 @@ def test_call_root_cache_anchors_never_alias_canonical_or_iteration_record() -> 
     assert error is None
     assert json.dumps(asdict(record), sort_keys=True) == record_bytes
     assert all(CACHE_ANCHOR_MARKER not in message for message in record.llm_input)
+
+
+def _window_fixture(count: int) -> tuple[list[dict[str, str]], tuple[TranscriptWindowEntry, ...]]:
+    messages = build_initial_messages("SYS", "Q")
+    entries: list[TranscriptWindowEntry] = []
+    for iteration in range(1, count + 1):
+        messages += [
+            {"role": "assistant", "content": f"code-{iteration}"},
+            {"role": "user", "content": f"verbatim-{iteration}"},
+        ]
+        entries.append(
+            TranscriptWindowEntry(
+                iteration=iteration,
+                message_index=len(messages) - 1,
+                elided_content=f"elided-{iteration}",
+            )
+        )
+    return messages, tuple(entries)
+
+
+def test_live_transcript_elision_is_append_only_and_frozen() -> None:
+    messages, entries = _window_fixture(10)
+    earlier, earlier_frontier = project_live_transcript(messages[:8], entries[:3])
+    later, later_frontier = project_live_transcript(messages, entries)
+
+    assert earlier_frontier == entries[0].message_index
+    assert later_frontier == entries[-3].message_index
+    assert later[: earlier_frontier + 1] == earlier[: earlier_frontier + 1]
+    assert earlier[entries[0].message_index]["content"] == "elided-1"
+    assert later[entries[0].message_index]["content"] == "elided-1"
+    assert later[entries[-2].message_index]["content"] == "verbatim-9"
+    assert later[entries[-1].message_index]["content"] == "verbatim-10"
+
+
+def test_live_transcript_projection_and_frontier_anchor_do_not_alias_canonical() -> None:
+    class CapturingLLM:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def responses_create(self, messages, **_kwargs):
+            self.calls.append(messages)
+            return "response", TokenUsage(1, 1, 2)
+
+    messages, entries = _window_fixture(5)
+    canonical_bytes = json.dumps(messages, sort_keys=True)
+    context = create_execution_context()
+    client = CapturingLLM()
+
+    _response, _usage, error = call_root(
+        client,
+        messages,
+        model="model",
+        context=context,  # type: ignore[arg-type]
+        transcript_window=entries,
+    )
+
+    assert error is None
+    frontier = entries[-3].message_index
+    anchored = [
+        index for index, message in enumerate(client.calls[0]) if CACHE_ANCHOR_MARKER in message
+    ]
+    assert anchored == [0, frontier]
+    assert frontier < entries[-2].message_index
+    assert json.dumps(messages, sort_keys=True) == canonical_bytes
+    assert all(CACHE_ANCHOR_MARKER not in message for message in messages)
+    client.calls[0][frontier]["content"] = "mutated outbound"
+    assert json.dumps(messages, sort_keys=True) == canonical_bytes
+
+
+def test_historical_stdout_elision_is_bounded_and_deterministic() -> None:
+    output = "a" * 1_500 + "b" * 1_500
+    placeholder = "<elided>"
+
+    projected = elide_historical_stdout(output, placeholder=placeholder)
+
+    assert len(projected) == 2_000
+    assert projected == elide_historical_stdout(output, placeholder=placeholder)
+    assert projected.startswith("a")
+    assert placeholder in projected
+    assert projected.endswith("b")
 
 
 def test_record_iteration_snapshots_messages() -> None:

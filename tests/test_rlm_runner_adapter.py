@@ -372,7 +372,7 @@ def test_runner_preflight_returns_typed_scaffold_refusal_without_dispatch(monkey
         {
             "path": "prompt_pack.revision",
             "expected": "not-this-revision",
-            "actual": "1.0.3",
+            "actual": "2.0.0",
         }
     ]
 
