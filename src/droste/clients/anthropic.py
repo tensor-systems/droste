@@ -335,6 +335,11 @@ class _MessagesTransport:
                         model = str(message.get("model") or model)
                         usage = message.get("usage")
                         input_usage = dict(usage) if isinstance(usage, dict) else None
+                        if input_usage is not None:
+                            # Anthropic's message_start output count is only a
+                            # preliminary value. Terminal output usage belongs
+                            # exclusively to message_delta.
+                            input_usage.pop("output_tokens", None)
                     elif etype == "content_block_delta":
                         delta = event.get("delta") or {}
                         if delta.get("type") == "text_delta":

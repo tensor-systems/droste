@@ -19,6 +19,7 @@ from droste import (
     create_execution_context,
 )
 from droste.clients.anthropic import _mark_content, _usage_from
+from droste.execution.budget import conservative_token_estimate
 from droste.loop.step import call_root
 from droste.protocols.llm_client import CACHE_ANCHOR_MARKER
 from droste_cli.main import main
@@ -44,6 +45,9 @@ class StubAnthropicServer:
         self.fail_status: int | None = None
         self.fail_body: bytes = b""
         self.stream_error_midway = False
+        self.stream_start_output_tokens: object | None = None
+        self.stream_delta_output_tokens: object | None = None
+        self.stream_omit_delta_output = False
         self.usage = {"input_tokens": 7, "output_tokens": 3}
         self.max_in_flight = 0
         self._in_flight = 0
@@ -88,17 +92,20 @@ class StubAnthropicServer:
                         def sse(event: dict) -> None:
                             self.wfile.write(f"data: {json.dumps(event)}\n\n".encode("utf-8"))
 
+                        start_usage = {
+                            key: value
+                            for key, value in stub.usage.items()
+                            if key != "output_tokens"
+                        }
+                        if stub.stream_start_output_tokens is not None:
+                            start_usage["output_tokens"] = stub.stream_start_output_tokens
                         sse(
                             {
                                 "type": "message_start",
                                 "message": {
                                     "id": "msg_stub_1",
                                     "model": payload.get("model", ""),
-                                    "usage": {
-                                        key: value
-                                        for key, value in stub.usage.items()
-                                        if key != "output_tokens"
-                                    },
+                                    "usage": start_usage,
                                 },
                             }
                         )
@@ -122,11 +129,18 @@ class StubAnthropicServer:
                                     "delta": {"type": "text_delta", "text": piece},
                                 }
                             )
+                        delta_usage = {}
+                        if not stub.stream_omit_delta_output:
+                            delta_usage["output_tokens"] = (
+                                stub.stream_delta_output_tokens
+                                if stub.stream_delta_output_tokens is not None
+                                else stub.usage["output_tokens"]
+                            )
                         sse(
                             {
                                 "type": "message_delta",
                                 "delta": {"stop_reason": "end_turn"},
-                                "usage": {"output_tokens": stub.usage["output_tokens"]},
+                                "usage": delta_usage,
                             }
                         )
                         sse({"type": "message_stop"})
@@ -419,6 +433,7 @@ def test_stop_maps_to_stop_sequences_and_extra_body_wins(stub):
 
 def test_streaming_deltas_assembly_and_usage(stub):
     stub.root_responses = ["streamed claude body"]
+    stub.stream_start_output_tokens = 999
     deltas: list[str] = []
     client = AnthropicClient(
         model="claude-test", base_url=stub.base_url, api_key="sk-ant-k", on_delta=deltas.append
@@ -429,7 +444,7 @@ def test_streaming_deltas_assembly_and_usage(stub):
     assert text == "streamed claude body"
     assert len(deltas) >= 2
     assert "".join(deltas) == "streamed claude body"
-    assert usage.total_tokens == 10
+    assert usage == TokenUsage(7, 3, 10, exact=True)
     assert stub.requests[0]["stream"] is True
 
 
@@ -477,6 +492,56 @@ def test_streaming_malformed_cache_counter_preserves_other_known_usage(stub):
     )
 
     assert usage == TokenUsage(18, 3, 21, cache_creation_tokens=11)
+
+
+@pytest.mark.parametrize(
+    ("omit_delta", "delta_output"),
+    [(True, None), (False, "malformed")],
+)
+def test_streaming_terminal_output_missing_or_malformed_forces_partial_root_settlement(
+    stub, omit_delta, delta_output
+):
+    stub.root_responses = ["streamed"]
+    stub.usage = {
+        "input_tokens": 7,
+        "output_tokens": 3,
+        "cache_read_input_tokens": 13,
+        "cache_creation_input_tokens": 11,
+    }
+    stub.stream_start_output_tokens = 999
+    stub.stream_omit_delta_output = omit_delta
+    stub.stream_delta_output_tokens = delta_output
+    client = AnthropicClient(
+        model="claude-test",
+        base_url=stub.base_url,
+        api_key="sk-ant-k",
+        on_delta=lambda _text: None,
+    )
+    messages = [{"role": "user", "content": "q"}]
+    context = create_execution_context()
+
+    response, usage, error = call_root(
+        client,
+        messages,
+        model="claude-test",
+        context=context,
+    )
+
+    assert response == "streamed" and error is None
+    assert usage == TokenUsage(
+        31,
+        0,
+        31,
+        cache_read_tokens=13,
+        cache_creation_tokens=11,
+    )
+    resolved = context.stats.resolved_usage(0).as_dict()
+    assert resolved["kind"] == "partial"
+    assert resolved["root"]["input_tokens"] == 31
+    assert resolved["root"]["output_tokens"] == 0
+    assert resolved["root"]["total_tokens"] == 31
+    expected = conservative_token_estimate(messages) + context.budget.root_output_tokens
+    assert context.ledger.snapshot().consumed.tokens == expected
 
 
 def test_mid_stream_error_raises(stub):

@@ -217,9 +217,11 @@ evidence with that status rather than leaving the model to interpret prefixes.
   observability breakdowns inside inclusive `prompt_tokens`/`total_tokens`; do
   not subtract them during settlement. Preserve them when copying, folding, or
   attaching usage to `LLMUsageFailure`/`SubcallBatchFailure`. Anthropic's
-  streaming adapter must retain the raw `message_start` usage map until
-  `message_delta` supplies output usage so malformed or absent fields remain
-  fail-closed rather than being coerced to zero.
+  streaming adapter must retain the raw `message_start` input/cache usage but
+  always discard its preliminary `output_tokens`; only `message_delta` owns
+  terminal output usage. A missing or malformed delta output count must remain
+  partial and settle conservatively rather than falling back to the start
+  estimate.
 - Cache anchors are private root-loop metadata. Anthropic consumes them into
   `cache_control`; ModelRelay, OpenAI-compatible, runner HTTP, and Pyodide
   adapters must strip them from outbound payloads. Keep terminal extraction
