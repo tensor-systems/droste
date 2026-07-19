@@ -32,11 +32,11 @@ from droste.testing import (
     MockLLMClient,
     MockResponse,
     MockSubcallClient,
-    runner_v7_refusal_ndjson,
-    trace_v3_execution_ndjson,
-    trace_v3_lifecycle_ndjson,
+    runner_v8_refusal_ndjson,
+    trace_v4_execution_ndjson,
+    trace_v4_lifecycle_ndjson,
 )
-from droste.testing._trace_fixtures import build_trace_v3_execution_ndjson
+from droste.testing._trace_fixtures import build_trace_v4_execution_ndjson
 from droste_runner.run import run as run_worker
 
 
@@ -81,6 +81,8 @@ def _terminal() -> dict[str, object]:
         "kind": "resolved",
         "root": {
             "input_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
             "output_tokens": 0,
             "total_tokens": 0,
             "requests": 0,
@@ -89,6 +91,8 @@ def _terminal() -> dict[str, object]:
         },
         "subcall": {
             "input_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
             "output_tokens": 0,
             "total_tokens": 0,
             "requests": 0,
@@ -145,6 +149,8 @@ def test_partial_usage_preserves_known_counts_and_marks_each_scope_incomplete() 
     assert usage["kind"] == "partial"
     assert usage["root"] == {
         "input_tokens": 2,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
         "output_tokens": 3,
         "total_tokens": 9,
         "requests": 1,
@@ -153,6 +159,8 @@ def test_partial_usage_preserves_known_counts_and_marks_each_scope_incomplete() 
     }
     assert usage["subcall"] == {
         "input_tokens": 5,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
         "output_tokens": 7,
         "total_tokens": 21,
         "requests": 1,
@@ -172,6 +180,8 @@ def test_partial_usage_trace_preserves_independent_provider_counters() -> None:
     assert usage["kind"] == "partial"
     assert usage["root"] == {
         "input_tokens": 7,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
         "output_tokens": 0,
         "total_tokens": 19,
         "requests": 1,
@@ -179,6 +189,24 @@ def test_partial_usage_trace_preserves_independent_provider_counters() -> None:
         "complete": False,
     }
     assert usage["total_tokens"] == 19
+
+
+def test_exact_zero_cache_usage_is_explicit_for_both_scopes() -> None:
+    context = create_execution_context()
+    context.record_root_attempt()
+    context.record_root_success(TokenUsage(0, 0, 0, exact=True))
+    context.record_subcall_attempts()
+    context.record_subcall_successes()
+    context.record_subcall_usage(TokenUsage(0, 0, 0, exact=True))
+
+    usage = context.stats.resolved_usage(0).as_dict()
+
+    assert usage["kind"] == "resolved"
+    assert usage["root"]["cache_read_tokens"] == 0
+    assert usage["root"]["cache_creation_tokens"] == 0
+    assert usage["subcall"]["cache_read_tokens"] == 0
+    assert usage["subcall"]["cache_creation_tokens"] == 0
+    assert usage["total_tokens"] == 0
 
 
 def test_custom_environment_marks_fallback_usage_partial_without_capability_observer() -> None:
@@ -272,6 +300,8 @@ def test_custom_usage_provider_is_centrally_recorded_in_terminal_usage() -> None
     assert usage["kind"] == "resolved"
     assert usage["subcall"] == {
         "input_tokens": 7,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
         "output_tokens": 3,
         "total_tokens": 41,
         "requests": 1,
@@ -501,7 +531,7 @@ def test_run_record_allows_repeated_durable_budget_mutations() -> None:
     ]
 
 
-def test_parser_requires_v3_envelope_and_rejects_false_classification() -> None:
+def test_parser_requires_v4_envelope_and_rejects_false_classification() -> None:
     with pytest.raises(ValueError, match="missing envelope fields"):
         parse_event({"type": "code", "iteration": 1, "code": "print(1)"})
 
@@ -511,7 +541,7 @@ def test_parser_requires_v3_envelope_and_rejects_false_classification() -> None:
             "run_id": "run",
             "seq": 1,
             "timestamp": "2026-07-14T00:00:00Z",
-            "version": 3,
+            "version": 4,
             "persistence_class": "configurable",
             "depth": 0,
             "iteration": 1,
@@ -526,7 +556,7 @@ def test_parser_requires_v3_envelope_and_rejects_false_classification() -> None:
             "run_id": "run",
             "seq": 2,
             "timestamp": "2026-07-14T00:00:00Z",
-            "version": 3,
+            "version": 4,
             "persistence_class": "transient",
             "depth": 0,
             "engine_version": "0.10.6",
@@ -543,7 +573,7 @@ def test_parser_requires_v3_envelope_and_rejects_false_classification() -> None:
                 "run_id": "run",
                 "seq": 1,
                 "timestamp": "2026-07-14T00:00:00Z",
-                "version": 3,
+                "version": 4,
                 "persistence_class": "durable",
                 "depth": 0,
                 "code": "print(1)",
@@ -557,7 +587,7 @@ def test_parser_requires_v3_envelope_and_rejects_false_classification() -> None:
                 "run_id": "run",
                 "seq": 1,
                 "timestamp": "2026-07-14T01:00:00+01:00",
-                "version": 3,
+                "version": 4,
                 "persistence_class": "transient",
                 "depth": 0,
                 "status": "working",
@@ -590,6 +620,30 @@ def test_event_bodies_reject_missing_unknown_and_wrong_primitive_fields() -> Non
     terminal["error"] = {"type": "ProviderError", "message": "private provider detail"}
     with pytest.raises(ValueError, match="done.error has unknown message"):
         recorder.finish(terminal)
+
+
+def test_usage_requires_cache_classes_and_validates_complete_subset() -> None:
+    recorder = TraceRecorder(run_id="cache-usage")
+    usage = json.loads(json.dumps(_terminal()["usage"]))
+    del usage["root"]["cache_read_tokens"]
+    with pytest.raises(ValueError, match="usage.root has missing cache_read_tokens"):
+        recorder.append({"type": "usage", **usage})
+
+    usage = json.loads(json.dumps(_terminal()["usage"]))
+    usage["root"].update(
+        input_tokens=1,
+        cache_read_tokens=1,
+        cache_creation_tokens=1,
+        total_tokens=1,
+    )
+    usage["total_tokens"] = 1
+    with pytest.raises(ValueError, match="root cache token breakdown"):
+        recorder.append({"type": "usage", **usage})
+
+    usage["root"]["complete"] = False
+    usage["kind"] = "partial"
+    event = recorder.append({"type": "usage", **usage})
+    assert event.body["root"]["cache_read_tokens"] == 1
 
 
 def test_lifecycle_bodies_are_strict_discriminated_values() -> None:
@@ -714,11 +768,27 @@ def test_trace_abi_v1_is_rejected_instead_of_silently_reinterpreted() -> None:
         )
 
 
-def _trace_v3_golden_runs() -> dict[str, list[RunEvent]]:
+def test_trace_abi_v3_is_rejected_instead_of_dropping_cache_usage() -> None:
+    with pytest.raises(ValueError, match="unsupported trace event version: 3"):
+        parse_event(
+            {
+                "type": "progress",
+                "run_id": "old",
+                "seq": 1,
+                "timestamp": "2026-07-14T00:00:00Z",
+                "version": 3,
+                "persistence_class": "transient",
+                "depth": 0,
+                "status": "legacy",
+            }
+        )
+
+
+def _trace_v4_golden_runs() -> dict[str, list[RunEvent]]:
     runs: dict[str, list[RunEvent]] = {}
     previous_run_id: str | None = None
     closed: set[str] = set()
-    for line in trace_v3_lifecycle_ndjson().decode("utf-8").splitlines():
+    for line in trace_v4_lifecycle_ndjson().decode("utf-8").splitlines():
         event = parse_event(json.loads(line))
         if event.run_id != previous_run_id:
             if event.run_id in closed:
@@ -730,9 +800,9 @@ def _trace_v3_golden_runs() -> dict[str, list[RunEvent]]:
     return runs
 
 
-def test_trace_v3_execution_fixture_is_canonical_and_exact() -> None:
-    fixture = trace_v3_execution_ndjson()
-    assert fixture == build_trace_v3_execution_ndjson()
+def test_trace_v4_execution_fixture_is_canonical_and_exact() -> None:
+    fixture = trace_v4_execution_ndjson()
+    assert fixture == build_trace_v4_execution_ndjson()
     events = [parse_event(json.loads(line)) for line in fixture.decode("utf-8").splitlines()]
 
     root = events[:6]
@@ -764,8 +834,8 @@ def _error_type(value: object) -> object:
     return value.get("type") if isinstance(value, Mapping) else None
 
 
-def test_trace_v3_lifecycle_golden_ndjson_is_strict_ordered_and_terminal() -> None:
-    runs = _trace_v3_golden_runs()
+def test_trace_v4_lifecycle_golden_ndjson_is_strict_ordered_and_terminal() -> None:
+    runs = _trace_v4_golden_runs()
     assert set(runs) == {
         "golden-success",
         "golden-recovered",
@@ -797,8 +867,8 @@ def test_trace_v3_lifecycle_golden_ndjson_is_strict_ordered_and_terminal() -> No
             "kernel": 1,
             "prompt_pack": 1,
             "provider": 4,
-            "runner": 7,
-            "trace": 3,
+            "runner": 8,
+            "trace": 4,
         }
         assert dict(scaffold_manifest.body["budget"]) == dict(done["budget"]["configured"])
         assert (
@@ -854,10 +924,15 @@ def test_trace_v3_lifecycle_golden_ndjson_is_strict_ordered_and_terminal() -> No
     assert startup["scaffold_manifest_id"] == terminal["scaffold_manifest_id"]
     assert startup["scaffold_manifest_version"] == terminal["scaffold_manifest_version"]
     assert startup["runner_protocol"] == successful_result["scaffold_manifest"]["abis"]["runner"]
+    assert startup["engine_version"] == "0.17.0"
+    assert terminal["usage"]["root"]["cache_read_tokens"] == 2
+    assert terminal["usage"]["root"]["cache_creation_tokens"] == 1
+    assert terminal["usage"]["subcall"]["cache_read_tokens"] == 3
+    assert terminal["usage"]["subcall"]["cache_creation_tokens"] == 1
 
 
-def test_trace_v3_golden_corpus_covers_each_discriminated_lifecycle() -> None:
-    events = [event for run in _trace_v3_golden_runs().values() for event in run]
+def test_trace_v4_golden_corpus_covers_each_discriminated_lifecycle() -> None:
+    events = [event for run in _trace_v4_golden_runs().values() for event in run]
     subcalls = [event for event in events if event.type == "subcall"]
     repairs = [event for event in events if event.type == "repair"]
     extracts = [event for event in events if event.type == "extract"]
@@ -881,7 +956,7 @@ def test_trace_v3_golden_corpus_covers_each_discriminated_lifecycle() -> None:
     assert {event.body["phase"] for event in repairs} == {"start", "completion", "failure"}
     assert {event.body["phase"] for event in extracts} == {"start", "completion", "failure"}
 
-    output_limit = _trace_v3_golden_runs()["golden-output-limit"]
+    output_limit = _trace_v4_golden_runs()["golden-output-limit"]
     assert not any(event.type == "output" for event in output_limit)
     assert any(
         event.type == "execution_error" and event.body["error_type"] == "SandboxError"
@@ -905,7 +980,7 @@ def test_trace_v3_golden_corpus_covers_each_discriminated_lifecycle() -> None:
         event.body["message"] for event in output_limit if event.type == "execution_error"
     )
     assert f"exceeded {output_manifest['sandbox']['output_chars']} characters" in output_error
-    cancelled = _trace_v3_golden_runs()["golden-cancelled"]
+    cancelled = _trace_v4_golden_runs()["golden-cancelled"]
     assert cancelled[-1].body["status"] == "error"
     assert any(
         event.type == "execution_error" and event.body["error_type"] == "CapabilityCallError"
@@ -919,14 +994,14 @@ def test_trace_v3_golden_corpus_covers_each_discriminated_lifecycle() -> None:
     assert cancelled[-1].body["usage"]["root"]["complete"] is False
     assert cancelled[-1].body["usage"]["subcall"]["complete"] is False
 
-    extract_failed = _trace_v3_golden_runs()["golden-extract-failed"]
+    extract_failed = _trace_v4_golden_runs()["golden-extract-failed"]
     result = next(event.body["result"] for event in extract_failed if event.type == "result")
     assert result["answer"] == f"Error: {result['error']['message']}"
     assert result["error"]["details"]["withheld_content"] == "retained evidence"
 
 
 def test_runner_refusal_fixture_is_the_exact_pre_admission_response() -> None:
-    fixture = json.loads(runner_v7_refusal_ndjson())
+    fixture = json.loads(runner_v8_refusal_ndjson())
     assert fixture == run_worker({})
     assert fixture["status"] == "refusal"
     assert fixture["run_record"] is None
@@ -972,10 +1047,19 @@ def test_default_retention_cannot_smuggle_code_output_or_answer_into_done() -> N
 
 
 def test_configurable_replay_is_retained_only_when_selected() -> None:
+    response = _ready_reply("selected")
+    response.usage = TokenUsage(
+        2,
+        3,
+        5,
+        cache_read_tokens=1,
+        cache_creation_tokens=1,
+        exact=True,
+    )
     result = run_rlm(
         question="q",
         environment=MockEnvironment(),
-        root_llm=MockLLMClient([_ready_reply("selected")]),
+        root_llm=MockLLMClient([response]),
         subcalls=MockSubcallClient(),
         config=RLMConfig(
             trace_retention=TraceRetentionPolicy(frozenset({"code", "output", "replay"})),
@@ -989,6 +1073,10 @@ def test_configurable_replay_is_retained_only_when_selected() -> None:
     assert "output" in types
     assert "replay" in types
     assert "selected" in json.dumps(wire)
+    replay = next(event for event in wire["events"] if event["type"] == "replay")
+    assert replay["result"]["usage"] == wire["terminal"]["usage"]
+    assert replay["result"]["usage"]["root"]["cache_read_tokens"] == 1
+    assert replay["result"]["usage"]["root"]["cache_creation_tokens"] == 1
 
 
 def test_repair_attempts_are_first_class_configurable_events() -> None:

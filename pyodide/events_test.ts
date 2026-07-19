@@ -36,6 +36,8 @@ const BODIES: Record<string, Record<string, unknown>> = {
     kind: "resolved",
     root: {
       input_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
       output_tokens: 0,
       total_tokens: 0,
       requests: 0,
@@ -44,6 +46,8 @@ const BODIES: Record<string, Record<string, unknown>> = {
     },
     subcall: {
       input_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
       output_tokens: 0,
       total_tokens: 0,
       requests: 0,
@@ -76,6 +80,8 @@ const BODIES: Record<string, Record<string, unknown>> = {
       kind: "resolved",
       root: {
         input_tokens: 0,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
         output_tokens: 0,
         total_tokens: 0,
         requests: 0,
@@ -84,6 +90,8 @@ const BODIES: Record<string, Record<string, unknown>> = {
       },
       subcall: {
         input_tokens: 0,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
         output_tokens: 0,
         total_tokens: 0,
         requests: 0,
@@ -123,7 +131,7 @@ function wire(
     run_id: "run-1",
     seq: 1,
     timestamp: "2026-07-14T00:00:00Z",
-    version: 3,
+    version: 4,
     persistence_class: persistence ?? PERSISTENCE_BY_TYPE[type],
     depth: 0,
     ...body,
@@ -255,6 +263,30 @@ Deno.test("usage totals reconcile at top level and inside done", () => {
   );
 });
 
+Deno.test("usage requires cache classes and validates complete subsets", () => {
+  const missingCache = structuredClone(BODIES.usage);
+  delete (missingCache.root as Record<string, unknown>).cache_read_tokens;
+  assert(!isRlmEvent(wire("usage", missingCache)));
+
+  const invalidComplete = structuredClone(BODIES.usage);
+  Object.assign(invalidComplete.root as Record<string, unknown>, {
+    input_tokens: 1,
+    cache_read_tokens: 1,
+    cache_creation_tokens: 1,
+    total_tokens: 1,
+  });
+  invalidComplete.total_tokens = 1;
+  assert(!isRlmEvent(wire("usage", invalidComplete)));
+
+  (invalidComplete.root as Record<string, unknown>).complete = false;
+  invalidComplete.kind = "partial";
+  assert(isRlmEvent(wire("usage", invalidComplete)));
+  assert(isRlmEvent(wire("done", {
+    ...BODIES.done,
+    usage: invalidComplete,
+  })));
+});
+
 Deno.test("successful output beginning ERROR remains an output event", () => {
   assert(isRlmEvent(wire("output", {
     iteration: 1,
@@ -267,7 +299,7 @@ Deno.test("successful output beginning ERROR remains an output event", () => {
 
 Deno.test("Python and relay accept the same execution golden NDJSON", async () => {
   const fixture = new URL(
-    "../src/droste/testing/fixtures/trace-v3-execution.ndjson",
+    "../src/droste/testing/fixtures/trace-v4-execution.ndjson",
     import.meta.url,
   );
   const lines = (await Deno.readTextFile(fixture)).trim().split("\n");
@@ -311,7 +343,7 @@ Deno.test("Python and relay accept the same execution golden NDJSON", async () =
 
 Deno.test("Python and relay accept the same lifecycle golden NDJSON", async () => {
   const fixture = new URL(
-    "../src/droste/testing/fixtures/trace-v3-lifecycle.ndjson",
+    "../src/droste/testing/fixtures/trace-v4-lifecycle.ndjson",
     import.meta.url,
   );
   const lines = (await Deno.readTextFile(fixture)).trim().split("\n");
@@ -467,13 +499,13 @@ Deno.test("Python and relay accept the same lifecycle golden NDJSON", async () =
 
 Deno.test("runner refusal fixture remains outside the event stream", async () => {
   const fixture = new URL(
-    "../src/droste/testing/fixtures/runner-v7-refusal.ndjson",
+    "../src/droste/testing/fixtures/runner-v8-refusal.ndjson",
     import.meta.url,
   );
   const bytes = await Deno.readTextFile(fixture);
   const refusal = JSON.parse(bytes) as Record<string, unknown>;
   assertEquals(refusal.status, "refusal");
-  assertEquals(refusal.protocol_version, 7);
+  assertEquals(refusal.protocol_version, 8);
   assertEquals(refusal.run_id, null);
   assertEquals(refusal.run_record, null);
   assertEquals(

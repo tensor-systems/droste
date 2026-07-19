@@ -25,7 +25,13 @@ Deno.test("reconstructs output + usage from completion; forwards deltas in order
         type: "completion",
         content: "Hello world",
         stop_reason: "end_turn",
-        usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 },
+        usage: {
+          input_tokens: 1,
+          cache_read_input_tokens: 1,
+          cache_write_input_tokens: 0,
+          output_tokens: 2,
+          total_tokens: 3,
+        },
       },
     ]),
     (c) => deltas.push(c),
@@ -36,6 +42,8 @@ Deno.test("reconstructs output + usage from completion; forwards deltas in order
   assert.equal(payload.output[0].content[0].text, "Hello world");
   assert.deepEqual(payload.usage, {
     input_tokens: 1,
+    cache_read_input_tokens: 1,
+    cache_write_input_tokens: 0,
     output_tokens: 2,
     total_tokens: 3,
   });

@@ -747,6 +747,7 @@ def finalize(
     if "replay" in context.trace.retention.retain:
         replay = project_result(result, include_trajectory=True)
         replay.pop("run_record")
+        replay["usage"] = usage
         context.emit_event({"type": "replay", "result": replay})
 
     def terminal_error(value: RLMError | None) -> dict[str, Any] | None:

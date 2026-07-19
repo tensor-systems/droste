@@ -538,6 +538,8 @@ def test_streaming_terminal_output_missing_or_malformed_forces_partial_root_sett
     resolved = context.stats.resolved_usage(0).as_dict()
     assert resolved["kind"] == "partial"
     assert resolved["root"]["input_tokens"] == 31
+    assert resolved["root"]["cache_read_tokens"] == 13
+    assert resolved["root"]["cache_creation_tokens"] == 11
     assert resolved["root"]["output_tokens"] == 0
     assert resolved["root"]["total_tokens"] == 31
     expected = conservative_token_estimate(messages) + context.budget.root_output_tokens

@@ -8,6 +8,8 @@ class UsageBreakdown:
     """Trusted token and request totals for one billing scope."""
 
     input_tokens: int
+    cache_read_tokens: int
+    cache_creation_tokens: int
     output_tokens: int
     total_tokens: int
     requests: int
@@ -17,6 +19,8 @@ class UsageBreakdown:
     def __post_init__(self) -> None:
         values = (
             self.input_tokens,
+            self.cache_read_tokens,
+            self.cache_creation_tokens,
             self.output_tokens,
             self.total_tokens,
             self.requests,
@@ -30,10 +34,17 @@ class UsageBreakdown:
             raise ValueError("usage successes cannot exceed requests")
         if not isinstance(self.complete, bool):
             raise TypeError("usage completeness must be a bool")
+        if (
+            self.complete
+            and self.cache_read_tokens + self.cache_creation_tokens > self.input_tokens
+        ):
+            raise ValueError("complete cache token breakdown cannot exceed input tokens")
 
     def as_dict(self) -> dict[str, int | bool]:
         return {
             "input_tokens": self.input_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_creation_tokens": self.cache_creation_tokens,
             "output_tokens": self.output_tokens,
             "total_tokens": self.total_tokens,
             "requests": self.requests,
@@ -84,12 +95,16 @@ class ExecutionStats:
     successful_calls: int = 0
     total_tokens: int = 0
     root_input_tokens: int = 0
+    root_cache_read_tokens: int = 0
+    root_cache_creation_tokens: int = 0
     root_output_tokens: int = 0
     root_total_tokens: int = 0
     root_requests: int = 0
     root_successes: int = 0
     root_usage_complete: bool = True
     subcall_input_tokens: int = 0
+    subcall_cache_read_tokens: int = 0
+    subcall_cache_creation_tokens: int = 0
     subcall_output_tokens: int = 0
     subcall_total_tokens: int = 0
     subcall_usage_complete: bool = True
@@ -99,20 +114,24 @@ class ExecutionStats:
         attributed = self.root_total_tokens + self.subcall_total_tokens
         return ResolvedUsage(
             root=UsageBreakdown(
-                self.root_input_tokens,
-                self.root_output_tokens,
-                self.root_total_tokens,
-                self.root_requests,
-                self.root_successes,
-                self.root_usage_complete,
+                input_tokens=self.root_input_tokens,
+                cache_read_tokens=self.root_cache_read_tokens,
+                cache_creation_tokens=self.root_cache_creation_tokens,
+                output_tokens=self.root_output_tokens,
+                total_tokens=self.root_total_tokens,
+                requests=self.root_requests,
+                successes=self.root_successes,
+                complete=self.root_usage_complete,
             ),
             subcall=UsageBreakdown(
-                self.subcall_input_tokens,
-                self.subcall_output_tokens,
-                self.subcall_total_tokens,
-                self.calls_made,
-                self.successful_calls,
-                self.subcall_usage_complete,
+                input_tokens=self.subcall_input_tokens,
+                cache_read_tokens=self.subcall_cache_read_tokens,
+                cache_creation_tokens=self.subcall_cache_creation_tokens,
+                output_tokens=self.subcall_output_tokens,
+                total_tokens=self.subcall_total_tokens,
+                requests=self.calls_made,
+                successes=self.successful_calls,
+                complete=self.subcall_usage_complete,
             ),
             unattributed_tokens=self.total_tokens - attributed,
             total_tokens=self.total_tokens,
