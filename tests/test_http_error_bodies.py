@@ -11,18 +11,44 @@ import io
 import json
 import threading
 import urllib.error
+from email.message import Message
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
+from droste.clients.errors import read_http_error_body
 from droste.execution.context import create_execution_context
 from droste_runner.runner import HTTPSubcallClient, _http_error_excerpt
 
 
-def _http_error(body: bytes, code: int = 502) -> urllib.error.HTTPError:
+def _http_error(
+    body: bytes,
+    code: int = 502,
+    headers: Message | None = None,
+) -> urllib.error.HTTPError:
     return urllib.error.HTTPError(
-        url="http://test.invalid", code=code, msg="Bad Gateway", hdrs=None, fp=io.BytesIO(body)
+        url="http://test.invalid",
+        code=code,
+        msg="Bad Gateway",
+        hdrs=headers,
+        fp=io.BytesIO(body),
     )
+
+
+def _headers(
+    *content_lengths: str,
+    transfer_encoding: str | tuple[str, ...] | None = None,
+) -> Message:
+    headers = Message()
+    for value in content_lengths:
+        headers.add_header("Content-Length", value)
+    transfer_encodings = (
+        transfer_encoding if isinstance(transfer_encoding, tuple) else (transfer_encoding,)
+    )
+    for value in transfer_encodings:
+        if value is not None:
+            headers.add_header("Transfer-Encoding", value)
+    return headers
 
 
 def test_excerpt_returns_normalized_body():
@@ -222,3 +248,53 @@ def test_excerpt_redacts_secrets():
     assert "AIzaSyFAKE-KEY" not in out
     assert "supersecret" not in out
     assert "[redacted]" in out
+
+
+def test_error_body_shorter_than_declared_length_is_incomplete() -> None:
+    body = b'{"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}'
+    captured = read_http_error_body(_http_error(body, headers=_headers(str(len(body) + 10))))
+    assert captured.body == body
+    assert captured.complete is False
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        _headers("-1"),
+        _headers("+1"),
+        _headers("1.0"),
+        _headers(""),
+        _headers("١"),
+        _headers("not-a-number"),
+        _headers("9" * 21),
+        _headers("9" * 100_000),
+        _headers(",".join(["5"] * 9)),
+        _headers("5", "6"),
+        _headers("5, 6"),
+        _headers("5", transfer_encoding="chunked"),
+        _headers(transfer_encoding="identity"),
+        _headers(transfer_encoding="gzip"),
+        _headers(transfer_encoding="chunked, chunked"),
+        _headers(transfer_encoding="gzip, chunked"),
+        _headers(transfer_encoding=("chunked", "chunked")),
+        _headers(transfer_encoding=" chunked"),
+        _headers(transfer_encoding="chunked "),
+        _headers(transfer_encoding="chunk ed"),
+        _headers(transfer_encoding="chunked;"),
+    ],
+)
+def test_error_body_invalid_or_conflicting_framing_is_incomplete(headers: Message) -> None:
+    captured = read_http_error_body(_http_error(b"12345", headers=headers))
+    assert captured.body == b"12345"
+    assert captured.complete is False
+
+
+def test_error_body_identical_lengths_and_no_length_eof_are_complete() -> None:
+    duplicate = read_http_error_body(_http_error(b"12345", headers=_headers("5", "5")))
+    no_length = read_http_error_body(_http_error(b"12345"))
+    chunked = read_http_error_body(
+        _http_error(b"12345", headers=_headers(transfer_encoding="ChUnKeD"))
+    )
+    assert duplicate.complete is True
+    assert no_length.complete is True
+    assert chunked.complete is True

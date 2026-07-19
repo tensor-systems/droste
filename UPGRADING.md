@@ -11,7 +11,52 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.17.0)
+## Unreleased (post-0.18.0)
+
+No changes yet.
+
+## 0.18.0 (from 0.17.0)
+
+### Runner callbacks carry exact failure usage without exposing unsafe bodies
+
+Native and hosted runner callbacks may now attach provider usage to a failed
+root or subcall request. Exact, non-negative input/output/total counters settle
+the inference reservation to the provider total before the original failure is
+surfaced. Missing, malformed, incomplete, or out-of-range usage remains partial
+and keeps the full conservative reservation; Droste never estimates a refund
+from an error message or visible output.
+
+To opt in, exact root and subcall callback endpoints must return a non-2xx JSON
+object with `error: "api_error"` and a mapping-valued `usage`. Use a JSON media
+type (`application/json` or an `application/*+json` subtype) with no parameters
+other than one UTF-8 charset. Generic URLs and untrusted media types remain
+opaque transport failures. The hosted Deno relay forwards a valid typed body
+only for those exact callback endpoints after independently proving the same
+top-level discriminator, usage mapping, unique-key, finite-number, depth, and
+integer-placement contract as native Python. It preserves raw counters without
+parsing int64 values through JavaScript numbers; held credentials are redacted
+from JSON strings before the body reaches Python. HTTP status is associated
+with that fetch: an immediately raised callback failure keeps the status, while
+a normally handled value or a later fetch consumes the association so it cannot
+annotate an unrelated adapter error.
+
+All callback JSON now shares a strict wire grammar: UTF-8 without a BOM, unique
+object keys, finite numbers, bounded nesting, and signed-int64 integers.
+Successful unary and NDJSON responses use the same loader. An out-of-range
+integer in a direct recognized usage counter makes that usage partial while
+preserving a usable result and valid sibling counters; the same condition on
+an NDJSON error is carried by `LLMUsageFailure`. An out-of-range integer
+anywhere else invalidates the envelope. Embedders that previously emitted BOMs,
+duplicate keys, `NaN`/`Infinity`, excessive nesting, or arbitrary-size integers
+must canonicalize callback JSON before upgrading. Trace ABI v4, runner protocol
+v8, and provider protocol v4 are unchanged.
+
+Native `llm_batch*` remains bounded client-side fan-out over the unary
+`subcall_endpoint`; there is no separate native batch response schema. Each
+item independently receives the strict JSON/NDJSON and typed-failure handling
+above. A failed batch can settle to the sum of provider totals only when every
+ordered item, including failed items, supplied exact usage. Any malformed or
+unavailable item keeps the complete conservative batch reservation.
 
 ### Prompt-pack schema v2 supplies transcript-elision text
 

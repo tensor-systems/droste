@@ -75,6 +75,415 @@ export function isRunnerCallback(
 }
 
 /**
+ * Callback failures are protocol values only for exact runner model callbacks
+ * with a JSON media type. Other HTTP failures retain the relay's fail-fast
+ * transport behavior, including data-source callbacks and direct /responses.
+ */
+export function shouldReturnRunnerCallbackFailureBody(
+  method: string,
+  url: string,
+  contentType: string,
+  endpoints: readonly unknown[],
+): boolean {
+  return isRunnerCallbackJSONContentType(contentType) &&
+    isRunnerCallback(method, url, endpoints);
+}
+
+const MIME_TOKEN = String.raw`[!#$%&'*+.^_\x60|~0-9A-Z-]+`;
+const RUNNER_CALLBACK_JSON_CONTENT_TYPE = new RegExp(
+  String
+    .raw`^[ \t]*application\/(?:json|${MIME_TOKEN}\+json)[ \t]*(?:;[ \t]*charset[ \t]*=[ \t]*(?:utf-8|"utf-8")[ \t]*)?$`,
+  "i",
+);
+
+/** The one media-type grammar accepted for trusted runner callback failures. */
+export function isRunnerCallbackJSONContentType(contentType: string): boolean {
+  if (contentType.length > 512) return false;
+  return RUNNER_CALLBACK_JSON_CONTENT_TYPE.exec(contentType)?.[0] ===
+    contentType;
+}
+
+const JSON_NUMBER = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+const MAX_CALLBACK_JSON_DEPTH = 256;
+const MAX_CALLBACK_JSON_FLOAT_CHARS = 256;
+const MAX_SIGNED_INT64_DIGITS = "9223372036854775807";
+const MIN_SIGNED_INT64_DIGITS = "9223372036854775808";
+const RUNNER_USAGE_COUNTERS = new Set([
+  "input_tokens",
+  "output_tokens",
+  "total_tokens",
+  "cache_read_input_tokens",
+  "cache_write_input_tokens",
+  "cache_creation_input_tokens",
+]);
+
+type ParsedJSONValue =
+  | { kind: "string"; text: string; value: string }
+  | {
+    kind: "number";
+    text: string;
+    integer: boolean;
+    signedInt64: boolean;
+  }
+  | { kind: "object"; text: string; entries: Map<string, ParsedJSONValue> }
+  | { kind: "array"; text: string; items: ParsedJSONValue[] }
+  | { kind: "literal"; text: string };
+
+function invalidCallbackJSON(): never {
+  throw new Error("runner callback failure body is not valid JSON");
+}
+
+function normalizeHeldSecrets(heldSecrets: readonly unknown[]): string[] {
+  const unique = new Set(
+    heldSecrets.filter((value): value is string =>
+      typeof value === "string" && value.length > 0
+    ),
+  );
+  return [...unique].sort((left, right) => {
+    const lengthOrder = right.length - left.length;
+    if (lengthOrder !== 0) return lengthOrder;
+    return left === right ? 0 : left < right ? -1 : 1;
+  });
+}
+
+function heldSecretMarker(secrets: readonly string[]): string {
+  return secrets.some((secret) => "[redacted]".includes(secret))
+    ? ""
+    : "[redacted]";
+}
+
+/** Replace the union of every match in the original string, never sequentially. */
+function redactLiteralHeldSecretMatches(
+  text: string,
+  secrets: readonly string[],
+): string {
+  const matches: Array<{ start: number; end: number }> = [];
+  for (const secret of secrets) {
+    let searchFrom = 0;
+    while (searchFrom <= text.length - secret.length) {
+      const start = text.indexOf(secret, searchFrom);
+      if (start < 0) break;
+      matches.push({ start, end: start + secret.length });
+      // Advance one code unit so overlapping occurrences join the same span.
+      searchFrom = start + 1;
+    }
+  }
+  if (matches.length === 0) return text;
+  matches.sort((left, right) =>
+    left.start - right.start || right.end - left.end
+  );
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const match of matches) {
+    const previous = merged.at(-1);
+    if (previous !== undefined && match.start <= previous.end) {
+      previous.end = Math.max(previous.end, match.end);
+    } else {
+      merged.push({ ...match });
+    }
+  }
+  const marker = heldSecretMarker(secrets);
+  const parts: string[] = [];
+  let offset = 0;
+  for (const match of merged) {
+    parts.push(text.slice(offset, match.start), marker);
+    offset = match.end;
+  }
+  parts.push(text.slice(offset));
+  const redacted = parts.join("");
+  return secrets.some((secret) => redacted.includes(secret))
+    ? marker
+    : redacted;
+}
+
+class JSONHeldSecretRedactor {
+  private offset = 0;
+
+  constructor(
+    private readonly source: string,
+    private readonly secrets: readonly string[],
+  ) {}
+
+  parse(): ParsedJSONValue {
+    const value = this.parseValue(0);
+    const trailing = this.parseWhitespace();
+    if (this.offset !== this.source.length) invalidCallbackJSON();
+    return { ...value, text: value.text + trailing };
+  }
+
+  redact(): string {
+    return this.parse().text;
+  }
+
+  private parseValue(depth: number): ParsedJSONValue {
+    if (depth > MAX_CALLBACK_JSON_DEPTH) invalidCallbackJSON();
+    const leading = this.parseWhitespace();
+    const char = this.source[this.offset];
+    let parsed: ParsedJSONValue;
+    if (char === '"') {
+      parsed = this.parseString();
+    } else if (char === "{") {
+      parsed = this.parseObject(depth + 1);
+    } else if (char === "[") {
+      parsed = this.parseArray(depth + 1);
+    } else {
+      for (const literal of ["true", "false", "null"] as const) {
+        if (this.source.startsWith(literal, this.offset)) {
+          this.offset += literal.length;
+          return { kind: "literal", text: leading + literal };
+        }
+      }
+      parsed = this.parseNumber();
+    }
+    return { ...parsed, text: leading + parsed.text };
+  }
+
+  private parseNumber(): ParsedJSONValue {
+    JSON_NUMBER.lastIndex = this.offset;
+    const number = JSON_NUMBER.exec(this.source);
+    if (number === null) invalidCallbackJSON();
+    this.offset = JSON_NUMBER.lastIndex;
+    const raw = number[0];
+    const integer = !/[.eE]/.test(raw);
+    if (!integer) {
+      // Mirror Python's bounded parse_float without rewriting the token.
+      // Number() is validation-only; the original lexeme remains authoritative.
+      if (
+        raw.length > MAX_CALLBACK_JSON_FLOAT_CHARS ||
+        !Number.isFinite(Number(raw))
+      ) {
+        invalidCallbackJSON();
+      }
+    }
+    return {
+      kind: "number",
+      text: raw,
+      integer,
+      signedInt64: !integer || isSignedInt64(raw),
+    };
+  }
+
+  private parseObject(depth: number): ParsedJSONValue {
+    this.offset += 1;
+    const parts = ["{", this.parseWhitespace()];
+    const entries = new Map<string, ParsedJSONValue>();
+    if (this.source[this.offset] === "}") {
+      this.offset += 1;
+      return { kind: "object", text: parts.join("") + "}", entries };
+    }
+    while (true) {
+      if (this.source[this.offset] !== '"') invalidCallbackJSON();
+      const key = this.parseString();
+      if (entries.has(key.value)) invalidCallbackJSON();
+      parts.push(key.text, this.parseWhitespace());
+      if (this.source[this.offset] !== ":") invalidCallbackJSON();
+      this.offset += 1;
+      const value = this.parseValue(depth);
+      entries.set(key.value, value);
+      parts.push(":", value.text, this.parseWhitespace());
+      const separator = this.source[this.offset];
+      if (separator === "}") {
+        this.offset += 1;
+        parts.push("}");
+        return { kind: "object", text: parts.join(""), entries };
+      }
+      if (separator !== ",") invalidCallbackJSON();
+      this.offset += 1;
+      parts.push(",", this.parseWhitespace());
+    }
+  }
+
+  private parseArray(depth: number): ParsedJSONValue {
+    this.offset += 1;
+    const parts = ["[", this.parseWhitespace()];
+    const items: ParsedJSONValue[] = [];
+    if (this.source[this.offset] === "]") {
+      this.offset += 1;
+      return { kind: "array", text: parts.join("") + "]", items };
+    }
+    while (true) {
+      const value = this.parseValue(depth);
+      items.push(value);
+      parts.push(value.text, this.parseWhitespace());
+      const separator = this.source[this.offset];
+      if (separator === "]") {
+        this.offset += 1;
+        parts.push("]");
+        return { kind: "array", text: parts.join(""), items };
+      }
+      if (separator !== ",") invalidCallbackJSON();
+      this.offset += 1;
+      parts.push(",", this.parseWhitespace());
+    }
+  }
+
+  private parseString(): Extract<ParsedJSONValue, { kind: "string" }> {
+    const start = this.offset;
+    this.offset += 1;
+    while (this.offset < this.source.length) {
+      const char = this.source[this.offset];
+      if (char === '"') {
+        this.offset += 1;
+        const token = this.source.slice(start, this.offset);
+        let decoded: string;
+        try {
+          decoded = JSON.parse(token);
+        } catch {
+          invalidCallbackJSON();
+        }
+        const redacted = redactLiteralHeldSecretMatches(
+          decoded,
+          this.secrets,
+        );
+        return {
+          kind: "string",
+          text: redacted === decoded ? token : JSON.stringify(redacted),
+          value: decoded,
+        };
+      }
+      if (char === "\\") {
+        this.offset += 2;
+        continue;
+      }
+      if (char.charCodeAt(0) < 0x20) invalidCallbackJSON();
+      this.offset += 1;
+    }
+    return invalidCallbackJSON();
+  }
+
+  private parseWhitespace(): string {
+    const start = this.offset;
+    while (
+      this.offset < this.source.length &&
+      " \t\r\n".includes(this.source[this.offset])
+    ) {
+      this.offset += 1;
+    }
+    return this.source.slice(start, this.offset);
+  }
+}
+
+function isSignedInt64(raw: string): boolean {
+  const negative = raw.startsWith("-");
+  const digits = negative ? raw.slice(1) : raw;
+  if (digits.length < MAX_SIGNED_INT64_DIGITS.length) return true;
+  if (digits.length > MAX_SIGNED_INT64_DIGITS.length) return false;
+  return digits <=
+    (negative ? MIN_SIGNED_INT64_DIGITS : MAX_SIGNED_INT64_DIGITS);
+}
+
+function containsOutOfRangeInteger(value: ParsedJSONValue): boolean {
+  if (value.kind === "number") return value.integer && !value.signedInt64;
+  if (value.kind === "object") {
+    return [...value.entries.values()].some(containsOutOfRangeInteger);
+  }
+  if (value.kind === "array") {
+    return value.items.some(containsOutOfRangeInteger);
+  }
+  return false;
+}
+
+function hasOutOfRangeIntegerOutsideUsageCounters(
+  root: Extract<ParsedJSONValue, { kind: "object" }>,
+): boolean {
+  for (const [key, value] of root.entries) {
+    if (key !== "usage") {
+      if (containsOutOfRangeInteger(value)) return true;
+      continue;
+    }
+    if (value.kind !== "object") return containsOutOfRangeInteger(value);
+    for (const [usageKey, usageValue] of value.entries) {
+      if (
+        RUNNER_USAGE_COUNTERS.has(usageKey) &&
+        usageValue.kind === "number" &&
+        usageValue.integer &&
+        !usageValue.signedInt64
+      ) {
+        continue;
+      }
+      if (containsOutOfRangeInteger(usageValue)) return true;
+    }
+  }
+  return false;
+}
+
+function assertTrustedRunnerCallbackFailure(
+  parsed: ParsedJSONValue,
+): asserts parsed is Extract<ParsedJSONValue, { kind: "object" }> {
+  if (parsed.kind !== "object") invalidCallbackJSON();
+  const error = parsed.entries.get("error");
+  const usage = parsed.entries.get("usage");
+  if (
+    error?.kind !== "string" || error.value !== "api_error" ||
+    usage?.kind !== "object" ||
+    hasOutOfRangeIntegerOutsideUsageCounters(parsed)
+  ) {
+    invalidCallbackJSON();
+  }
+}
+
+/**
+ * Prove one callback failure body has the native trusted-envelope schema while
+ * preserving number lexemes and redacting only decoded strings. No JSON.parse
+ * of the complete value is allowed at this JS precision boundary.
+ */
+export function validateAndRedactRunnerCallbackFailureBody(
+  text: string,
+  heldSecrets: readonly unknown[] = [],
+): string {
+  const secrets = normalizeHeldSecrets(heldSecrets);
+  const parsed = new JSONHeldSecretRedactor(text, secrets).parse();
+  assertTrustedRunnerCallbackFailure(parsed);
+  // Redaction can change keys or the discriminator for pathological held
+  // values. Re-parse the exact safe text so the body crossing into Python is
+  // itself canonical, not merely canonical before credential removal.
+  const safe = new JSONHeldSecretRedactor(parsed.text, []).parse();
+  assertTrustedRunnerCallbackFailure(safe);
+  return safe.text;
+}
+
+/**
+ * Redact credentials from JSON string tokens while copying every number token
+ * byte-for-byte. Malformed JSON throws before any response reaches Python.
+ */
+export function redactHeldSecrets(
+  text: string,
+  heldSecrets: readonly unknown[] = [],
+): string {
+  const secrets = normalizeHeldSecrets(heldSecrets);
+  return new JSONHeldSecretRedactor(text, secrets).redact();
+}
+
+function redactLiteralHeldSecrets(
+  text: string,
+  heldSecrets: readonly unknown[],
+): string {
+  const secrets = normalizeHeldSecrets(heldSecrets);
+  return redactLiteralHeldSecretMatches(text, secrets);
+}
+
+/** Bound relay diagnostics must never echo held or conventionally shaped secrets. */
+export function redactRelayErrorText(
+  text: string,
+  heldSecrets: readonly unknown[] = [],
+): string {
+  let redacted = redactLiteralHeldSecrets(text, heldSecrets);
+  redacted = redacted.replace(
+    /bearer\s+[A-Za-z0-9._~+/=-]+/gi,
+    "[redacted]",
+  );
+  redacted = redacted.replace(
+    /\b(api[_-]?key|apikey|token|authorization|secret|password|key)\b(["'\s]*[:=]["'\s]*)[^\s"'&,;}]+/gi,
+    (_match, name: string, separator: string) =>
+      `${name}${separator}[redacted]`,
+  );
+  redacted = redacted.replace(/\bmr_sk_[A-Za-z0-9_-]{8,}/g, "[redacted]");
+  redacted = redacted.replace(/\bsk-[A-Za-z0-9_-]{8,}/g, "[redacted]");
+  // Conventional-pattern markers must not introduce a held value that was not
+  // present in the source (for example, a pathological held value "redact").
+  return redactLiteralHeldSecrets(redacted, heldSecrets);
+}
+
+/**
  * Pull secret credentials out of the request so they never become a sandbox
  * global. The normalized auth type is nonsecret routing metadata, so preserve
  * it for adapters that must distinguish customer-tier defaults from tierless
