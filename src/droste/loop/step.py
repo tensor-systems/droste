@@ -60,6 +60,12 @@ from .trajectory import (
 # model learns that only stdout is visible.
 EMPTY_OUTPUT_NUDGE = "(no output - did you forget to print?)"
 
+# Live root calls keep two completed iterations byte-for-byte. Once an older
+# refinement leaves that tail, its frozen projection retains at most this many
+# characters of stdout, including the pack-authored elision marker.
+LIVE_TRANSCRIPT_VERBATIM_ITERATIONS = 2
+HISTORICAL_STDOUT_CHARS = 2_000
+
 # Structured answer metadata crosses process and language boundaries as JSON.
 MAX_ANSWER_METADATA_BYTES = 64 * 1024
 MAX_ANSWER_METADATA_NODES = 10_000
@@ -157,6 +163,28 @@ class StepOutcome:
         return EXECUTION_STATUS_ERROR if self.error is not None else EXECUTION_STATUS_SUCCESS
 
 
+@dataclass(frozen=True, slots=True)
+class TranscriptWindowEntry:
+    """Frozen outbound replacement for one completed iteration's refinement.
+
+    The replacement is created when the iteration finishes, using only state
+    known through that iteration. It can therefore move into the stable region
+    on any later call without changing bytes.
+    """
+
+    iteration: int
+    message_index: int
+    elided_content: str
+
+    def __post_init__(self) -> None:
+        if self.iteration < 1:
+            raise ValueError("transcript window iteration must be positive")
+        if self.message_index < 0:
+            raise ValueError("transcript window message_index must be non-negative")
+        if not isinstance(self.elided_content, str):
+            raise TypeError("transcript window elided_content must be a string")
+
+
 def _execution_output(result: ExecutionResult | str) -> str:
     if isinstance(result, ExecutionResult):
         return result.stdout
@@ -168,6 +196,46 @@ def _feedback_output(output: str) -> str:
     nudge instead of silence; the raw output is kept separately so an empty
     run never leaks the nudge text into `_best_answer`."""
     return output if output else EMPTY_OUTPUT_NUDGE
+
+
+def elide_historical_stdout(output: str, *, placeholder: str) -> str:
+    """Return a deterministic head/tail window for historical stdout."""
+    if len(output) <= HISTORICAL_STDOUT_CHARS:
+        return output
+    retained = max(0, HISTORICAL_STDOUT_CHARS - len(placeholder))
+    head_chars = (retained + 1) // 2
+    tail_chars = retained - head_chars
+    tail = output[-tail_chars:] if tail_chars else ""
+    return output[:head_chars] + placeholder + tail
+
+
+def project_live_transcript(
+    messages: list[dict[str, str]],
+    window_entries: tuple[TranscriptWindowEntry, ...] = (),
+) -> tuple[list[dict[str, Any]], int | None]:
+    """Build the outbound-only live transcript and its stable frontier.
+
+    The last two completed iterations remain verbatim. Older refinements use
+    their already-frozen replacement. The canonical messages and entry values
+    are never mutated or aliased by the returned dictionaries.
+    """
+    outbound: list[dict[str, Any]] = [dict(message) for message in messages]
+    stable_count = max(0, len(window_entries) - LIVE_TRANSCRIPT_VERBATIM_ITERATIONS)
+    if stable_count == 0:
+        return outbound, None
+
+    stable_entries = window_entries[:stable_count]
+    previous_iteration = 0
+    previous_index = -1
+    for entry in stable_entries:
+        if entry.iteration <= previous_iteration or entry.message_index <= previous_index:
+            raise ValueError("transcript window entries must be strictly ordered")
+        if entry.message_index >= len(outbound):
+            raise ValueError("transcript window message_index is outside the transcript")
+        outbound[entry.message_index]["content"] = entry.elided_content
+        previous_iteration = entry.iteration
+        previous_index = entry.message_index
+    return outbound, stable_entries[-1].message_index
 
 
 def error_repair_history(exec_error: Exception) -> str:
@@ -443,14 +511,16 @@ def call_root(
     model: str,
     context: ExecutionContext,
     cache_anchors: tuple[int, ...] | None = (0, -1),
+    transcript_window: tuple[TranscriptWindowEntry, ...] = (),
 ) -> tuple[str, Any, RLMError | None]:
     """One root-LLM call with token accounting.
 
     Returns ``(response, usage, None)`` on success or ``("", None, error)`` —
     a root failure always ends the run, so the caller finalizes immediately.
     """
+    outbound_messages, frontier = project_live_transcript(messages, transcript_window)
     call_id = "root:" + str(uuid4())
-    input_estimate = conservative_token_estimate(messages)
+    input_estimate = conservative_token_estimate(outbound_messages)
     request = BudgetRequest(
         tokens=input_estimate + context.budget.root_output_tokens,
     )
@@ -471,8 +541,12 @@ def call_root(
             ),
         )
     context.record_root_attempt()
-    outbound_messages: list[dict[str, Any]] = [dict(message) for message in messages]
     if cache_anchors is not None:
+        # Before elision, preserve the system + tail policy from prompt caching.
+        # Once a stable region exists, anchor its frontier instead: the verbatim
+        # tail is rewritten by the next iteration and cannot be reused.
+        if frontier is not None:
+            cache_anchors = (0, frontier)
         message_count = len(outbound_messages)
         for anchor in cache_anchors:
             index = anchor if anchor >= 0 else message_count + anchor

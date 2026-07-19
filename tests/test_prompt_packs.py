@@ -37,7 +37,7 @@ from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSub
 
 
 def _artifact_data() -> dict[str, Any]:
-    resource = files("droste.prompts").joinpath("packs", "generic-full-v1.toml")
+    resource = files("droste.prompts").joinpath("packs", "generic-full-v2.toml")
     return tomllib.loads(resource.read_text(encoding="utf-8"))
 
 
@@ -175,7 +175,7 @@ def test_builtin_catalog_loads_complete_immutable_profiles_from_resources() -> N
     assert catalog is load_builtin_prompt_catalog()
     assert tuple(binding.profile for binding in catalog.bindings) == ("full", "minimal", "none")
     assert all(binding.model_family == "generic" for binding in catalog.bindings)
-    assert all(binding.pack.schema_version == 1 for binding in catalog.bindings)
+    assert all(binding.pack.schema_version == 2 for binding in catalog.bindings)
     assert all(binding.pack.provenance.source == "droste" for binding in catalog.bindings)
     assert len(catalog.bindings[0].pack.tips) > len(catalog.bindings[1].pack.tips)
     assert catalog.bindings[2].pack.tips == ()
@@ -262,6 +262,8 @@ def test_every_semantic_pack_value_changes_the_content_hash(mutate: Any) -> None
         "error_repair",
         "extract_system",
         "extract_user",
+        "historical_stdout_elision",
+        "unchanged_draft_elision",
     ],
 )
 def test_every_template_participates_in_the_content_hash(template_name: str) -> None:
@@ -354,16 +356,16 @@ def test_policy_error_history_preserves_guidance_for_subclasses() -> None:
 
 
 def test_installed_package_resource_loader_rejects_path_traversal() -> None:
-    assert load_prompt_pack_resource("generic-full-v1.toml").pack_id == "droste.generic.full"
+    assert load_prompt_pack_resource("generic-full-v2.toml").pack_id == "droste.generic.full"
     with pytest.raises(PromptPackError, match="plain .toml name"):
-        load_prompt_pack_resource("../generic-full-v1.toml")
+        load_prompt_pack_resource("../generic-full-v2.toml")
 
 
 def test_caller_file_loader_has_one_io_boundary(tmp_path: Any) -> None:
     artifact = tmp_path / "caller.toml"
     artifact.write_text(
         files("droste.prompts")
-        .joinpath("packs", "generic-minimal-v1.toml")
+        .joinpath("packs", "generic-minimal-v2.toml")
         .read_text(encoding="utf-8"),
         encoding="utf-8",
     )
@@ -378,7 +380,7 @@ def test_caller_file_loader_has_one_io_boundary(tmp_path: Any) -> None:
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
-        (lambda data: data.update(schema_version=2), "schema_version must be 1"),
+        (lambda data: data.update(schema_version=1), "schema_version must be 2"),
         (
             lambda data: data["policy_defaults"].update(enforce_contract="yes"),
             "enforce_contract must be a boolean",
@@ -396,6 +398,12 @@ def test_caller_file_loader_has_one_io_boundary(tmp_path: Any) -> None:
         (
             lambda data: data["templates"].update(user="Question without a slot"),
             "missing required slots",
+        ),
+        (
+            lambda data: data["templates"].update(
+                historical_stdout_elision="not constant: {history}"
+            ),
+            "must not use prompt slots",
         ),
     ],
 )
@@ -422,7 +430,7 @@ def test_stable_slot_contract_renders_values_without_interpreting_their_braces()
 
 
 def test_catalog_rejects_duplicate_selectors_and_mismatched_profiles() -> None:
-    pack = load_prompt_pack_resource("generic-full-v1.toml")
+    pack = load_prompt_pack_resource("generic-full-v2.toml")
     binding = PromptPackBinding("OpenAI", "FULL", pack)
     assert (binding.model_family, binding.profile) == ("openai", "full")
     with pytest.raises(PromptPackError, match="duplicate selectors"):
@@ -432,7 +440,7 @@ def test_catalog_rejects_duplicate_selectors_and_mismatched_profiles() -> None:
 
 
 def test_catalog_and_pack_copy_caller_owned_sequences() -> None:
-    pack = load_prompt_pack_resource("generic-none-v1.toml")
+    pack = load_prompt_pack_resource("generic-none-v2.toml")
     source_tips = ["one"]
     copied_pack = replace(pack, tips=source_tips)  # type: ignore[arg-type]
     source_tips.append("two")
@@ -516,7 +524,7 @@ def test_resolution_is_deterministic_across_every_fallback_tier() -> None:
 
 
 def test_directly_constructed_caller_pack_is_validated_before_resolution() -> None:
-    base = load_prompt_pack_resource("generic-full-v1.toml")
+    base = load_prompt_pack_resource("generic-full-v2.toml")
     invalid = replace(base, templates=replace(base.templates, user="no slots"))
     with pytest.raises(PromptPackError, match="missing required slots"):
         resolve_prompt_pack(
@@ -527,7 +535,7 @@ def test_directly_constructed_caller_pack_is_validated_before_resolution() -> No
 
 
 def test_run_uses_one_caller_pack_and_records_its_provenance() -> None:
-    base = load_prompt_pack_resource("generic-none-v1.toml")
+    base = load_prompt_pack_resource("generic-none-v2.toml")
     templates = replace(
         base.templates,
         system="CALLER PACK\n{output_contract}\n{capabilities}\n{budget}",
@@ -564,7 +572,7 @@ def test_run_uses_one_caller_pack_and_records_its_provenance() -> None:
 
 
 def test_pack_policy_default_applies_only_when_config_does_not_override_it() -> None:
-    base = load_prompt_pack_resource("generic-none-v1.toml")
+    base = load_prompt_pack_resource("generic-none-v2.toml")
     permissive = replace(
         base,
         pack_id="caller.permissive",
@@ -594,7 +602,7 @@ def test_pack_policy_default_applies_only_when_config_does_not_override_it() -> 
 
 
 def test_generic_pack_preserves_current_default_contract_and_tips() -> None:
-    full = load_prompt_pack_resource("generic-full-v1.toml")
+    full = load_prompt_pack_resource("generic-full-v2.toml")
     system = render_prompt_template(
         full.templates.system,
         PromptSlots(

@@ -1,6 +1,6 @@
-schema_version = 1
+schema_version = 2
 id = "droste.generic.full"
-revision = "1.0.3"
+revision = "2.0.0"
 profile = "full"
 unable_sentinel = "unable to determine from the work so far"
 
@@ -82,3 +82,7 @@ extract_system = '''An iterative Python-REPL session ended without submitting a 
 extract_user = '''Question: {question}
 
 {history}'''
+
+historical_stdout_elision = "\n... [historical stdout elided] ...\n"
+
+unchanged_draft_elision = '''[unchanged draft elided; see prior snapshot]'''

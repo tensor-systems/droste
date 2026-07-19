@@ -58,12 +58,14 @@ from .step import (
     EMPTY_OUTPUT_NUDGE,
     RLMConfig,
     RLMResult,
+    TranscriptWindowEntry,
     _best_answer,
     build_error_repair_messages,
     build_initial_messages,
     build_missing_code_repair_messages,
     build_refinement_messages,
     call_root,
+    elide_historical_stdout,
     error_repair_history,
     execute_step,
     finalize,
@@ -791,6 +793,8 @@ def run_rlm(
         finalization_base_code = ""
 
         messages: list[dict[str, str]] = []
+        transcript_window: list[TranscriptWindowEntry] = []
+        previous_draft_snapshot = str(answer.get("content", ""))
         code = ""
 
         def step_kwargs() -> dict[str, Any]:
@@ -818,6 +822,15 @@ def run_rlm(
                 prompt_pack=prompt_pack_record,
                 config=cfg,
                 scaffold_manifest=scaffold_manifest,
+            )
+
+        def call_live_root(live_messages: list[dict[str, str]]) -> tuple[str, Any, RLMError | None]:
+            return call_root(
+                root_llm,
+                live_messages,
+                model=cfg.root_model or "",
+                context=context,
+                transcript_window=tuple(transcript_window),
             )
 
     except BaseException as exc:
@@ -849,7 +862,18 @@ def run_rlm(
             if iterations == 1:
                 messages = build_initial_messages(system_prompt, user_content)
             else:
+                draft_snapshot = str(answer.get("content", ""))
+                windowed_draft = (
+                    resolved_prompt_pack.pack.templates.unchanged_draft_elision
+                    if draft_snapshot == previous_draft_snapshot
+                    else draft_snapshot
+                )
+                windowed_output = elide_historical_stdout(
+                    last_output,
+                    placeholder=resolved_prompt_pack.pack.templates.historical_stdout_elision,
+                )
                 rendered_refinement = None
+                elided_refinement: str
                 if refinement_prompt_template is None:
                     rendered_refinement = render_prompt_template(
                         resolved_prompt_pack.pack.templates.refinement,
@@ -859,6 +883,19 @@ def run_rlm(
                             output_contract=CODE_OUTPUT_CONTRACT,
                         ),
                     )
+                    elided_refinement = render_prompt_template(
+                        resolved_prompt_pack.pack.templates.refinement,
+                        PromptSlots(
+                            question=question,
+                            history=_refinement_history(windowed_draft, windowed_output),
+                            output_contract=CODE_OUTPUT_CONTRACT,
+                        ),
+                    )
+                else:
+                    elided_refinement = refinement_prompt_template.format(
+                        current_content=windowed_draft,
+                        last_output=(windowed_output or EMPTY_OUTPUT_NUDGE),
+                    )
                 messages = build_refinement_messages(
                     messages,
                     template=(refinement_prompt_template or DEFAULT_REFINEMENT_PROMPT_TEMPLATE),
@@ -867,12 +904,18 @@ def run_rlm(
                     last_output=last_output,
                     rendered_prompt=rendered_refinement,
                 )
+                transcript_window.append(
+                    TranscriptWindowEntry(
+                        iteration=iterations - 1,
+                        message_index=len(messages) - 1,
+                        elided_content=elided_refinement,
+                    )
+                )
+                previous_draft_snapshot = draft_snapshot
 
             context.emit_progress(f"Iteration {iterations}: Generating code...")
 
-            response, usage, root_error = call_root(
-                root_llm, messages, model=cfg.root_model or "", context=context
-            )
+            response, usage, root_error = call_live_root(messages)
             if root_error is not None:
                 return early_result(root_error)
             last_response = response
@@ -890,9 +933,7 @@ def run_rlm(
                         messages, response, repair_prompt=missing_code_prompt
                     )
                     context.emit_event(repair_event(iterations, "missing_code", "start"))
-                    repair_response, repair_usage, root_error = call_root(
-                        root_llm, repair_messages, model=cfg.root_model or "", context=context
-                    )
+                    repair_response, repair_usage, root_error = call_live_root(repair_messages)
                     if root_error is not None:
                         context.emit_event(
                             repair_event(
@@ -1014,9 +1055,7 @@ def run_rlm(
                     "start",
                 )
             )
-            repair_response, repair_usage, root_error = call_root(
-                root_llm, repair_messages, model=cfg.root_model or "", context=context
-            )
+            repair_response, repair_usage, root_error = call_live_root(repair_messages)
             if root_error is not None:
                 context.emit_event(
                     repair_event(
@@ -1126,11 +1165,8 @@ def run_rlm(
                 repair_prompt=finalization_prompt,
             )
             context.emit_event(repair_event(iterations, "terminal", "start"))
-            finalization_response, finalization_usage, finalization_root_error = call_root(
-                root_llm,
-                finalization_messages,
-                model=cfg.root_model or "",
-                context=context,
+            finalization_response, finalization_usage, finalization_root_error = call_live_root(
+                finalization_messages
             )
             if finalization_root_error is None:
                 last_response = finalization_response
