@@ -100,7 +100,7 @@ jobs:
           done
       - name: Wheel bundles and hashes prompt packs (#103)
         run: |
-          for f in generic-full-v1.toml generic-minimal-v1.toml generic-none-v1.toml; do
+          for f in generic-full-v2.toml generic-minimal-v2.toml generic-none-v2.toml; do
             unzip -l dist/*.whl | grep -q "droste/prompts/packs/$f" || {
               echo "wheel is missing droste/prompts/packs/$f"; exit 1;
             }
@@ -125,9 +125,9 @@ jobs:
           wheel_packs = {binding.pack.pack_id: binding.pack for binding in catalog.bindings}
           assert len(wheel_packs) == len(catalog.bindings)
           filenames = (
-              "generic-full-v1.toml",
-              "generic-minimal-v1.toml",
-              "generic-none-v1.toml",
+              "generic-full-v2.toml",
+              "generic-minimal-v2.toml",
+              "generic-none-v2.toml",
           )
           for filename in filenames:
               source = parse_prompt_pack(
@@ -279,7 +279,7 @@ jobs:
           done
       - name: Wheel bundles and hashes prompt packs (#103)
         run: |
-          for f in generic-full-v1.toml generic-minimal-v1.toml generic-none-v1.toml; do
+          for f in generic-full-v2.toml generic-minimal-v2.toml generic-none-v2.toml; do
             unzip -l dist/*.whl | grep -q "droste/prompts/packs/$f" || {
               echo "wheel is missing droste/prompts/packs/$f"; exit 1;
             }
@@ -304,9 +304,9 @@ jobs:
           wheel_packs = {binding.pack.pack_id: binding.pack for binding in catalog.bindings}
           assert len(wheel_packs) == len(catalog.bindings)
           filenames = (
-              "generic-full-v1.toml",
-              "generic-minimal-v1.toml",
-              "generic-none-v1.toml",
+              "generic-full-v2.toml",
+              "generic-minimal-v2.toml",
+              "generic-none-v2.toml",
           )
           for filename in filenames:
               source = parse_prompt_pack(
