@@ -685,7 +685,12 @@ def run_rlm(
 
         # The environment contract owns one brokered subcall surface. The host's
         # raw client remains trusted loop state for context binding/accounting.
-        sandbox_subcalls = environment.sandbox_subcalls(subcalls, context.ledger)
+        sandbox_subcalls = environment.sandbox_subcalls(
+            subcalls,
+            context.ledger,
+            usage_callback=context.record_subcall_usage,
+            settlement_callback=context.record_subcall_settlement,
+        )
         reported_capacity = reported_subcall_input_capacity(sandbox_subcalls)
         cfg = _with_resolved_subcall_input_capacity(cfg, reported_capacity)
         resolved_scaffold, env_globals = _prepare_rlm_scaffold(

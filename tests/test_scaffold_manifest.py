@@ -73,7 +73,7 @@ def _manifest(**overrides):
 def _ready_response(answer: str = "ok") -> MockResponse:
     return MockResponse(
         text=f"```python\nanswer['content'] = {answer!r}\nanswer['ready'] = True\n```",
-        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
     )
 
 

@@ -88,6 +88,14 @@ class ExecutionContext:
         if self.stats.root_successes >= self.stats.root_requests:
             raise ValueError("root successes cannot exceed requests")
         self.stats.root_successes += 1
+        self.record_root_usage(usage)
+
+    def record_root_usage(self, usage: TokenUsage) -> None:
+        """Record billable root usage independently of usable-output success."""
+
+        self._validate_usage(usage)
+        if not usage.exact:
+            self.stats.root_usage_complete = False
         self.stats.root_input_tokens += usage.prompt_tokens
         self.stats.root_output_tokens += usage.completion_tokens
         self.stats.root_total_tokens += usage.total_tokens
@@ -105,10 +113,30 @@ class ExecutionContext:
 
     def record_subcall_usage(self, usage: TokenUsage) -> None:
         self._validate_usage(usage)
+        if not usage.exact:
+            self.stats.subcall_usage_complete = False
         self.stats.subcall_input_tokens += usage.prompt_tokens
         self.stats.subcall_output_tokens += usage.completion_tokens
         self.stats.subcall_total_tokens += usage.total_tokens
         self.stats.total_tokens += usage.total_tokens
+
+    def record_root_usage_unavailable(self) -> None:
+        """Mark root usage partial without inventing provider token counts."""
+
+        self.stats.root_usage_complete = False
+
+    def record_subcall_usage_unavailable(self) -> None:
+        """Mark subcall usage partial without conflating it with reservations."""
+
+        self.stats.subcall_usage_complete = False
+
+    def record_subcall_settlement(self, exact: bool) -> None:
+        """Record whether one brokered inference settlement had complete usage."""
+
+        if not isinstance(exact, bool):
+            raise TypeError("subcall settlement exact must be a bool")
+        if not exact:
+            self.record_subcall_usage_unavailable()
 
     @staticmethod
     def _validate_count(count: int) -> None:
@@ -117,6 +145,8 @@ class ExecutionContext:
 
     @staticmethod
     def _validate_usage(usage: TokenUsage) -> None:
+        if not isinstance(usage, TokenUsage):
+            raise TypeError("token usage must be TokenUsage")
         values = (
             usage.prompt_tokens,
             usage.completion_tokens,

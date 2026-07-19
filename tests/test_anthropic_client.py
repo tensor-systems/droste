@@ -12,9 +12,14 @@ import pytest
 from droste import (
     AnthropicClient,
     AnthropicSubcallClient,
+    LLMUsageFailure,
+    SubcallBatchFailure,
+    SubcallQueryResult,
+    TokenUsage,
     create_execution_context,
 )
-from droste.clients.anthropic import _mark_content
+from droste.clients.anthropic import _mark_content, _usage_from
+from droste.execution.budget import conservative_token_estimate
 from droste.loop.step import call_root
 from droste.protocols.llm_client import CACHE_ANCHOR_MARKER
 from droste_cli.main import main
@@ -40,6 +45,9 @@ class StubAnthropicServer:
         self.fail_status: int | None = None
         self.fail_body: bytes = b""
         self.stream_error_midway = False
+        self.stream_start_output_tokens: object | None = None
+        self.stream_delta_output_tokens: object | None = None
+        self.stream_omit_delta_output = False
         self.usage = {"input_tokens": 7, "output_tokens": 3}
         self.max_in_flight = 0
         self._in_flight = 0
@@ -84,21 +92,20 @@ class StubAnthropicServer:
                         def sse(event: dict) -> None:
                             self.wfile.write(f"data: {json.dumps(event)}\n\n".encode("utf-8"))
 
+                        start_usage = {
+                            key: value
+                            for key, value in stub.usage.items()
+                            if key != "output_tokens"
+                        }
+                        if stub.stream_start_output_tokens is not None:
+                            start_usage["output_tokens"] = stub.stream_start_output_tokens
                         sse(
                             {
                                 "type": "message_start",
                                 "message": {
                                     "id": "msg_stub_1",
                                     "model": payload.get("model", ""),
-                                    "usage": {
-                                        key: stub.usage[key]
-                                        for key in (
-                                            "input_tokens",
-                                            "cache_read_input_tokens",
-                                            "cache_creation_input_tokens",
-                                        )
-                                        if key in stub.usage
-                                    },
+                                    "usage": start_usage,
                                 },
                             }
                         )
@@ -122,11 +129,18 @@ class StubAnthropicServer:
                                     "delta": {"type": "text_delta", "text": piece},
                                 }
                             )
+                        delta_usage = {}
+                        if not stub.stream_omit_delta_output:
+                            delta_usage["output_tokens"] = (
+                                stub.stream_delta_output_tokens
+                                if stub.stream_delta_output_tokens is not None
+                                else stub.usage["output_tokens"]
+                            )
                         sse(
                             {
                                 "type": "message_delta",
                                 "delta": {"stop_reason": "end_turn"},
-                                "usage": {"output_tokens": stub.usage["output_tokens"]},
+                                "usage": delta_usage,
                             }
                         )
                         sse({"type": "message_stop"})
@@ -184,6 +198,69 @@ def test_root_create_returns_text_and_usage(stub):
     assert stub.headers[0]["x-api-key"] == "sk-ant-k"
     assert stub.headers[0]["anthropic-version"] == "2023-06-01"
     assert client.last_stop_reason == "end_turn"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_usage_includes_cache_creation_and_cache_read_tokens(stub, stream):
+    stub.root_responses = ["cached response"]
+    stub.usage = {
+        "input_tokens": 7,
+        "cache_creation_input_tokens": 11,
+        "cache_read_input_tokens": 13,
+        "output_tokens": 3,
+    }
+    client = AnthropicClient(
+        model="claude-test",
+        base_url=stub.base_url,
+        api_key="sk-ant-k",
+        on_delta=(lambda _delta: None) if stream else None,
+    )
+
+    _, usage = client.responses_create(
+        [{"role": "user", "content": "q"}], model="claude-test", return_usage=True
+    )
+
+    assert usage.exact is True
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (31, 3, 34)
+    assert (usage.cache_read_tokens, usage.cache_creation_tokens) == (13, 11)
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "expected"),
+    [
+        (
+            "input_tokens",
+            None,
+            TokenUsage(24, 3, 27, cache_read_tokens=13, cache_creation_tokens=11),
+        ),
+        (
+            "output_tokens",
+            True,
+            TokenUsage(31, 0, 31, cache_read_tokens=13, cache_creation_tokens=11),
+        ),
+        (
+            "cache_read_input_tokens",
+            -1,
+            TokenUsage(18, 3, 21, cache_creation_tokens=11),
+        ),
+        (
+            "cache_creation_input_tokens",
+            "11",
+            TokenUsage(20, 3, 23, cache_read_tokens=13),
+        ),
+    ],
+)
+def test_usage_malformed_counter_preserves_independent_known_counts(name, value, expected):
+    usage = {
+        "input_tokens": 7,
+        "output_tokens": 3,
+        "cache_read_input_tokens": 13,
+        "cache_creation_input_tokens": 11,
+    }
+    usage[name] = value
+
+    assert _usage_from({"usage": usage}) == expected
+    assert _usage_from({"usage": usage}).exact is False
 
 
 def test_system_message_lifted_to_top_level(stub):
@@ -356,6 +433,7 @@ def test_stop_maps_to_stop_sequences_and_extra_body_wins(stub):
 
 def test_streaming_deltas_assembly_and_usage(stub):
     stub.root_responses = ["streamed claude body"]
+    stub.stream_start_output_tokens = 999
     deltas: list[str] = []
     client = AnthropicClient(
         model="claude-test", base_url=stub.base_url, api_key="sk-ant-k", on_delta=deltas.append
@@ -366,7 +444,7 @@ def test_streaming_deltas_assembly_and_usage(stub):
     assert text == "streamed claude body"
     assert len(deltas) >= 2
     assert "".join(deltas) == "streamed claude body"
-    assert usage.total_tokens == 10
+    assert usage == TokenUsage(7, 3, 10, exact=True)
     assert stub.requests[0]["stream"] is True
 
 
@@ -390,6 +468,80 @@ def test_streaming_cache_usage_is_inclusive(stub):
     assert usage.total_tokens == 6103
     assert usage.cache_read_tokens == 5000
     assert usage.cache_creation_tokens == 1000
+
+
+def test_streaming_malformed_cache_counter_preserves_other_known_usage(stub):
+    stub.root_responses = ["streamed"]
+    stub.usage = {
+        "input_tokens": 7,
+        "output_tokens": 3,
+        "cache_read_input_tokens": "bad",
+        "cache_creation_input_tokens": 11,
+    }
+    client = AnthropicClient(
+        model="claude-test",
+        base_url=stub.base_url,
+        api_key="sk-ant-k",
+        on_delta=lambda _text: None,
+    )
+
+    _text, usage = client.responses_create(
+        [{"role": "user", "content": "q"}],
+        model="claude-test",
+        return_usage=True,
+    )
+
+    assert usage == TokenUsage(18, 3, 21, cache_creation_tokens=11)
+
+
+@pytest.mark.parametrize(
+    ("omit_delta", "delta_output"),
+    [(True, None), (False, "malformed")],
+)
+def test_streaming_terminal_output_missing_or_malformed_forces_partial_root_settlement(
+    stub, omit_delta, delta_output
+):
+    stub.root_responses = ["streamed"]
+    stub.usage = {
+        "input_tokens": 7,
+        "output_tokens": 3,
+        "cache_read_input_tokens": 13,
+        "cache_creation_input_tokens": 11,
+    }
+    stub.stream_start_output_tokens = 999
+    stub.stream_omit_delta_output = omit_delta
+    stub.stream_delta_output_tokens = delta_output
+    client = AnthropicClient(
+        model="claude-test",
+        base_url=stub.base_url,
+        api_key="sk-ant-k",
+        on_delta=lambda _text: None,
+    )
+    messages = [{"role": "user", "content": "q"}]
+    context = create_execution_context()
+
+    response, usage, error = call_root(
+        client,
+        messages,
+        model="claude-test",
+        context=context,
+    )
+
+    assert response == "streamed" and error is None
+    assert usage == TokenUsage(
+        31,
+        0,
+        31,
+        cache_read_tokens=13,
+        cache_creation_tokens=11,
+    )
+    resolved = context.stats.resolved_usage(0).as_dict()
+    assert resolved["kind"] == "partial"
+    assert resolved["root"]["input_tokens"] == 31
+    assert resolved["root"]["output_tokens"] == 0
+    assert resolved["root"]["total_tokens"] == 31
+    expected = conservative_token_estimate(messages) + context.budget.root_output_tokens
+    assert context.ledger.snapshot().consumed.tokens == expected
 
 
 def test_mid_stream_error_raises(stub):
@@ -420,14 +572,109 @@ def test_subcall_client_reports_usage_without_owning_budget_policy(stub):
         model="sub-model", context=ctx, base_url=stub.base_url, api_key="sk-ant-k"
     )
     assert sub.output_token_limit == 2048
-    assert sub.llm_query("alpha") == "echo: alpha"
-    assert sub.llm_query("beta") == "echo: beta"
+    first = sub.llm_query_with_usage("alpha")
+    second = sub.llm_query_with_usage("beta")
+    assert first.result == "echo: alpha" and first.usage.total_tokens == 10
+    assert second.result == "echo: beta" and second.usage.total_tokens == 10
     assert ctx.stats.calls_made == 2
     assert ctx.stats.successful_calls == 2
-    assert ctx.stats.total_tokens == 20  # 2 x (7 + 3)
+    assert ctx.stats.total_tokens == 0  # usage is centrally recorded by the broker
     assert sub.llm_query("gamma") == "echo: gamma"
     assert ctx.stats.calls_made == 3
     assert stub.requests[0]["max_tokens"] == 2048  # bounded by default
+
+
+def test_malformed_outputs_carry_exact_usage_for_root_and_subcall(monkeypatch) -> None:
+    payload = {
+        "content": None,
+        "usage": {
+            "input_tokens": 7,
+            "output_tokens": 3,
+            "cache_read_input_tokens": 11,
+            "cache_creation_input_tokens": 5,
+        },
+    }
+    root = AnthropicClient(model="root-model", api_key="sk-ant-k")
+    monkeypatch.setattr(root._transport, "complete", lambda request: payload)
+
+    with pytest.raises(LLMUsageFailure, match="missing content blocks") as root_failure:
+        root.responses_create(
+            [{"role": "user", "content": "q"}],
+            model="",
+            return_usage=True,
+        )
+    expected = TokenUsage(
+        23,
+        3,
+        26,
+        cache_read_tokens=11,
+        cache_creation_tokens=5,
+        exact=True,
+    )
+    assert root_failure.value.usage == expected
+
+    context = create_execution_context()
+    subcall = AnthropicSubcallClient(model="sub-model", context=context, api_key="sk-ant-k")
+    monkeypatch.setattr(subcall._transport, "complete", lambda request: payload)
+    with pytest.raises(LLMUsageFailure, match="missing content blocks") as subcall_failure:
+        subcall.llm_query_with_usage("q")
+    assert subcall_failure.value.usage == expected
+    with pytest.raises(RuntimeError, match="missing content blocks"):
+        subcall.llm_query("q")
+
+
+def test_malformed_output_failure_carries_partial_cache_usage(monkeypatch) -> None:
+    payload = {
+        "content": None,
+        "usage": {
+            "input_tokens": 7,
+            "output_tokens": "bad",
+            "cache_read_input_tokens": 11,
+            "cache_creation_input_tokens": 5,
+        },
+    }
+    root = AnthropicClient(model="root-model", api_key="sk-ant-k")
+    monkeypatch.setattr(root._transport, "complete", lambda request: payload)
+
+    with pytest.raises(LLMUsageFailure) as failure:
+        root.responses_create(
+            [{"role": "user", "content": "q"}],
+            model="",
+            return_usage=True,
+        )
+
+    assert failure.value.usage == TokenUsage(
+        23,
+        0,
+        23,
+        cache_read_tokens=11,
+        cache_creation_tokens=5,
+    )
+
+
+def test_fanout_batch_preserves_usage_failure_and_original_cause(monkeypatch) -> None:
+    context = create_execution_context()
+    subcall = AnthropicSubcallClient(model="sub-model", context=context, api_key="sk-ant-k")
+
+    def query(prompt: str, context: str = "") -> SubcallQueryResult:
+        if prompt == "bad":
+            raise LLMUsageFailure(
+                TokenUsage(7, 3, 19, exact=True),
+                RuntimeError("malformed anthropic output"),
+            )
+        return SubcallQueryResult("ok", TokenUsage(2, 1, 5, exact=True))
+
+    monkeypatch.setattr(subcall, "llm_query_with_usage", query)
+    with pytest.raises(SubcallBatchFailure, match="malformed anthropic output") as failure:
+        subcall.llm_batch_with_usage(["ok", "bad"])
+    assert failure.value.result.usage == (
+        TokenUsage(2, 1, 5, exact=True),
+        TokenUsage(7, 3, 19, exact=True),
+    )
+    assert failure.value.result.errors == ({"index": 1, "error": "malformed anthropic output"},)
+    assert type(failure.value.cause) is RuntimeError
+    with pytest.raises(RuntimeError, match="malformed anthropic output"):
+        subcall.llm_batch(["ok", "bad"])
 
 
 def test_subcall_requires_positive_output_bound(stub):

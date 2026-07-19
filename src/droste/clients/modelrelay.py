@@ -11,8 +11,8 @@ Two classes, one per protocol, mirroring the BYOK pair in ``openai_compat``:
   ``on_delta`` callback is supplied (the CLI's ``--verbose``).
 - ``ModelRelaySubcallClient`` implements ``SubcallClient`` with the same
   reporting semantics as ``OpenAICompatSubcallClient``: bounded batch
-  concurrency and subcall usage recorded in ``context.stats``. Authorization
-  belongs to the capability broker.
+  concurrency and typed per-request usage returned to the capability broker,
+  which owns stats accounting and authorization.
 
 Subcall economics: subcalls default to ``reasoning_effort="none"`` and a
 bounded output budget — the same defaults ModelRelay applies server-side
@@ -30,14 +30,27 @@ import threading
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, NoReturn
 
 from ..exceptions import BatchItemError, BatchItemErrorDetails
 from ..execution.budget import DEFAULT_SUBCALL_OUTPUT_TOKENS
 from ..execution.config import validate_subcall_concurrency
 from ..execution.context import ExecutionContext
-from ..protocols.llm_client import TokenUsage, strip_cache_anchor_markers
-from ..protocols.subcall_client import SubcallClient
+from ..protocols.llm_client import (
+    LLMUsageFailure,
+    TokenUsage,
+    strip_cache_anchor_markers,
+    token_usage_from_mapping,
+)
+from ..protocols.subcall_client import (
+    SubcallBatchFailure,
+    SubcallBatchResult,
+    SubcallClient,
+    SubcallQueryResult,
+    fail_fast_subcall_batch,
+    structured_subcall_errors,
+)
 from .errors import http_error_excerpt, redact_secrets
 from .openai_compat import (
     DEFAULT_MAX_PARALLEL,
@@ -48,6 +61,13 @@ from .useragent import USER_AGENT
 
 DEFAULT_MODELRELAY_BASE_URL = "https://api.modelrelay.ai/api/v1"
 _STREAM_ACCEPT = 'application/x-ndjson; profile="responses-stream/v2"'
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeBatchResult:
+    results: tuple[str, ...]
+    errors: tuple[Exception | None, ...]
+    usage: tuple[TokenUsage, ...]
 
 
 def _batch_detail_string(value: Any) -> str | None:
@@ -131,18 +151,7 @@ def _output_text(data: Any) -> str:
 
 def _usage_from(data: Any) -> TokenUsage:
     usage = data.get("usage") if isinstance(data, dict) else None
-    if not isinstance(usage, dict):
-        usage = {}
-    prompt = int(usage.get("input_tokens") or 0)
-    completion = int(usage.get("output_tokens") or 0)
-    total = usage.get("total_tokens")
-    if total is None:
-        total = prompt + completion
-    return TokenUsage(
-        prompt_tokens=prompt,
-        completion_tokens=completion,
-        total_tokens=int(total or 0),
-    )
+    return token_usage_from_mapping(usage)
 
 
 class _ResponsesTransport:
@@ -334,7 +343,7 @@ class ModelRelayClient:
         if not api_key:
             raise ValueError("api_key is required (run `droste login`)")
         self._accounting_lock = threading.Lock()
-        self._total_usage = TokenUsage(0, 0, 0)
+        self._total_usage = TokenUsage(0, 0, 0, exact=True)
         self._root_requests_issued = 0
         self._transport = _ResponsesTransport(
             base_url=base_url,
@@ -364,6 +373,7 @@ class ModelRelayClient:
                 total_tokens=self._total_usage.total_tokens,
                 cache_read_tokens=self._total_usage.cache_read_tokens,
                 cache_creation_tokens=self._total_usage.cache_creation_tokens,
+                exact=self._total_usage.exact,
             )
 
     @property
@@ -386,6 +396,7 @@ class ModelRelayClient:
                 cache_creation_tokens=(
                     self._total_usage.cache_creation_tokens + usage.cache_creation_tokens
                 ),
+                exact=self._total_usage.exact and usage.exact,
             )
 
     def _payload(
@@ -435,7 +446,12 @@ class ModelRelayClient:
         self.last_response_id = str(data.get("id") or "")
         self.last_stop_reason = str(data.get("stop_reason") or "")
         self.last_model = str(data.get("model") or payload["model"])
-        result = _output_text(data)
+        try:
+            result = _output_text(data)
+        except Exception as exc:
+            if return_usage:
+                raise LLMUsageFailure(usage, exc) from None
+            raise
         if return_usage:
             return result, usage
         return result
@@ -448,8 +464,9 @@ class ModelRelaySubcallClient(SubcallClient):
     """``SubcallClient`` over ModelRelay's native ``/responses`` endpoint.
 
     Reporting mirrors ``OpenAICompatSubcallClient`` (and the hosted
-    ``HTTPSubcallClient``): issued calls and token usage are recorded in
-    ``context.stats`` while batch concurrency stays bounded.
+    ``HTTPSubcallClient``): issued calls are recorded locally while provider
+    usage is returned to the capability broker for stats and budget accounting.
+    Batch concurrency stays bounded.
 
     Cost defaults match ModelRelay's server-side subcall defaults: output
     bounded at ``DEFAULT_SUBCALL_OUTPUT_TOKENS`` and
@@ -486,7 +503,7 @@ class ModelRelaySubcallClient(SubcallClient):
         self._reasoning_effort = str(reasoning_effort or "")
         self._max_parallel = resolved_concurrency
         self._lock = threading.Lock()
-        self._total_usage = TokenUsage(0, 0, 0)
+        self._total_usage = TokenUsage(0, 0, 0, exact=True)
 
     @property
     def output_token_limit(self) -> int | None:
@@ -507,6 +524,7 @@ class ModelRelaySubcallClient(SubcallClient):
                 total_tokens=self._total_usage.total_tokens,
                 cache_read_tokens=self._total_usage.cache_read_tokens,
                 cache_creation_tokens=self._total_usage.cache_creation_tokens,
+                exact=self._total_usage.exact,
             )
 
     def _increment_calls(self, count: int = 1) -> None:
@@ -517,7 +535,6 @@ class ModelRelaySubcallClient(SubcallClient):
 
     def _account_usage(self, usage: TokenUsage) -> None:
         with self._lock:
-            self._context.record_subcall_usage(usage)
             self._total_usage = TokenUsage(
                 prompt_tokens=self._total_usage.prompt_tokens + usage.prompt_tokens,
                 completion_tokens=self._total_usage.completion_tokens + usage.completion_tokens,
@@ -526,6 +543,7 @@ class ModelRelaySubcallClient(SubcallClient):
                 cache_creation_tokens=(
                     self._total_usage.cache_creation_tokens + usage.cache_creation_tokens
                 ),
+                exact=self._total_usage.exact and usage.exact,
             )
 
     def _increment_successful_calls(self, count: int = 1) -> None:
@@ -533,6 +551,12 @@ class ModelRelaySubcallClient(SubcallClient):
             self._context.record_subcall_successes(count)
 
     def llm_query(self, prompt: str, context: str = "") -> str:
+        try:
+            return self.llm_query_with_usage(prompt, context).result
+        except LLMUsageFailure as exc:
+            raise exc.cause from exc
+
+    def llm_query_with_usage(self, prompt: str, context: str = "") -> SubcallQueryResult:
         if context:
             prompt = f"{context}\n\n{prompt}"
         self._increment_calls()
@@ -547,48 +571,61 @@ class ModelRelaySubcallClient(SubcallClient):
         if self._reasoning_effort:
             payload["reasoning_effort"] = self._reasoning_effort
         data = self._transport.complete(payload)
-        self._account_usage(_usage_from(data))
-        result = _output_text(data)
+        usage = _usage_from(data)
+        self._account_usage(usage)
+        try:
+            result = _output_text(data)
+        except Exception as exc:
+            raise LLMUsageFailure(usage, exc) from None
         if result.strip():
             self._increment_successful_calls()
-        return result
+        return SubcallQueryResult(result, usage)
 
     def llm_batch(self, prompts: list[str], contexts: list[str] | None = None) -> list[str]:
-        results, errors = self._run_batch(prompts, contexts)
-        for err in errors:
-            if err is not None:
-                raise err
-        return results
+        try:
+            return list(self.llm_batch_with_usage(prompts, contexts).results)
+        except SubcallBatchFailure as exc:
+            raise exc.cause from exc
+
+    def llm_batch_with_usage(
+        self, prompts: list[str], contexts: list[str] | None = None
+    ) -> SubcallBatchResult:
+        result = self._run_batch(prompts, contexts)
+        return fail_fast_subcall_batch(result.results, result.errors, result.usage)
 
     def llm_batch_with_errors(
         self,
         prompts: list[str],
         contexts: list[str] | None = None,
     ) -> tuple[list[str], list[dict[str, object]]]:
-        results, errors = self._run_batch(prompts, contexts)
-        structured: list[dict[str, object]] = []
-        for idx, err in enumerate(errors):
-            if err is None:
-                continue
-            item: dict[str, object] = {"index": idx, "error": str(err)}
-            if isinstance(err, BatchItemError):
-                details = err.details.to_dict()
-                if details:
-                    item["details"] = details
-            structured.append(item)
-        return results, structured
+        try:
+            value = self.llm_batch_with_errors_and_usage(prompts, contexts)
+        except SubcallBatchFailure as exc:
+            raise exc.cause from exc
+        return list(value.results), [dict(item) for item in value.errors]
 
-    def _run_batch(
-        self, prompts: list[str], contexts: list[str] | None
-    ) -> tuple[list[str], list[Exception | None]]:
+    def llm_batch_with_errors_and_usage(
+        self,
+        prompts: list[str],
+        contexts: list[str] | None = None,
+    ) -> SubcallBatchResult:
+        value = self._run_batch(prompts, contexts)
+        return SubcallBatchResult(
+            value.results,
+            structured_subcall_errors(value.errors),
+            value.usage,
+        )
+
+    def _run_batch(self, prompts: list[str], contexts: list[str] | None) -> _NativeBatchResult:
         if contexts is None:
             contexts = [""] * len(prompts)
         if len(contexts) != len(prompts):
             raise ValueError("contexts length must match prompts length")
         results: list[str] = [""] * len(prompts)
         errors: list[Exception | None] = [None] * len(prompts)
+        usage = [TokenUsage.unavailable() for _ in prompts]
         if not prompts:
-            return results, errors
+            return _NativeBatchResult(tuple(results), tuple(errors), tuple(usage))
         if len(prompts) > MAX_BATCH_PROMPTS:
             raise ValueError(f"llm_batch prompt count exceeds max {MAX_BATCH_PROMPTS}")
 
@@ -618,34 +655,54 @@ class ModelRelaySubcallClient(SubcallClient):
             path="/responses/batch",
             label="llm_batch",
         )
+
+        def fail_with_partial_usage(error: Exception) -> NoReturn:
+            raise SubcallBatchFailure(
+                SubcallBatchResult(
+                    tuple(results),
+                    structured_subcall_errors(tuple(errors)),
+                    tuple(usage),
+                ),
+                error,
+            ) from None
+
         raw_results = data.get("results")
         if not isinstance(raw_results, list):
-            raise RuntimeError("llm_batch response missing results")
+            fail_with_partial_usage(RuntimeError("llm_batch response missing results"))
 
         seen: set[int] = set()
         for raw in raw_results:
             if not isinstance(raw, dict):
-                raise RuntimeError("llm_batch returned a non-object result")
+                fail_with_partial_usage(RuntimeError("llm_batch returned a non-object result"))
             try:
                 idx = int(raw.get("id"))
             except (TypeError, ValueError) as exc:
-                raise RuntimeError("llm_batch returned an invalid result id") from exc
+                error = RuntimeError("llm_batch returned an invalid result id")
+                error.__cause__ = exc
+                fail_with_partial_usage(error)
             if idx < 0 or idx >= len(prompts) or idx in seen:
-                raise RuntimeError(f"llm_batch returned unexpected result id {idx}")
+                fail_with_partial_usage(
+                    RuntimeError(f"llm_batch returned unexpected result id {idx}")
+                )
             seen.add(idx)
             status = str(raw.get("status") or "")
             if status == "success":
                 response = raw.get("response")
                 if not isinstance(response, dict):
-                    raise RuntimeError(f"llm_batch item {idx} missing response")
-                self._account_usage(_usage_from(response))
-                results[idx] = _output_text(response)
+                    fail_with_partial_usage(RuntimeError(f"llm_batch item {idx} missing response"))
+                usage[idx] = _usage_from(response)
+                self._account_usage(usage[idx])
+                try:
+                    results[idx] = _output_text(response)
+                except Exception as exc:
+                    errors[idx] = exc
+                    continue
                 if results[idx].strip():
                     self._increment_successful_calls()
             elif status == "error":
                 error = raw.get("error")
                 if not isinstance(error, dict):
-                    raise RuntimeError(f"llm_batch item {idx} missing error")
+                    fail_with_partial_usage(RuntimeError(f"llm_batch item {idx} missing error"))
                 code = str(error.get("code") or "")
                 message = redact_secrets(str(error.get("message") or "batch item failed"))[:500]
                 detail = f" ({code})" if code else ""
@@ -654,9 +711,13 @@ class ModelRelaySubcallClient(SubcallClient):
                     _batch_item_error_details(data, raw, error),
                 )
             else:
-                raise RuntimeError(f"llm_batch item {idx} has invalid status {status!r}")
+                fail_with_partial_usage(
+                    RuntimeError(f"llm_batch item {idx} has invalid status {status!r}")
+                )
 
         if len(seen) != len(prompts):
             missing = sorted(set(range(len(prompts))) - seen)
-            raise RuntimeError(f"llm_batch response missing result ids {missing}")
-        return results, errors
+            fail_with_partial_usage(
+                RuntimeError(f"llm_batch response missing result ids {missing}")
+            )
+        return _NativeBatchResult(tuple(results), tuple(errors), tuple(usage))

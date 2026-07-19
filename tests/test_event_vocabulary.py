@@ -27,7 +27,7 @@ from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSub
 
 READY_REPLY = MockResponse(
     text="""```python\nprint('hi')\nanswer['content'] = 'ok'\nanswer['ready'] = True\n```""",
-    usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
 )
 
 
@@ -78,7 +78,7 @@ def test_bare_run_rlm_writes_nothing_to_stderr(capfd) -> None:
     # the engine's.)
     silent_reply = MockResponse(
         text="""```python\nanswer['content'] = 'ok'\nanswer['ready'] = True\n```""",
-        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
     )
     result = run_rlm(
         question="q",

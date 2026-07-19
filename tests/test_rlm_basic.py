@@ -13,7 +13,7 @@ def test_run_rlm_basic():
         responses=[
             MockResponse(
                 text="""```python\nanswer['content'] = 'ok'\nanswer['ready'] = True\n```""",
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             )
         ]
     )
@@ -43,7 +43,9 @@ def test_non_contract_plain_response_is_returned_as_answer():
             responses=[
                 MockResponse(
                     text=response,
-                    usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                    usage=TokenUsage(
+                        prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True
+                    ),
                 )
             ]
         ),
@@ -71,7 +73,7 @@ def test_run_rlm_preserves_confirmed_json_answer_metadata():
                     "answer['ready'] = True\n"
                     "```"
                 ),
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             )
         ]
     )
@@ -99,13 +101,13 @@ def test_run_rlm_repairs_non_json_answer_metadata():
                     "```python\nanswer['content'] = 'draft'\n"
                     "answer['metadata'] = {'bad': {1}}\nanswer['ready'] = True\n```"
                 ),
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             ),
             MockResponse(
                 text=(
                     "```python\nanswer['metadata'] = {'fixed': True}\nanswer['ready'] = True\n```"
                 ),
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             ),
         ]
     )
@@ -177,11 +179,11 @@ def test_run_rlm_rebound_answer_dict_registers_ready():
         responses=[
             MockResponse(
                 text="""```python\nanswer = {'content': 'rebound', 'ready': True}\n```""",
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             ),
             MockResponse(
                 text="""```python\nanswer['ready'] = True\n```""",
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             ),
         ]
     )
@@ -205,11 +207,11 @@ def test_run_rlm_non_dict_rebind_is_normalized_not_fatal():
         responses=[
             MockResponse(
                 text="""```python\nanswer = '42'\n```""",
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             ),
             MockResponse(
                 text="""```python\nanswer['ready'] = True\n```""",
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             ),
         ]
     )
@@ -233,15 +235,15 @@ def test_run_rlm_rebound_answer_in_repaired_code_registers_ready():
         responses=[
             MockResponse(
                 text="""```python\nraise ValueError('boom')\n```""",
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             ),
             MockResponse(
                 text="""```python\nanswer = {'content': 'fixed', 'ready': True}\n```""",
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             ),
             MockResponse(
                 text="""```python\nanswer['ready'] = True\n```""",
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             ),
         ]
     )
@@ -271,15 +273,15 @@ def test_failed_rebound_answer_cannot_confirm_through_noop_repair():
                     "raise ValueError('boom')\n"
                     "```"
                 ),
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             ),
             MockResponse(
                 text="""```python\npass\n```""",
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             ),
             MockResponse(
                 text="""```python\nanswer['ready'] = True\n```""",
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             ),
         ]
     )

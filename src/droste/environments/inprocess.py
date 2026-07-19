@@ -11,6 +11,7 @@ import contextlib
 import io
 import json
 import signal
+from collections.abc import Callable
 from typing import Any
 
 from .._lifecycle import CloseOnce
@@ -24,8 +25,10 @@ from ..capabilities import (
     CapabilityObserver,
     subcall_registrations,
 )
+from ..execution.broker_budget import BrokerBudget
 from ..execution.budget import BudgetLedger
 from ..protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
+from ..protocols.llm_client import TokenUsage
 from ..protocols.subcall_capacity import SubcallInputCapacity
 from ..protocols.subcall_client import SubcallClient
 from ..protocols.verbs import EMPTY_ACCESSOR_MANIFEST, AccessorManifest
@@ -142,6 +145,7 @@ class RunnerEnvironment(RLMEnvironment):
         capability_observer: CapabilityObserver | None = None,
         capability_attempt_observer: CapabilityAttemptObserver | None = None,
         capability_attempt_authority: CapabilityAttemptAuthority | None = None,
+        subcall_usage_callback: Callable[[TokenUsage], None] | None = None,
     ) -> None:
         self._context = context
         self._registry = registry
@@ -150,7 +154,11 @@ class RunnerEnvironment(RLMEnvironment):
         self._max_output_chars = max_output_chars
         self._exec_timeout_ms = exec_timeout_ms
         self._budget_ledger = budget_ledger
-        registrations = list(subcall_registrations(subcalls))
+        self._capability_attempt_authority = capability_attempt_authority
+        self._subcall_usage_callback = subcall_usage_callback
+        registrations = list(
+            subcall_registrations(subcalls, usage_callback=self._record_subcall_usage)
+        )
         if registry is not None:
             registrations.extend(registry.capability_registrations())
         self._broker = CapabilityBroker(
@@ -190,7 +198,26 @@ class RunnerEnvironment(RLMEnvironment):
 
         return self._broker
 
-    def sandbox_subcalls(self, subcalls: SubcallClient, ledger: BudgetLedger) -> SubcallClient:
+    def _record_subcall_usage(self, usage: TokenUsage) -> None:
+        callback = self._subcall_usage_callback
+        if callback is not None:
+            callback(usage)
+
+    def _bind_subcall_usage_callback(self, callback: Callable[[TokenUsage], None]) -> None:
+        if not callable(callback):
+            raise TypeError("subcall usage callback must be callable")
+        if self._subcall_usage_callback is not None and self._subcall_usage_callback != callback:
+            raise ValueError("subcall usage callback is already bound")
+        self._subcall_usage_callback = callback
+
+    def sandbox_subcalls(
+        self,
+        subcalls: SubcallClient,
+        ledger: BudgetLedger,
+        *,
+        usage_callback: Callable[[TokenUsage], None],
+        settlement_callback: Callable[[bool], None],
+    ) -> SubcallClient:
         """Broker-backed client used by loop-installed structured helpers."""
 
         if self._budget_ledger is not None and ledger is not self._budget_ledger:
@@ -198,6 +225,11 @@ class RunnerEnvironment(RLMEnvironment):
         if subcalls is not self._subcalls:
             raise ValueError(
                 "run_rlm subcalls must be the same client brokered by RunnerEnvironment"
+            )
+        self._bind_subcall_usage_callback(usage_callback)
+        if isinstance(self._capability_attempt_authority, BrokerBudget):
+            self._capability_attempt_authority.bind_inference_settlement_callback(
+                settlement_callback
             )
         return self._sandbox_subcalls
 

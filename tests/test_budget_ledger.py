@@ -10,7 +10,9 @@ from droste import (
     BudgetRequest,
     create_execution_context,
 )
+from droste.execution.budget import conservative_token_estimate
 from droste.loop.step import call_root
+from droste.protocols.llm_client import LLMUsageFailure, TokenUsage
 
 
 class Clock:
@@ -336,3 +338,184 @@ def test_root_process_control_exit_settles_before_propagating() -> None:
     snapshot = context.ledger.snapshot()
     assert snapshot.reserved == BudgetRequest()
     assert snapshot.consumed.tokens > 0
+
+
+def test_root_success_settles_exact_usage_instead_of_visible_bytes() -> None:
+    class ExactLLM:
+        def responses_create(self, *args, **kwargs):
+            return "x" * 500, TokenUsage(2, 3, 17, exact=True)
+
+    context = create_execution_context(budget=_budget())
+
+    response, usage, error = call_root(
+        ExactLLM(),  # type: ignore[arg-type]
+        [{"role": "user", "content": "question"}],
+        model="model",
+        context=context,
+    )
+
+    assert response == "x" * 500
+    assert usage.total_tokens == 17
+    assert error is None
+    assert context.ledger.snapshot().consumed.tokens == 17
+
+
+def test_root_success_without_trusted_usage_consumes_full_reservation() -> None:
+    messages = [{"role": "user", "content": "question"}]
+
+    class MissingUsageLLM:
+        def responses_create(self, *args, **kwargs):
+            return "short", TokenUsage.unavailable()
+
+    context = create_execution_context(budget=_budget())
+
+    response, usage, error = call_root(
+        MissingUsageLLM(),  # type: ignore[arg-type]
+        messages,
+        model="model",
+        context=context,
+    )
+
+    assert response == "short"
+    assert usage.exact is False
+    assert error is None
+    assert context.stats.root_successes == 1
+    assert context.stats.root_usage_complete is False
+    assert context.stats.resolved_usage(0).as_dict()["kind"] == "partial"
+    expected = conservative_token_estimate(messages) + context.budget.root_output_tokens
+    assert context.ledger.snapshot().consumed.tokens == expected
+
+
+def test_root_partial_usage_preserves_known_counts_and_consumes_full_reservation() -> None:
+    messages = [{"role": "user", "content": "question"}]
+
+    class PartialUsageLLM:
+        def responses_create(self, *args, **kwargs):
+            return "short", TokenUsage(7, 0, 19)
+
+    context = create_execution_context(budget=_budget())
+
+    response, usage, error = call_root(
+        PartialUsageLLM(),  # type: ignore[arg-type]
+        messages,
+        model="model",
+        context=context,
+    )
+
+    assert response == "short" and error is None
+    assert usage == TokenUsage(7, 0, 19)
+    resolved = context.stats.resolved_usage(0).as_dict()
+    assert resolved["kind"] == "partial"
+    assert resolved["root"]["input_tokens"] == 7
+    assert resolved["root"]["output_tokens"] == 0
+    assert resolved["root"]["total_tokens"] == 19
+    expected = conservative_token_estimate(messages) + context.budget.root_output_tokens
+    assert context.ledger.snapshot().consumed.tokens == expected
+
+
+def test_root_exact_token_overrun_preserves_terminal_usage_and_success() -> None:
+    class OverBudgetLLM:
+        def responses_create(self, *args, **kwargs):
+            return "completed", TokenUsage(7, 5, 300, exact=True)
+
+    context = create_execution_context(budget=_budget(tokens=200, root_output_tokens=100))
+
+    response, usage, error = call_root(
+        OverBudgetLLM(),  # type: ignore[arg-type]
+        [{"role": "user", "content": "question"}],
+        model="model",
+        context=context,
+    )
+
+    assert response == ""
+    assert usage == TokenUsage(7, 5, 300, exact=True)
+    assert error is not None and error.type == "BudgetExhausted"
+    assert context.stats.root_requests == context.stats.root_successes == 1
+    resolved = context.stats.resolved_usage(0).as_dict()
+    assert resolved["kind"] == "resolved"
+    assert resolved["root"]["total_tokens"] == 300
+    assert resolved["root"]["complete"] is True
+    assert context.ledger.snapshot().reserved == BudgetRequest()
+
+
+def test_root_wall_overrun_preserves_exact_terminal_usage_and_success() -> None:
+    clock = Clock()
+    budget = _budget(wall_ms=1_000)
+    context = create_execution_context(budget=budget)
+    context.ledger = BudgetLedger(budget, clock=clock)
+
+    class SlowLLM:
+        def responses_create(self, *args, **kwargs):
+            clock.now += 1.1
+            return "completed", TokenUsage(2, 3, 17, exact=True)
+
+    response, usage, error = call_root(
+        SlowLLM(),  # type: ignore[arg-type]
+        [{"role": "user", "content": "question"}],
+        model="model",
+        context=context,
+    )
+
+    assert response == ""
+    assert usage == TokenUsage(2, 3, 17, exact=True)
+    assert error is not None and error.type == "BudgetExhausted"
+    assert context.stats.root_requests == context.stats.root_successes == 1
+    resolved = context.stats.resolved_usage(1_100).as_dict()
+    assert resolved["kind"] == "resolved"
+    assert resolved["root"]["total_tokens"] == 17
+    assert resolved["root"]["complete"] is True
+    assert context.ledger.snapshot().reserved == BudgetRequest()
+
+
+def test_root_malformed_output_preserves_usage_without_counting_success() -> None:
+    usage = TokenUsage(7, 3, 19, exact=True)
+
+    class MalformedOutputLLM:
+        def responses_create(self, *args, **kwargs):
+            raise LLMUsageFailure(usage, RuntimeError("missing root output"))
+
+    context = create_execution_context(budget=_budget())
+    response, reported_usage, error = call_root(
+        MalformedOutputLLM(),  # type: ignore[arg-type]
+        [{"role": "user", "content": "question"}],
+        model="model",
+        context=context,
+    )
+
+    assert response == "" and reported_usage == usage
+    assert error is not None and error.type == "RuntimeError"
+    assert error.message == "missing root output"
+    assert context.stats.root_requests == 1
+    assert context.stats.root_successes == 0
+    assert context.stats.root_total_tokens == 19
+    assert context.stats.root_usage_complete is True
+    assert context.ledger.snapshot().consumed.tokens == 19
+
+
+def test_root_malformed_output_preserves_partial_usage_and_falls_back_settlement() -> None:
+    messages = [{"role": "user", "content": "question"}]
+    usage = TokenUsage(7, 0, 19)
+
+    class MalformedOutputLLM:
+        def responses_create(self, *args, **kwargs):
+            raise LLMUsageFailure(usage, RuntimeError("missing root output"))
+
+    context = create_execution_context(budget=_budget())
+    response, reported_usage, error = call_root(
+        MalformedOutputLLM(),  # type: ignore[arg-type]
+        messages,
+        model="model",
+        context=context,
+    )
+
+    assert response == ""
+    assert reported_usage == usage
+    assert error is not None and error.type == "RuntimeError"
+    assert context.stats.root_requests == 1 and context.stats.root_successes == 0
+    resolved = context.stats.resolved_usage(0).as_dict()
+    assert resolved["kind"] == "partial"
+    assert resolved["root"]["input_tokens"] == 7
+    assert resolved["root"]["total_tokens"] == 19
+    expected = conservative_token_estimate(messages) + context.budget.root_output_tokens
+    assert context.ledger.snapshot().consumed.tokens == expected
+    assert context.ledger.snapshot().reserved == BudgetRequest()

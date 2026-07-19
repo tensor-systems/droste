@@ -12,9 +12,9 @@ Two classes, one per protocol:
   (``responses_create`` with ``return_usage``).
 - ``OpenAICompatSubcallClient`` implements ``SubcallClient`` (``llm_query`` /
   ``llm_batch`` / ``llm_batch_with_errors``) with bounded concurrency, a
-  bounded per-subcall output budget (default 2048 tokens), and call/token
-  reporting into the shared ``ExecutionContext``. Budget authorization belongs
-  to the capability broker; this transport records only work actually issued.
+  bounded per-subcall output budget (default 2048 tokens), and typed usage
+  results. The capability broker owns token stats and budget authorization;
+  this transport records only call attempts and successes directly.
 
 Config resolution: explicit constructor args win, then ``OPENAI_API_KEY`` /
 ``OPENAI_BASE_URL``, then the OpenAI default base URL. An empty api_key is
@@ -39,13 +39,26 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import Any
 
 from ..execution.budget import DEFAULT_SUBCALL_OUTPUT_TOKENS
 from ..execution.config import DEFAULT_SUBCALL_CONCURRENCY, validate_subcall_concurrency
 from ..execution.context import ExecutionContext
-from ..protocols.llm_client import TokenUsage, strip_cache_anchor_markers
-from ..protocols.subcall_client import SubcallClient
+from ..protocols.llm_client import (
+    LLMUsageFailure,
+    TokenUsage,
+    strip_cache_anchor_markers,
+    token_usage_from_mapping,
+)
+from ..protocols.subcall_client import (
+    SubcallBatchFailure,
+    SubcallBatchResult,
+    SubcallClient,
+    SubcallQueryResult,
+    fail_fast_subcall_batch,
+    structured_subcall_errors,
+)
 from .errors import http_error_excerpt
 from .useragent import USER_AGENT
 
@@ -53,6 +66,13 @@ DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MAX_PARALLEL = DEFAULT_SUBCALL_CONCURRENCY
 MAX_BATCH_PROMPTS = 50
 DEFAULT_TIMEOUT_SECONDS = 120.0
+
+
+@dataclass(frozen=True, slots=True)
+class _CompatBatchResult:
+    results: tuple[str, ...]
+    errors: tuple[Exception | None, ...]
+    usage: tuple[TokenUsage, ...]
 
 
 def resolve_base_url(base_url: str | None = None) -> str:
@@ -100,17 +120,10 @@ def _message_content(data: Any, *, label: str) -> str:
 
 def _usage_from(data: Any) -> TokenUsage:
     usage = data.get("usage") if isinstance(data, dict) else None
-    if not isinstance(usage, dict):
-        usage = {}
-    prompt = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
-    completion = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
-    total = usage.get("total_tokens")
-    if total is None:
-        total = prompt + completion
-    return TokenUsage(
-        prompt_tokens=prompt,
-        completion_tokens=completion,
-        total_tokens=int(total or 0),
+    return token_usage_from_mapping(
+        usage,
+        prompt_names=("prompt_tokens", "input_tokens"),
+        completion_names=("completion_tokens", "output_tokens"),
     )
 
 
@@ -166,8 +179,8 @@ class _ChatCompletionsTransport:
         ``stream_options.include_usage`` is requested; endpoints that honor it
         (OpenAI, vLLM, Ollama, Google's compat endpoint) report usage in the
         final chunk. If the endpoint sends none, usage is absent from the
-        assembled response — the caller's usage parser treats that as zeros
-        rather than failing the run.
+        assembled response; settlement then remains conservative and the
+        terminal trace records incomplete provider usage.
         """
         payload = dict(payload)
         payload["stream"] = True
@@ -383,14 +396,20 @@ class OpenAICompatClient:
             data = _complete_with_token_param_migration(
                 self._transport, payload, self._token_param, resolved_model
             )
-        result = _message_content(data, label="root llm")
+        usage = _usage_from(data)
+        try:
+            result = _message_content(data, label="root llm")
+        except Exception as exc:
+            if return_usage:
+                raise LLMUsageFailure(usage, exc) from None
+            raise
         choice = data["choices"][0]
         self.last_provider = str(data.get("provider") or "")
         self.last_response_id = str(data.get("id") or "")
         self.last_stop_reason = str(choice.get("finish_reason") or "")
         self.last_model = str(data.get("model") or resolved_model)
         if return_usage:
-            return result, _usage_from(data)
+            return result, usage
         return result
 
     def get_model_context_window(self, model: str) -> int | None:
@@ -400,11 +419,9 @@ class OpenAICompatClient:
 class OpenAICompatSubcallClient(SubcallClient):
     """``SubcallClient`` over an OpenAI-compatible chat-completions endpoint.
 
-    Reports issued calls under a lock and bounds batch concurrency. Unlike the
-    ModelRelay transport — where the server owns token accounting — subcall
-    token usage here is read from the response's standard usage block and
-    added to ``context.stats.total_tokens``, so
-    ``RLMResult.tokens_used`` covers root + subcall tokens.
+    Reports issued calls under a lock and bounds batch concurrency. Typed
+    provider usage is read from the response's standard usage block and
+    returned to the capability broker, which owns token stats and settlement.
 
     ``max_output_tokens`` bounds every subcall's output (cost control; default
     2048). Pass 0 to leave the endpoint's default unbounded — deliberate
@@ -457,15 +474,17 @@ class OpenAICompatSubcallClient(SubcallClient):
         with self._lock:
             self._context.record_subcall_attempts()
 
-    def _account_usage(self, usage: TokenUsage) -> None:
-        with self._lock:
-            self._context.record_subcall_usage(usage)
-
     def _increment_successful_calls(self) -> None:
         with self._lock:
             self._context.record_subcall_successes()
 
     def llm_query(self, prompt: str, context: str = "") -> str:
+        try:
+            return self.llm_query_with_usage(prompt, context).result
+        except LLMUsageFailure as exc:
+            raise exc.cause from exc
+
+    def llm_query_with_usage(self, prompt: str, context: str = "") -> SubcallQueryResult:
         if context:
             prompt = f"{context}\n\n{prompt}"
         self._increment_calls()
@@ -483,48 +502,67 @@ class OpenAICompatSubcallClient(SubcallClient):
         data = _complete_with_token_param_migration(
             self._transport, payload, self._token_param, self._model
         )
-        result = _message_content(data, label="llm_query")
-        self._account_usage(_usage_from(data))
+        usage = _usage_from(data)
+        try:
+            result = _message_content(data, label="llm_query")
+        except Exception as exc:
+            raise LLMUsageFailure(usage, exc) from None
         if result.strip():
             self._increment_successful_calls()
-        return result
+        return SubcallQueryResult(result, usage)
 
     def llm_batch(self, prompts: list[str], contexts: list[str] | None = None) -> list[str]:
-        results, errors = self._run_batch(prompts, contexts)
-        for err in errors:
-            if err is not None:
-                raise err
-        return results
+        try:
+            return list(self.llm_batch_with_usage(prompts, contexts).results)
+        except SubcallBatchFailure as exc:
+            raise exc.cause from exc
+
+    def llm_batch_with_usage(
+        self, prompts: list[str], contexts: list[str] | None = None
+    ) -> SubcallBatchResult:
+        value = self._run_batch(prompts, contexts)
+        return fail_fast_subcall_batch(value.results, value.errors, value.usage)
 
     def llm_batch_with_errors(
         self,
         prompts: list[str],
         contexts: list[str] | None = None,
     ) -> tuple[list[str], list[dict[str, object]]]:
-        results, errors = self._run_batch(prompts, contexts)
-        structured = [
-            {"index": idx, "error": str(err)} for idx, err in enumerate(errors) if err is not None
-        ]
-        return results, structured
+        try:
+            value = self.llm_batch_with_errors_and_usage(prompts, contexts)
+        except SubcallBatchFailure as exc:
+            raise exc.cause from exc
+        return list(value.results), [dict(item) for item in value.errors]
 
-    def _run_batch(
-        self, prompts: list[str], contexts: list[str] | None
-    ) -> tuple[list[str], list[Exception | None]]:
+    def llm_batch_with_errors_and_usage(
+        self,
+        prompts: list[str],
+        contexts: list[str] | None = None,
+    ) -> SubcallBatchResult:
+        value = self._run_batch(prompts, contexts)
+        return SubcallBatchResult(
+            value.results,
+            structured_subcall_errors(value.errors),
+            value.usage,
+        )
+
+    def _run_batch(self, prompts: list[str], contexts: list[str] | None) -> _CompatBatchResult:
         if contexts is None:
             contexts = [""] * len(prompts)
         if len(contexts) != len(prompts):
             raise ValueError("contexts length must match prompts length")
         results: list[str] = [""] * len(prompts)
         errors: list[Exception | None] = [None] * len(prompts)
+        usage = [TokenUsage.unavailable() for _ in prompts]
         if not prompts:
-            return results, errors
+            return _CompatBatchResult(tuple(results), tuple(errors), tuple(usage))
         if len(prompts) > MAX_BATCH_PROMPTS:
             raise ValueError(f"llm_batch prompt count exceeds max {MAX_BATCH_PROMPTS}")
 
-        def _run_one(idx: int, prompt: str, ctx: str) -> str:
+        def _run_one(idx: int, prompt: str, ctx: str) -> SubcallQueryResult:
             if idx > 0:
                 time.sleep(0.05)
-            return self.llm_query(prompt, ctx)
+            return self.llm_query_with_usage(prompt, ctx)
 
         with ThreadPoolExecutor(max_workers=self._max_parallel) as executor:
             futures = {
@@ -534,7 +572,12 @@ class OpenAICompatSubcallClient(SubcallClient):
             for future in as_completed(futures):
                 idx = futures[future]
                 try:
-                    results[idx] = future.result()
+                    value = future.result()
+                    results[idx] = value.result
+                    usage[idx] = value.usage
+                except LLMUsageFailure as exc:
+                    usage[idx] = exc.usage
+                    errors[idx] = exc.cause
                 except Exception as exc:
                     errors[idx] = exc
-        return results, errors
+        return _CompatBatchResult(tuple(results), tuple(errors), tuple(usage))

@@ -52,7 +52,7 @@ def _reverse_key_order(value: Any) -> Any:
 def _response(text: str) -> MockResponse:
     return MockResponse(
         text=text,
-        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
     )
 
 

@@ -22,7 +22,7 @@ def _ndjson(events: tuple[RunEvent, ...]) -> bytes:
     )
 
 
-def build_trace_v2_execution_ndjson() -> bytes:
+def build_trace_v3_execution_ndjson() -> bytes:
     """Build the deterministic code/output/error projection corpus."""
 
     started_at = datetime(2026, 7, 16, tzinfo=timezone.utc)

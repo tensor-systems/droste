@@ -26,11 +26,20 @@ import dataclasses
 import io
 from typing import Any, Callable
 
-from droste.protocols.llm_client import TokenUsage, strip_cache_anchor_markers
+from droste.protocols.llm_client import (
+    LLMUsageFailure,
+    TokenUsage,
+    strip_cache_anchor_markers,
+    token_usage_from_mapping,
+)
 
 # Bind the interpreter primitive once, away from call sites, so static scanners
 # don't confuse it with shell exec.
 _run_code = builtins.exec
+
+
+def _token_usage(value: Any) -> TokenUsage:
+    return token_usage_from_mapping(value)
 
 
 # --------------------------------------------------------------------------- #
@@ -183,14 +192,15 @@ class BridgedLLMClient:
         if self._reasoning_effort:
             body["reasoning_effort"] = self._reasoning_effort
         data = self._post("/responses", body)
-        text = _extract_text(data)
+        usage = _token_usage(data.get("usage") if isinstance(data, dict) else None)
+        try:
+            text = _extract_text(data)
+        except Exception as exc:
+            if return_usage:
+                raise LLMUsageFailure(usage, exc) from None
+            raise
         if return_usage:
-            usage = data.get("usage", {})
-            inp = int(usage.get("input_tokens", 0))
-            out = int(usage.get("output_tokens", 0))
-            return text, TokenUsage(
-                prompt_tokens=inp, completion_tokens=out, total_tokens=inp + out
-            )
+            return text, usage
         return text
 
     def get_model_context_window(self, model: str) -> int | None:

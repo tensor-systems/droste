@@ -30,7 +30,7 @@ from droste_runner.runner import RunnerEnvironment, describe_context
 
 
 def _usage() -> TokenUsage:
-    return TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+    return TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True)
 
 
 def _responses(*texts: str) -> list[MockResponse]:
@@ -306,7 +306,10 @@ def test_runner_complete_default_budget_allows_subcalls() -> None:
         def do_POST(self) -> None:  # noqa: N802 (http.server API)
             self.rfile.read(int(self.headers.get("Content-Length") or 0))
             if self.path == "/root":
-                body = {"result": root_reply, "usage": {"input_tokens": 1, "output_tokens": 1}}
+                body = {
+                    "result": root_reply,
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                }
             else:
                 body = {"result": "sub"}
             raw = jsonlib.dumps(body).encode("utf-8")
@@ -326,7 +329,7 @@ def test_runner_complete_default_budget_allows_subcalls() -> None:
     try:
         response = run(
             {
-                "protocol_version": 6,
+                "protocol_version": 7,
                 "model": "test-model",
                 "question": "q",
                 "budget": Budget().as_dict(),
@@ -378,7 +381,10 @@ def test_runner_zero_subcall_budget_is_honored() -> None:
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802 (http.server API)
             self.rfile.read(int(self.headers.get("Content-Length") or 0))
-            body = {"result": root_reply, "usage": {"input_tokens": 1, "output_tokens": 1}}
+            body = {
+                "result": root_reply,
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            }
             raw = jsonlib.dumps(body).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Length", str(len(raw)))
@@ -394,7 +400,7 @@ def test_runner_zero_subcall_budget_is_honored() -> None:
     try:
         response = run(
             {
-                "protocol_version": 6,
+                "protocol_version": 7,
                 "model": "test-model",
                 "question": "q",
                 "budget": Budget(subcalls=0).as_dict(),

@@ -117,13 +117,17 @@ from .prompts.pack import (
     resolve_prompt_pack,
 )
 from .protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
-from .protocols.llm_client import LLMClient, TokenUsage
+from .protocols.llm_client import LLMClient, LLMUsageFailure, TokenUsage
 from .protocols.subcall_capacity import SubcallInputCapacity
 from .protocols.subcall_client import (
+    SubcallBatchFailure,
+    SubcallBatchResult,
     SubcallClient,
     SubcallConcurrencyProvider,
     SubcallInputCapacityProvider,
     SubcallOutputTokenLimitProvider,
+    SubcallQueryResult,
+    SubcallUsageProvider,
 )
 from .providers import (
     PROVIDER_PROTOCOL_VERSION,
@@ -199,10 +203,15 @@ __all__ = [
     "EnvCapabilities",
     "ExecutionResult",
     "LLMClient",
+    "LLMUsageFailure",
     "TokenUsage",
     "SubcallClient",
+    "SubcallBatchFailure",
+    "SubcallBatchResult",
     "SubcallConcurrencyProvider",
     "SubcallInputCapacity",
+    "SubcallQueryResult",
+    "SubcallUsageProvider",
     "SubcallInputCapacityProvider",
     "SubcallOutputTokenLimitProvider",
     "SystemPromptBuilder",

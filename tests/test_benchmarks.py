@@ -558,7 +558,7 @@ def test_direct_late_failure_preserves_accounted_usage_and_cost(
 
     class LateFailureClient:
         def __init__(self, **kwargs: object) -> None:
-            self.total_usage = TokenUsage(120, 30, 150)
+            self.total_usage = TokenUsage(120, 30, 150, exact=True)
 
         def responses_create(self, *args: object, **kwargs: object) -> str:
             raise RuntimeError("response output was malformed")
@@ -640,7 +640,7 @@ def test_direct_oversized_request_is_classified_as_context_limit(
 
     class OversizedRequestClient:
         def __init__(self, **kwargs: object) -> None:
-            self.total_usage = TokenUsage(0, 0, 0)
+            self.total_usage = TokenUsage(0, 0, 0, exact=True)
 
         def responses_create(self, *args: object, **kwargs: object) -> str:
             raise RuntimeError(

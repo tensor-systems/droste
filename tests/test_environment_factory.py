@@ -195,7 +195,9 @@ def test_native_and_pyodide_deliver_the_same_ordered_terminal_event_lifecycle() 
                 [
                     MockResponse(
                         "```python\nanswer['content'] = 'done'\nanswer['ready'] = True\n```",
-                        TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                        TokenUsage(
+                            prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True
+                        ),
                     )
                 ]
             ),

@@ -17,6 +17,31 @@ class TokenUsage:
     total_tokens: int
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
+    exact: bool = False
+
+    def __post_init__(self) -> None:
+        for name in (
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "cache_read_tokens",
+            "cache_creation_tokens",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"token usage {name} must be a non-negative integer")
+        if not isinstance(self.exact, bool):
+            raise TypeError("token usage exact must be a bool")
+        if self.exact and self.total_tokens < self.prompt_tokens + self.completion_tokens:
+            raise ValueError("exact token usage total cannot be less than its parts")
+        if self.exact and self.cache_read_tokens + self.cache_creation_tokens > self.prompt_tokens:
+            raise ValueError("exact cache token breakdown cannot exceed prompt tokens")
+
+    @classmethod
+    def unavailable(cls) -> TokenUsage:
+        """Return the explicit fact that trustworthy provider usage was absent."""
+
+        return cls(0, 0, 0, exact=False)
 
 
 def strip_cache_anchor_markers(
@@ -27,6 +52,58 @@ def strip_cache_anchor_markers(
         {key: value for key, value in message.items() if key != CACHE_ANCHOR_MARKER}
         for message in messages
     ]
+
+
+class LLMUsageFailure(RuntimeError):
+    """An output/parsing failure paired with completed provider usage."""
+
+    def __init__(self, usage: TokenUsage, cause: Exception) -> None:
+        if not isinstance(usage, TokenUsage):
+            raise TypeError("LLM usage failure requires TokenUsage")
+        if not isinstance(cause, Exception):
+            raise TypeError("LLM usage failure cause must be an Exception")
+        super().__init__(str(cause))
+        self.usage = usage
+        self.cause = cause
+
+
+def token_usage_from_mapping(
+    value: Any,
+    *,
+    prompt_names: tuple[str, ...] = ("input_tokens",),
+    completion_names: tuple[str, ...] = ("output_tokens",),
+) -> TokenUsage:
+    """Preserve independently valid provider counters from one usage mapping.
+
+    A malformed or absent counter becomes zero only as a typed placeholder;
+    ``exact=False`` distinguishes that placeholder from a reported zero. Alias
+    groups preserve the first valid value in name order but remain inexact when
+    another present alias is malformed or disagrees.
+    """
+
+    if not isinstance(value, dict):
+        return TokenUsage.unavailable()
+
+    def counter(names: tuple[str, ...]) -> tuple[int, bool]:
+        present = [value[name] for name in names if name in value]
+        valid = [
+            item
+            for item in present
+            if isinstance(item, int) and not isinstance(item, bool) and item >= 0
+        ]
+        if not valid:
+            return 0, False
+        selected = valid[0]
+        complete = len(valid) == len(present) and all(item == selected for item in valid)
+        return selected, complete
+
+    prompt, prompt_complete = counter(prompt_names)
+    completion, completion_complete = counter(completion_names)
+    total, total_complete = counter(("total_tokens",))
+    exact = (
+        prompt_complete and completion_complete and total_complete and total >= prompt + completion
+    )
+    return TokenUsage(prompt, completion, total, exact=exact)
 
 
 def total_tokens_from_usage(usage: Any) -> int:

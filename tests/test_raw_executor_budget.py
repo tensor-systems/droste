@@ -6,6 +6,8 @@ silently incomplete data, unlike the native executor path."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from droste import RLMConfig, SandboxLimits, run_rlm
 from droste.capabilities import broker_subcalls
 from droste.execution import BudgetLedger
@@ -35,8 +37,20 @@ class _RawExecutorEnvironment:
     def globals(self):
         return self._globals
 
-    def sandbox_subcalls(self, subcalls: SubcallClient, ledger: BudgetLedger) -> SubcallClient:
-        return broker_subcalls(subcalls, ledger)
+    def sandbox_subcalls(
+        self,
+        subcalls: SubcallClient,
+        ledger: BudgetLedger,
+        *,
+        usage_callback: Callable[[TokenUsage], None],
+        settlement_callback: Callable[[bool], None],
+    ) -> SubcallClient:
+        return broker_subcalls(
+            subcalls,
+            ledger,
+            usage_callback=usage_callback,
+            settlement_callback=settlement_callback,
+        )
 
     def prompt_fragment(self) -> str:
         return ""
@@ -54,11 +68,11 @@ def test_oversized_output_raises_the_budget_error_end_to_end() -> None:
     # then completes within budget.
     oversized = MockResponse(
         text="""```python\nprint('x' * 200)\nanswer['ready'] = True\n```""",
-        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
     )
     repaired = MockResponse(
         text="""```python\nanswer['content'] = 'ok'\nanswer['ready'] = True\n```""",
-        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
     )
     events: list[dict] = []
     result = run_rlm(
@@ -78,7 +92,7 @@ def test_oversized_output_raises_the_budget_error_end_to_end() -> None:
 def test_oversized_output_retains_returned_stdout_count_when_attempt_is_retained() -> None:
     oversized = MockResponse(
         text="""```python\nprint('x' * 200)\nanswer['ready'] = True\n```""",
-        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
     )
     result = run_rlm(
         question="q",

@@ -274,7 +274,7 @@ def test_run_preserves_successful_result_when_environment_cleanup_fails() -> Non
         [
             MockResponse(
                 "```python\nanswer['content'] = 'kept'\nanswer['ready'] = True\n```",
-                TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             )
         ]
     )
@@ -301,7 +301,7 @@ def test_run_does_not_adopt_an_exception_from_its_callers_handler() -> None:
         [
             MockResponse(
                 "```python\nanswer['content'] = 'fallback kept'\nanswer['ready'] = True\n```",
-                TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             )
         ]
     )
@@ -355,7 +355,7 @@ def test_run_groups_execution_and_environment_cleanup_failures() -> None:
         [
             MockResponse(
                 "```python\nanswer['content'] = 'unused'\n```",
-                TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             )
         ]
     )

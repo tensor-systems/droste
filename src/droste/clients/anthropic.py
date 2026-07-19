@@ -9,8 +9,8 @@ testing shim), so first-class Claude support gets its own client pair speaking
   streaming for the CLI's --verbose view.
 - ``AnthropicSubcallClient`` implements ``SubcallClient`` with the same
   reporting semantics as ``OpenAICompatSubcallClient``: bounded batch
-  concurrency and subcall usage recorded in ``context.stats``. Authorization
-  belongs to the capability broker.
+  concurrency and typed per-request usage returned to the capability broker,
+  which owns stats accounting and authorization.
 
 API notes encoded here:
 - headers are ``x-api-key`` + ``anthropic-version`` (not Authorization);
@@ -39,6 +39,7 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import Any
 
 from ..execution.budget import DEFAULT_SUBCALL_OUTPUT_TOKENS
@@ -46,10 +47,18 @@ from ..execution.config import DEFAULT_SUBCALL_CONCURRENCY, validate_subcall_con
 from ..execution.context import ExecutionContext
 from ..protocols.llm_client import (
     CACHE_ANCHOR_MARKER,
+    LLMUsageFailure,
     TokenUsage,
     strip_cache_anchor_markers,
 )
-from ..protocols.subcall_client import SubcallClient
+from ..protocols.subcall_client import (
+    SubcallBatchFailure,
+    SubcallBatchResult,
+    SubcallClient,
+    SubcallQueryResult,
+    fail_fast_subcall_batch,
+    structured_subcall_errors,
+)
 from .errors import http_error_excerpt
 from .useragent import USER_AGENT
 
@@ -59,6 +68,14 @@ DEFAULT_ANTHROPIC_MAX_TOKENS = 4096
 DEFAULT_MAX_PARALLEL = DEFAULT_SUBCALL_CONCURRENCY
 MAX_BATCH_PROMPTS = 50
 DEFAULT_TIMEOUT_SECONDS = 120.0
+
+
+@dataclass(frozen=True, slots=True)
+class _AnthropicBatchResult:
+    results: tuple[str, ...]
+    errors: tuple[Exception | None, ...]
+    usage: tuple[TokenUsage, ...]
+
 
 #: Anthropic key prefix — the fact the CLI's provider detection keys off.
 ANTHROPIC_KEY_PREFIX = "sk-ant-"
@@ -186,18 +203,33 @@ def _text_from_content(data: Any, *, label: str) -> str:
 def _usage_from(data: Any) -> TokenUsage:
     usage = data.get("usage") if isinstance(data, dict) else None
     if not isinstance(usage, dict):
-        usage = {}
-    input_tokens = int(usage.get("input_tokens") or 0)
-    cache_read = int(usage.get("cache_read_input_tokens") or 0)
-    cache_creation = int(usage.get("cache_creation_input_tokens") or 0)
-    prompt = input_tokens + cache_read + cache_creation
-    completion = int(usage.get("output_tokens") or 0)
+        return TokenUsage.unavailable()
+
+    def count(name: str, *, optional: bool = False) -> tuple[int, bool]:
+        if optional and name not in usage:
+            return 0, True
+        value = usage.get(name)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value, True
+        return 0, False
+
+    ordinary_input, ordinary_complete = count("input_tokens")
+    cache_creation, cache_creation_complete = count("cache_creation_input_tokens", optional=True)
+    cache_read, cache_read_complete = count("cache_read_input_tokens", optional=True)
+    completion, completion_complete = count("output_tokens")
+    prompt = ordinary_input + cache_creation + cache_read
     return TokenUsage(
         prompt_tokens=prompt,
         completion_tokens=completion,
         total_tokens=prompt + completion,
         cache_read_tokens=cache_read,
         cache_creation_tokens=cache_creation,
+        exact=(
+            ordinary_complete
+            and cache_creation_complete
+            and cache_read_complete
+            and completion_complete
+        ),
     )
 
 
@@ -274,10 +306,8 @@ class _MessagesTransport:
         response_id = ""
         model = ""
         stop_reason = ""
-        input_tokens = 0
-        cache_read_input_tokens = 0
-        cache_creation_input_tokens = 0
-        output_tokens = 0
+        input_usage: dict[str, Any] | None = None
+        output_tokens: Any = None
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                 for raw_line in resp:
@@ -303,12 +333,13 @@ class _MessagesTransport:
                         message = event.get("message") or {}
                         response_id = str(message.get("id") or response_id)
                         model = str(message.get("model") or model)
-                        usage = message.get("usage") or {}
-                        input_tokens = int(usage.get("input_tokens") or 0)
-                        cache_read_input_tokens = int(usage.get("cache_read_input_tokens") or 0)
-                        cache_creation_input_tokens = int(
-                            usage.get("cache_creation_input_tokens") or 0
-                        )
+                        usage = message.get("usage")
+                        input_usage = dict(usage) if isinstance(usage, dict) else None
+                        if input_usage is not None:
+                            # Anthropic's message_start output count is only a
+                            # preliminary value. Terminal output usage belongs
+                            # exclusively to message_delta.
+                            input_usage.pop("output_tokens", None)
                     elif etype == "content_block_delta":
                         delta = event.get("delta") or {}
                         if delta.get("type") == "text_delta":
@@ -320,9 +351,9 @@ class _MessagesTransport:
                         delta = event.get("delta") or {}
                         if delta.get("stop_reason"):
                             stop_reason = str(delta["stop_reason"])
-                        usage = event.get("usage") or {}
-                        if usage.get("output_tokens") is not None:
-                            output_tokens = int(usage.get("output_tokens") or 0)
+                        usage = event.get("usage")
+                        if isinstance(usage, dict) and "output_tokens" in usage:
+                            output_tokens = usage["output_tokens"]
                     elif etype == "message_stop":
                         break
         except urllib.error.HTTPError as exc:
@@ -334,17 +365,15 @@ class _MessagesTransport:
             raise
         except Exception as exc:
             raise RuntimeError(f"{self._label} failed: {exc}") from exc
+        resolved_usage = dict(input_usage) if input_usage is not None else {}
+        if output_tokens is not None:
+            resolved_usage["output_tokens"] = output_tokens
         return {
             "id": response_id,
             "model": model,
             "content": [{"type": "text", "text": "".join(parts)}],
             "stop_reason": stop_reason or "end_turn",
-            "usage": {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cache_read_input_tokens": cache_read_input_tokens,
-                "cache_creation_input_tokens": cache_creation_input_tokens,
-            },
+            "usage": resolved_usage,
         }
 
 
@@ -424,12 +453,18 @@ class AnthropicClient:
             data = self._transport.stream(payload, self._on_delta)
         else:
             data = self._transport.complete(payload)
-        result = _text_from_content(data, label="root llm")
+        usage = _usage_from(data)
+        try:
+            result = _text_from_content(data, label="root llm")
+        except Exception as exc:
+            if return_usage:
+                raise LLMUsageFailure(usage, exc) from None
+            raise
         self.last_response_id = str(data.get("id") or "")
         self.last_stop_reason = str(data.get("stop_reason") or "")
         self.last_model = str(data.get("model") or resolved_model)
         if return_usage:
-            return result, _usage_from(data)
+            return result, usage
         return result
 
     def get_model_context_window(self, model: str) -> int | None:
@@ -439,9 +474,9 @@ class AnthropicClient:
 class AnthropicSubcallClient(SubcallClient):
     """``SubcallClient`` over Anthropic's native Messages API.
 
-    Reports issued calls under a lock, bounds batch concurrency, and records
-    subcall usage in ``context.stats``. Budget authorization belongs to the
-    capability broker.
+    Reports issued calls under a lock and bounds batch concurrency. Provider
+    usage is returned to the capability broker, which owns stats accounting
+    and budget authorization.
 
     ``max_output_tokens`` bounds every subcall's output (cost control;
     default 2048). The Messages API requires ``max_tokens``, so 0 is not a
@@ -491,15 +526,17 @@ class AnthropicSubcallClient(SubcallClient):
         with self._lock:
             self._context.record_subcall_attempts()
 
-    def _account_usage(self, usage: TokenUsage) -> None:
-        with self._lock:
-            self._context.record_subcall_usage(usage)
-
     def _increment_successful_calls(self) -> None:
         with self._lock:
             self._context.record_subcall_successes()
 
     def llm_query(self, prompt: str, context: str = "") -> str:
+        try:
+            return self.llm_query_with_usage(prompt, context).result
+        except LLMUsageFailure as exc:
+            raise exc.cause from exc
+
+    def llm_query_with_usage(self, prompt: str, context: str = "") -> SubcallQueryResult:
         if context:
             prompt = f"{context}\n\n{prompt}"
         self._increment_calls()
@@ -512,48 +549,67 @@ class AnthropicSubcallClient(SubcallClient):
             payload["temperature"] = self._temperature
         payload.update(self._extra_body)
         data = self._transport.complete(payload)
-        result = _text_from_content(data, label="llm_query")
-        self._account_usage(_usage_from(data))
+        usage = _usage_from(data)
+        try:
+            result = _text_from_content(data, label="llm_query")
+        except Exception as exc:
+            raise LLMUsageFailure(usage, exc) from None
         if result.strip():
             self._increment_successful_calls()
-        return result
+        return SubcallQueryResult(result, usage)
 
     def llm_batch(self, prompts: list[str], contexts: list[str] | None = None) -> list[str]:
-        results, errors = self._run_batch(prompts, contexts)
-        for err in errors:
-            if err is not None:
-                raise err
-        return results
+        try:
+            return list(self.llm_batch_with_usage(prompts, contexts).results)
+        except SubcallBatchFailure as exc:
+            raise exc.cause from exc
+
+    def llm_batch_with_usage(
+        self, prompts: list[str], contexts: list[str] | None = None
+    ) -> SubcallBatchResult:
+        value = self._run_batch(prompts, contexts)
+        return fail_fast_subcall_batch(value.results, value.errors, value.usage)
 
     def llm_batch_with_errors(
         self,
         prompts: list[str],
         contexts: list[str] | None = None,
     ) -> tuple[list[str], list[dict[str, object]]]:
-        results, errors = self._run_batch(prompts, contexts)
-        structured = [
-            {"index": idx, "error": str(err)} for idx, err in enumerate(errors) if err is not None
-        ]
-        return results, structured
+        try:
+            value = self.llm_batch_with_errors_and_usage(prompts, contexts)
+        except SubcallBatchFailure as exc:
+            raise exc.cause from exc
+        return list(value.results), [dict(item) for item in value.errors]
 
-    def _run_batch(
-        self, prompts: list[str], contexts: list[str] | None
-    ) -> tuple[list[str], list[Exception | None]]:
+    def llm_batch_with_errors_and_usage(
+        self,
+        prompts: list[str],
+        contexts: list[str] | None = None,
+    ) -> SubcallBatchResult:
+        value = self._run_batch(prompts, contexts)
+        return SubcallBatchResult(
+            value.results,
+            structured_subcall_errors(value.errors),
+            value.usage,
+        )
+
+    def _run_batch(self, prompts: list[str], contexts: list[str] | None) -> _AnthropicBatchResult:
         if contexts is None:
             contexts = [""] * len(prompts)
         if len(contexts) != len(prompts):
             raise ValueError("contexts length must match prompts length")
         results: list[str] = [""] * len(prompts)
         errors: list[Exception | None] = [None] * len(prompts)
+        usage = [TokenUsage.unavailable() for _ in prompts]
         if not prompts:
-            return results, errors
+            return _AnthropicBatchResult(tuple(results), tuple(errors), tuple(usage))
         if len(prompts) > MAX_BATCH_PROMPTS:
             raise ValueError(f"llm_batch prompt count exceeds max {MAX_BATCH_PROMPTS}")
 
-        def _run_one(idx: int, prompt: str, ctx: str) -> str:
+        def _run_one(idx: int, prompt: str, ctx: str) -> SubcallQueryResult:
             if idx > 0:
                 time.sleep(0.05)
-            return self.llm_query(prompt, ctx)
+            return self.llm_query_with_usage(prompt, ctx)
 
         with ThreadPoolExecutor(max_workers=self._max_parallel) as executor:
             futures = {
@@ -563,7 +619,12 @@ class AnthropicSubcallClient(SubcallClient):
             for future in as_completed(futures):
                 idx = futures[future]
                 try:
-                    results[idx] = future.result()
+                    value = future.result()
+                    results[idx] = value.result
+                    usage[idx] = value.usage
+                except LLMUsageFailure as exc:
+                    usage[idx] = exc.usage
+                    errors[idx] = exc.cause
                 except Exception as exc:
                     errors[idx] = exc
-        return results, errors
+        return _AnthropicBatchResult(tuple(results), tuple(errors), tuple(usage))

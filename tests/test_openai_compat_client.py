@@ -13,14 +13,73 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from droste import RLMConfig, run_rlm
+from droste import (
+    LLMUsageFailure,
+    RLMConfig,
+    SubcallBatchFailure,
+    SubcallQueryResult,
+    TokenUsage,
+    run_rlm,
+)
 from droste.clients.openai_compat import (
     OpenAICompatClient,
     OpenAICompatSubcallClient,
+    _usage_from,
 )
 from droste.execution.context import create_execution_context
 from droste.protocols.llm_client import CACHE_ANCHOR_MARKER
 from droste.testing import MockEnvironment
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({}, TokenUsage.unavailable()),
+        ({"usage": {}}, TokenUsage.unavailable()),
+        (
+            {"usage": {"prompt_tokens": 1, "completion_tokens": 2}},
+            TokenUsage(1, 2, 0),
+        ),
+        (
+            {"usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 2}},
+            TokenUsage(1, 2, 2),
+        ),
+        (
+            {"usage": {"prompt_tokens": False, "completion_tokens": 2, "total_tokens": 3}},
+            TokenUsage(0, 2, 3),
+        ),
+        (
+            {"usage": {"prompt_tokens": 1, "completion_tokens": "bad", "total_tokens": 9}},
+            TokenUsage(1, 0, 9),
+        ),
+        (
+            {
+                "usage": {
+                    "prompt_tokens": "bad",
+                    "input_tokens": 4,
+                    "completion_tokens": 2,
+                    "total_tokens": 6,
+                }
+            },
+            TokenUsage(4, 2, 6),
+        ),
+    ],
+)
+def test_usage_partial_or_malformed_preserves_independent_counts(
+    payload: object, expected: TokenUsage
+) -> None:
+    assert _usage_from(payload) == expected
+    assert _usage_from(payload).exact is False
+
+
+def test_usage_accepts_complete_zero_and_preserves_hidden_total() -> None:
+    zero = _usage_from({"usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}})
+    hidden = _usage_from(
+        {"usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 19}}
+    )
+
+    assert zero.exact is True and zero.total_tokens == 0
+    assert hidden.exact is True and hidden.total_tokens == 19
 
 
 class StubOpenAIServer:
@@ -233,15 +292,84 @@ def test_subcall_llm_query_counts_calls_and_tokens(stub_server):
     context = create_execution_context()
     client = _subcall_client(stub_server, context)
     assert client.output_token_limit == 2048
-    result = client.llm_query("summarize this", context="chunk text")
-    assert result == "echo: chunk text\n\nsummarize this"
+    result = client.llm_query_with_usage("summarize this", context="chunk text")
+    assert result.result == "echo: chunk text\n\nsummarize this"
+    assert result.usage.total_tokens == 10
     assert context.stats.calls_made == 1
     assert context.stats.successful_calls == 1
-    assert context.stats.total_tokens == 10
+    assert context.stats.total_tokens == 0
     payload = stub_server.requests[0]
     assert payload["model"] == "sub-model"
     assert payload["max_tokens"] == 2048  # bounded-output default (cost-control parity)
     assert "temperature" not in payload  # endpoint default unless configured
+
+
+def test_malformed_outputs_carry_exact_usage_for_root_and_subcall(monkeypatch) -> None:
+    payload = {
+        "choices": [{"message": {"content": 42}}],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 19},
+    }
+    root = OpenAICompatClient(model="root-model", api_key="k")
+    monkeypatch.setattr(root._transport, "complete", lambda request: payload)
+    with pytest.raises(LLMUsageFailure, match="non-text content") as root_failure:
+        root.responses_create(
+            [{"role": "user", "content": "q"}],
+            model="",
+            return_usage=True,
+        )
+    assert root_failure.value.usage == TokenUsage(7, 3, 19, exact=True)
+
+    context = create_execution_context()
+    subcall = OpenAICompatSubcallClient(model="sub-model", context=context, api_key="k")
+    monkeypatch.setattr(subcall._transport, "complete", lambda request: payload)
+    with pytest.raises(LLMUsageFailure, match="non-text content") as subcall_failure:
+        subcall.llm_query_with_usage("q")
+    assert subcall_failure.value.usage == TokenUsage(7, 3, 19, exact=True)
+    with pytest.raises(RuntimeError, match="non-text content"):
+        subcall.llm_query("q")
+
+
+def test_malformed_output_failure_carries_partial_known_usage(monkeypatch) -> None:
+    payload = {
+        "choices": [{"message": {"content": 42}}],
+        "usage": {"prompt_tokens": 7, "completion_tokens": "bad", "total_tokens": 19},
+    }
+    root = OpenAICompatClient(model="root-model", api_key="k")
+    monkeypatch.setattr(root._transport, "complete", lambda request: payload)
+
+    with pytest.raises(LLMUsageFailure) as failure:
+        root.responses_create(
+            [{"role": "user", "content": "q"}],
+            model="",
+            return_usage=True,
+        )
+
+    assert failure.value.usage == TokenUsage(7, 0, 19)
+
+
+def test_fanout_batch_preserves_usage_failure_and_original_cause(monkeypatch) -> None:
+    context = create_execution_context()
+    subcall = OpenAICompatSubcallClient(model="sub-model", context=context, api_key="k")
+
+    def query(prompt: str, context: str = "") -> SubcallQueryResult:
+        if prompt == "bad":
+            raise LLMUsageFailure(
+                TokenUsage(7, 3, 19, exact=True),
+                RuntimeError("malformed compat output"),
+            )
+        return SubcallQueryResult("ok", TokenUsage(2, 1, 5, exact=True))
+
+    monkeypatch.setattr(subcall, "llm_query_with_usage", query)
+    with pytest.raises(SubcallBatchFailure, match="malformed compat output") as failure:
+        subcall.llm_batch_with_usage(["ok", "bad"])
+    assert failure.value.result.usage == (
+        TokenUsage(2, 1, 5, exact=True),
+        TokenUsage(7, 3, 19, exact=True),
+    )
+    assert failure.value.result.errors == ({"index": 1, "error": "malformed compat output"},)
+    assert type(failure.value.cause) is RuntimeError
+    with pytest.raises(RuntimeError, match="malformed compat output"):
+        subcall.llm_batch(["ok", "bad"])
 
 
 def test_subcall_reports_deliberately_unbounded_output(stub_server):
@@ -271,10 +399,11 @@ def test_llm_batch_ordered_results_bounded_concurrency(stub_server):
     context = create_execution_context()
     client = _subcall_client(stub_server, context)
     prompts = [f"p{i}" for i in range(12)]
-    results = client.llm_batch(prompts)
-    assert results == [f"echo: p{i}" for i in range(12)]
+    result = client.llm_batch_with_usage(prompts)
+    assert list(result.results) == [f"echo: p{i}" for i in range(12)]
+    assert sum(item.total_tokens for item in result.usage) == 120
     assert context.stats.calls_made == 12
-    assert context.stats.total_tokens == 120
+    assert context.stats.total_tokens == 0
     assert stub_server.max_in_flight <= 5
 
 

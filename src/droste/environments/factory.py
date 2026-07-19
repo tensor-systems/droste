@@ -123,7 +123,10 @@ def create_environment(
         environment_type = select_environment(config.kind)
         if execution_context.budget != config.budget or execution_context.sandbox != config.sandbox:
             raise ValueError("environment config must match its execution context")
-        accounting = BrokerBudget(execution_context.ledger)
+        accounting = BrokerBudget(
+            execution_context.ledger,
+            on_inference_settlement=execution_context.record_subcall_settlement,
+        )
         return environment_type(
             context=context,
             registry=registry,
@@ -138,6 +141,7 @@ def create_environment(
             capability_observer=capability_observer,
             capability_attempt_observer=execution_context.observe_capability_attempt,
             capability_attempt_authority=accounting,
+            subcall_usage_callback=execution_context.record_subcall_usage,
         )
     except BaseException as exc:
         if registry is None:

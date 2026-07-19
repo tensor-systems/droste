@@ -22,11 +22,17 @@ from types import MappingProxyType
 from typing import Any, Protocol
 from uuid import uuid4
 
+from .protocols.llm_client import LLMUsageFailure, TokenUsage
 from .protocols.subcall_capacity import (
     SubcallInputCapacity,
     reported_subcall_input_capacity,
 )
-from .protocols.subcall_client import SubcallClient
+from .protocols.subcall_client import (
+    SubcallBatchFailure,
+    SubcallBatchResult,
+    SubcallClient,
+    SubcallQueryResult,
+)
 
 JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema"
 
@@ -1215,10 +1221,11 @@ class _CapabilityAttemptController:
                         or cumulative.subcalls < previous.subcalls
                     ):
                         raise ValueError("capability checkpoint cannot move backward")
-                    if cumulative.tokens > self.context.reservation.tokens:
-                        raise ValueError("capability checkpoint tokens exceed reservation")
-                    if cumulative.subcalls > self.context.reservation.subcalls:
-                        raise ValueError("capability checkpoint subcalls exceed reservation")
+                    if self.call.capability_id.kind is not CapabilityKind.INFERENCE:
+                        if cumulative.tokens > self.context.reservation.tokens:
+                            raise ValueError("capability checkpoint tokens exceed reservation")
+                        if cumulative.subcalls > self.context.reservation.subcalls:
+                            raise ValueError("capability checkpoint subcalls exceed reservation")
                     if cumulative == previous:
                         return previous
                 # Accounting may synchronously deliver its own facts. Never
@@ -1932,21 +1939,86 @@ def _reported_output_token_limit(subcalls: SubcallClient) -> int | None | object
     return _MISSING_OUTPUT_TOKEN_LIMIT
 
 
-def subcall_registrations(subcalls: SubcallClient) -> tuple[CapabilityRegistration, ...]:
+def subcall_registrations(
+    subcalls: SubcallClient,
+    *,
+    usage_callback: Callable[[TokenUsage], None] | None = None,
+) -> tuple[CapabilityRegistration, ...]:
     llm_batch_with_errors = getattr(subcalls, "llm_batch_with_errors", None)
     if not callable(llm_batch_with_errors):
         raise TypeError("SubcallClient must implement callable llm_batch_with_errors")
 
+    usage_method_names = (
+        "llm_query_with_usage",
+        "llm_batch_with_usage",
+        "llm_batch_with_errors_and_usage",
+    )
+    usage_methods = tuple(getattr(subcalls, name, None) for name in usage_method_names)
+    if any(callable(method) for method in usage_methods) and not all(
+        callable(method) for method in usage_methods
+    ):
+        raise TypeError("SubcallUsageProvider must implement every usage-aware operation")
+    usage_provider = all(callable(method) for method in usage_methods)
+    usage_callback_lock = RLock()
+
+    def record_and_checkpoint_usage(
+        context: CapabilityExecutionContext,
+        usage: tuple[TokenUsage, ...],
+    ) -> None:
+        if usage_callback is not None:
+            # One registration set is shared by every concurrent broker call.
+            # Serialize the centralized stats callback so read-modify-write
+            # counters cannot lose provider facts under parallel llm_query.
+            with usage_callback_lock:
+                for item in usage:
+                    usage_callback(item)
+        if usage and not all(item.exact for item in usage):
+            return
+        context.checkpoint(
+            tokens=sum(item.total_tokens for item in usage),
+            subcalls=len(usage),
+        )
+
     def llm_query(context: CapabilityExecutionContext, *args: Any, **kwargs: Any) -> Any:
         context.check()
+        if usage_provider:
+            try:
+                value = usage_methods[0](*args, **kwargs)
+            except LLMUsageFailure as exc:
+                record_and_checkpoint_usage(context, (exc.usage,))
+                raise exc.cause from exc
+            if not isinstance(value, SubcallQueryResult):
+                raise TypeError("llm_query_with_usage must return SubcallQueryResult")
+            record_and_checkpoint_usage(context, (value.usage,))
+            return value.result
         return subcalls.llm_query(*args, **kwargs)
 
     def llm_batch(context: CapabilityExecutionContext, *args: Any, **kwargs: Any) -> Any:
         context.check()
+        if usage_provider:
+            try:
+                value = usage_methods[1](*args, **kwargs)
+            except SubcallBatchFailure as exc:
+                record_and_checkpoint_usage(context, exc.result.usage)
+                raise exc.cause from exc
+            if not isinstance(value, SubcallBatchResult):
+                raise TypeError("llm_batch_with_usage must return SubcallBatchResult")
+            record_and_checkpoint_usage(context, value.usage)
+            return list(value.results)
         return subcalls.llm_batch(*args, **kwargs)
 
     def batch_with_errors(context: CapabilityExecutionContext, *args: Any, **kwargs: Any) -> Any:
         context.check()
+        if usage_provider:
+            try:
+                value = usage_methods[2](*args, **kwargs)
+            except SubcallBatchFailure as exc:
+                record_and_checkpoint_usage(context, exc.result.usage)
+                raise exc.cause from exc
+            if not isinstance(value, SubcallBatchResult):
+                raise TypeError("llm_batch_with_errors_and_usage must return SubcallBatchResult")
+            record_and_checkpoint_usage(context, value.usage)
+            return list(value.results), [dict(item) for item in value.errors]
         return llm_batch_with_errors(*args, **kwargs)
 
     return (
@@ -2002,6 +2074,8 @@ def broker_subcalls(
     subcalls: SubcallClient,
     ledger: Any,
     *,
+    usage_callback: Callable[[TokenUsage], None],
+    settlement_callback: Callable[[bool], None],
     attempt_observer: CapabilityAttemptObserver | None = None,
 ) -> BrokeredSubcallClient:
     """Create the mandatory standalone broker path for a custom environment."""
@@ -2011,10 +2085,10 @@ def broker_subcalls(
 
     if not isinstance(ledger, BudgetLedger):
         raise TypeError("broker_subcalls requires the run BudgetLedger")
-    accounting = BrokerBudget(ledger)
+    accounting = BrokerBudget(ledger, on_inference_settlement=settlement_callback)
     return BrokeredSubcallClient(
         CapabilityBroker(
-            subcall_registrations(subcalls),
+            subcall_registrations(subcalls, usage_callback=usage_callback),
             attempt_authority=accounting,
             attempt_observer=attempt_observer,
         ),

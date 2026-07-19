@@ -20,7 +20,7 @@ def _responses(n: int) -> list[MockResponse]:
     return [
         MockResponse(
             text=_DEBUG_CODE.format(n=i),
-            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
         )
         for i in range(n)
     ]
@@ -74,7 +74,8 @@ def test_extract_fallback_empty_response_surfaces_as_error():
     as an exception — must not be silently treated as a valid (empty) answer."""
     responses = [
         MockResponse(
-            text="   \n", usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+            text="   \n",
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
         )
     ]
     text, error = _extract(responses)
@@ -87,7 +88,7 @@ def test_extract_fallback_unable_sentinel_is_not_success():
     responses = [
         MockResponse(
             text="unable to determine from the work so far",
-            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
         )
     ]
     text, error = _extract(responses)
@@ -100,7 +101,7 @@ def test_extract_fallback_decorated_unable_sentinel_is_not_success():
     responses = [
         MockResponse(
             text='"Unable to determine from the work so far."',
-            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
         )
     ]
     text, error = _extract(responses)
@@ -113,7 +114,7 @@ def test_extract_fallback_markdown_unable_sentinel_is_not_success():
     responses = [
         MockResponse(
             text="**Unable to determine from the work so far.**",
-            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
         )
     ]
     text, error = _extract(responses)
@@ -126,7 +127,7 @@ def test_extract_fallback_unicode_ellipsis_unable_sentinel_is_not_success():
     responses = [
         MockResponse(
             text="Unable to determine from the work so far…",
-            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
         )
     ]
     text, error = _extract(responses)
@@ -141,7 +142,7 @@ def test_extract_fallback_success_has_no_error():
     responses = [
         MockResponse(
             text="A proper synthesized answer.",
-            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
         )
     ]
     text, error = _extract(responses)

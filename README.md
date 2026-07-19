@@ -236,7 +236,7 @@ flowchart LR
 
 **Runner inputs**
 
-- `protocol_version`: **required** on every request (currently `6`) — a
+- `protocol_version`: **required** on every request (currently `7`) — a
   missing or mismatched version gets a structured refusal, so hosts detect
   incompatibility instead of failing on a missing field.
 - `budget`: **required** complete six-field compute authorization object.

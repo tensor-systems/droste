@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from ..capabilities import (
@@ -13,6 +14,7 @@ from ..capabilities import (
 )
 from ..execution.budget import BudgetLedger
 from ..protocols.environment import ExecutionResult
+from ..protocols.llm_client import TokenUsage
 from ..protocols.subcall_client import SubcallClient
 from ..providers import ProviderRegistry
 from ..substrates.pyodide import RawExecutor
@@ -43,6 +45,7 @@ class PyodideEnvironment(RunnerEnvironment):
         capability_observer: CapabilityObserver | None = None,
         capability_attempt_observer: CapabilityAttemptObserver | None = None,
         capability_attempt_authority: CapabilityAttemptAuthority | None = None,
+        subcall_usage_callback: Callable[[TokenUsage], None] | None = None,
     ) -> None:
         if exec_timeout_ms != 0:
             raise ValueError("PyodideEnvironment cannot enforce exec_timeout_ms")
@@ -60,6 +63,7 @@ class PyodideEnvironment(RunnerEnvironment):
             capability_observer=capability_observer,
             capability_attempt_observer=capability_attempt_observer,
             capability_attempt_authority=capability_attempt_authority,
+            subcall_usage_callback=subcall_usage_callback,
         )
         self._executor = RawExecutor(
             db=None,

@@ -948,7 +948,7 @@ def test_rlm_answers_question_through_official_mcp_and_sqlite(tmp_path: Path) ->
                     "answer['ready'] = True\n"
                     "```"
                 ),
-                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
             )
         ]
     )
