@@ -11,7 +11,11 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.19.0)
+## Unreleased (post-0.19.1)
+
+No changes yet.
+
+## 0.19.1 (from 0.19.0)
 
 ### Direct ModelRelay usage preserves declared observation fidelity
 
