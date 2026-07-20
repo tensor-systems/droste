@@ -39,7 +39,11 @@ _run_code = builtins.exec
 
 
 def _token_usage(value: Any) -> TokenUsage:
-    return token_usage_from_mapping(value)
+    return token_usage_from_mapping(
+        value,
+        observation_basis_name="observation_basis",
+        require_reasoning=True,
+    )
 
 
 # --------------------------------------------------------------------------- #

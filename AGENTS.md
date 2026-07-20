@@ -202,6 +202,11 @@ evidence with that status rather than leaving the model to interpret prefixes.
   Provider adapters that do not receive an explicit basis may derive one from
   their validated wire contract. Batch error items without usage always carry
   the explicit unavailable basis.
+- ModelRelay's native `/responses` client and Pyodide direct-response bridge do
+  receive provenance-bearing usage. Keep both parsers synchronized: exact or
+  estimated usage requires the canonical `observation_basis` plus an explicit
+  `reasoning_tokens`; never let generic structural validation infer exactness
+  at either boundary.
 - Runner callback usage is stricter than generic provider usage: every `exact`
   or `estimated_categories` observation requires an explicit basis plus
   signed-int64 input, output, total, and reasoning counters. Missing/invalid reasoning or

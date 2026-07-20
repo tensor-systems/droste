@@ -13,7 +13,16 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.19.0)
 
-No changes yet.
+### Direct ModelRelay usage preserves declared observation fidelity
+
+Native ModelRelay clients and Pyodide host bridges now require each
+`/responses` usage mapping to include the canonical `observation_basis` and
+`reasoning_tokens` fields before accepting an `exact` or
+`estimated_categories` claim. Missing reasoning, a missing or unknown basis,
+or counters that do not satisfy the declared basis remain incomplete evidence
+and keep conservative settlement. Integrations must forward these fields from
+ModelRelay rather than reconstructing completeness from structurally valid
+input, output, and total counters.
 
 ## 0.19.0 (from 0.18.0)
 
