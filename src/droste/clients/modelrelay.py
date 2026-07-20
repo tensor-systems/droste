@@ -40,6 +40,8 @@ from ..execution.context import ExecutionContext
 from ..protocols.llm_client import (
     LLMUsageFailure,
     TokenUsage,
+    UsageObservationBasis,
+    aggregate_observation_basis,
     strip_cache_anchor_markers,
     token_usage_from_mapping,
 )
@@ -152,6 +154,33 @@ def _output_text(data: Any) -> str:
 def _usage_from(data: Any) -> TokenUsage:
     usage = data.get("usage") if isinstance(data, dict) else None
     return token_usage_from_mapping(usage)
+
+
+def _copy_usage(usage: TokenUsage) -> TokenUsage:
+    return TokenUsage(
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        total_tokens=usage.total_tokens,
+        cache_read_tokens=usage.cache_read_tokens,
+        cache_creation_tokens=usage.cache_creation_tokens,
+        reasoning_tokens=usage.reasoning_tokens,
+        observation_basis=usage.observation_basis,
+    )
+
+
+def _sum_usage(left: TokenUsage, right: TokenUsage) -> TokenUsage:
+    return TokenUsage(
+        prompt_tokens=left.prompt_tokens + right.prompt_tokens,
+        completion_tokens=left.completion_tokens + right.completion_tokens,
+        total_tokens=left.total_tokens + right.total_tokens,
+        cache_read_tokens=left.cache_read_tokens + right.cache_read_tokens,
+        cache_creation_tokens=left.cache_creation_tokens + right.cache_creation_tokens,
+        reasoning_tokens=left.reasoning_tokens + right.reasoning_tokens,
+        observation_basis=aggregate_observation_basis(
+            left.observation_basis,
+            right.observation_basis,
+        ),
+    )
 
 
 class _ResponsesTransport:
@@ -343,7 +372,8 @@ class ModelRelayClient:
         if not api_key:
             raise ValueError("api_key is required (run `droste login`)")
         self._accounting_lock = threading.Lock()
-        self._total_usage = TokenUsage(0, 0, 0, exact=True)
+        self._total_usage = TokenUsage(0, 0, 0, observation_basis=UsageObservationBasis.EXACT)
+        self._has_usage_observation = False
         self._root_requests_issued = 0
         self._transport = _ResponsesTransport(
             base_url=base_url,
@@ -373,7 +403,8 @@ class ModelRelayClient:
                 total_tokens=self._total_usage.total_tokens,
                 cache_read_tokens=self._total_usage.cache_read_tokens,
                 cache_creation_tokens=self._total_usage.cache_creation_tokens,
-                exact=self._total_usage.exact,
+                reasoning_tokens=self._total_usage.reasoning_tokens,
+                observation_basis=self._total_usage.observation_basis,
             )
 
     @property
@@ -388,16 +419,11 @@ class ModelRelayClient:
 
     def _account_usage(self, usage: TokenUsage) -> None:
         with self._accounting_lock:
-            self._total_usage = TokenUsage(
-                prompt_tokens=self._total_usage.prompt_tokens + usage.prompt_tokens,
-                completion_tokens=self._total_usage.completion_tokens + usage.completion_tokens,
-                total_tokens=self._total_usage.total_tokens + usage.total_tokens,
-                cache_read_tokens=self._total_usage.cache_read_tokens + usage.cache_read_tokens,
-                cache_creation_tokens=(
-                    self._total_usage.cache_creation_tokens + usage.cache_creation_tokens
-                ),
-                exact=self._total_usage.exact and usage.exact,
-            )
+            if self._has_usage_observation:
+                self._total_usage = _sum_usage(self._total_usage, usage)
+            else:
+                self._total_usage = _copy_usage(usage)
+                self._has_usage_observation = True
 
     def _payload(
         self,
@@ -503,7 +529,8 @@ class ModelRelaySubcallClient(SubcallClient):
         self._reasoning_effort = str(reasoning_effort or "")
         self._max_parallel = resolved_concurrency
         self._lock = threading.Lock()
-        self._total_usage = TokenUsage(0, 0, 0, exact=True)
+        self._total_usage = TokenUsage(0, 0, 0, observation_basis=UsageObservationBasis.EXACT)
+        self._has_usage_observation = False
 
     @property
     def output_token_limit(self) -> int | None:
@@ -524,7 +551,8 @@ class ModelRelaySubcallClient(SubcallClient):
                 total_tokens=self._total_usage.total_tokens,
                 cache_read_tokens=self._total_usage.cache_read_tokens,
                 cache_creation_tokens=self._total_usage.cache_creation_tokens,
-                exact=self._total_usage.exact,
+                reasoning_tokens=self._total_usage.reasoning_tokens,
+                observation_basis=self._total_usage.observation_basis,
             )
 
     def _increment_calls(self, count: int = 1) -> None:
@@ -535,16 +563,11 @@ class ModelRelaySubcallClient(SubcallClient):
 
     def _account_usage(self, usage: TokenUsage) -> None:
         with self._lock:
-            self._total_usage = TokenUsage(
-                prompt_tokens=self._total_usage.prompt_tokens + usage.prompt_tokens,
-                completion_tokens=self._total_usage.completion_tokens + usage.completion_tokens,
-                total_tokens=self._total_usage.total_tokens + usage.total_tokens,
-                cache_read_tokens=self._total_usage.cache_read_tokens + usage.cache_read_tokens,
-                cache_creation_tokens=(
-                    self._total_usage.cache_creation_tokens + usage.cache_creation_tokens
-                ),
-                exact=self._total_usage.exact and usage.exact,
-            )
+            if self._has_usage_observation:
+                self._total_usage = _sum_usage(self._total_usage, usage)
+            else:
+                self._total_usage = _copy_usage(usage)
+                self._has_usage_observation = True
 
     def _increment_successful_calls(self, count: int = 1) -> None:
         with self._lock:

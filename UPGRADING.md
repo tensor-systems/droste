@@ -11,9 +11,38 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.18.0)
+## Unreleased (post-0.19.0)
 
 No changes yet.
+
+## 0.19.0 (from 0.18.0)
+
+### Callback usage declares observation fidelity and reasoning tokens
+
+`TokenUsage` now has one authoritative `observation_basis` with the values
+`unavailable`, `incomplete`, `estimated_categories`, and `exact`. Its `exact`
+attribute remains readable for settlement code but is derived from that basis;
+the legacy `exact=` constructor input is normalized immediately and is not a
+second stored field. `reasoning_tokens` is also retained as a non-negative
+breakdown inside `completion_tokens`.
+
+Native and hosted runner callbacks must now include `observation_basis` and
+`reasoning_tokens` in every usage mapping that claims `exact` or
+`estimated_categories` observation. An exact callback requires signed-int64, non-negative `input_tokens`,
+`output_tokens`, `total_tokens`, and `reasoning_tokens`; the total must cover
+input plus output, cache classes must fit inside input, and reasoning must fit
+inside output. Missing or invalid fields, an unknown basis, or a structurally
+invalid exact claim remains incomplete and keeps the conservative reservation.
+Use `estimated_categories` only when the overall input, output, and total are
+known but one or more billing categories were estimated. Use `unavailable`
+only with zero counters.
+
+Reasoning totals remain available on internal `ExecutionStats` while its Trace
+v4 projection intentionally omits them. Provider adapters outside the runner callback boundary retain their existing
+validated inference behavior when their upstream API does not expose an
+observation-basis field. Runner protocol v8 and Trace ABI v4 are unchanged:
+the new fields are internal callback/accounting facts and are not added to
+durable trace usage.
 
 ## 0.18.0 (from 0.17.0)
 

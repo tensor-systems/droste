@@ -258,7 +258,8 @@ function startFailingRunnerCallback(
         const canonical =
           '{"error":"api_error","code":"PROVIDER_ERROR","message":"provider failed",' +
           '"usage":{"input_tokens":9223372036854775807,"output_tokens":0,' +
-          `"total_tokens":9223372036854775807},"padding":"${padding}",` +
+          '"total_tokens":9223372036854775807,"reasoning_tokens":0,' +
+          `"observation_basis":"exact"},"padding":"${padding}",` +
           (mode === "malformed" ? openSuffix : closedSuffix);
         const text = mode === "error-object"
           ? '{"error":{"type":"ProviderError","message":"provider failed"},' +
@@ -1350,7 +1351,7 @@ Deno.test({
         assertEquals(await authorization, "Bearer runner/secret");
         assert(
           lastLine.includes(
-            '"received_usage":{"input_tokens":9223372036854775807,"output_tokens":0,"total_tokens":9223372036854775807}',
+            '"received_usage":{"input_tokens":9223372036854775807,"output_tokens":0,"total_tokens":9223372036854775807,"reasoning_tokens":0,"observation_basis":"exact"}',
           ),
           `expected raw callback usage in adapter response, got:\n${lastLine}`,
         );

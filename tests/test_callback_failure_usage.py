@@ -26,6 +26,8 @@ _EXACT_USAGE = {
     "input_tokens": 2,
     "output_tokens": 3,
     "total_tokens": 5,
+    "reasoning_tokens": 0,
+    "observation_basis": "exact",
 }
 
 
@@ -127,7 +129,8 @@ def _raw_failure_with_input_lexeme(
     return (
         '{"error":"api_error","code":"PROVIDER_ERROR","message":"provider failed",'
         f'"usage":{{"input_tokens":{input_tokens},"output_tokens":{output_tokens},'
-        f'"total_tokens":{total_tokens}}}}}'
+        f'"total_tokens":{total_tokens},"reasoning_tokens":0,'
+        '"observation_basis":"exact"}}'
     ).encode("ascii")
 
 
@@ -135,7 +138,8 @@ def _raw_success_with_input_lexeme(input_tokens: str) -> bytes:
     return (
         '{"result":"answer","usage":{"input_tokens":'
         + input_tokens
-        + ',"output_tokens":3,"total_tokens":5}}'
+        + ',"output_tokens":3,"total_tokens":5,"reasoning_tokens":0,'
+        '"observation_basis":"exact"}}'
     ).encode("ascii")
 
 
@@ -144,14 +148,16 @@ def _raw_ndjson_completion_with_input_lexeme(input_tokens: str) -> bytes:
         '{"type":"update","delta":"answer"}\n'
         '{"type":"completion","usage":{"input_tokens":'
         + input_tokens
-        + ',"output_tokens":3,"total_tokens":5}}\n'
+        + ',"output_tokens":3,"total_tokens":5,"reasoning_tokens":0,'
+        '"observation_basis":"exact"}}\n'
     ).encode("ascii")
 
 
 def _raw_ndjson_error_with_input_lexeme(input_tokens: str) -> bytes:
     return (
         '{"type":"error","code":"UPSTREAM_FAILURE","message":"provider failed",'
-        '"usage":{"input_tokens":' + input_tokens + ',"output_tokens":3,"total_tokens":5}}\n'
+        '"usage":{"input_tokens":' + input_tokens + ',"output_tokens":3,"total_tokens":5,'
+        '"reasoning_tokens":0,"observation_basis":"exact"}}\n'
     ).encode("ascii")
 
 
@@ -180,7 +186,13 @@ def test_json_http_failure_preserves_exact_usage_and_plain_api_unwraps() -> None
 
 
 def test_json_http_failure_distinguishes_exact_zero_from_unavailable() -> None:
-    zero = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    zero = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "observation_basis": "exact",
+    }
     with _callback_server([(500, "application/json", _failure(zero))]) as endpoint:
         with pytest.raises(LLMUsageFailure) as raised:
             _subcall_client(endpoint).llm_query_with_usage("question")
@@ -205,7 +217,13 @@ def test_json_suffix_media_type_preserves_exact_usage(content_type: str) -> None
 
 def test_json_http_failure_preserves_exact_int64_usage_for_root_and_subcall() -> None:
     maximum = 2**63 - 1
-    usage = {"input_tokens": maximum, "output_tokens": 0, "total_tokens": maximum}
+    usage = {
+        "input_tokens": maximum,
+        "output_tokens": 0,
+        "total_tokens": maximum,
+        "reasoning_tokens": 0,
+        "observation_basis": "exact",
+    }
     response = (502, "application/json", _failure(usage))
     with _callback_server([response, response]) as endpoint:
         with pytest.raises(LLMUsageFailure) as raised_subcall:
@@ -419,7 +437,8 @@ def test_long_json_integer_outside_usage_rejects_unary_success_envelopes() -> No
     body = (
         b'{"result":"answer","attempt":'
         + b"9" * 5_000
-        + b',"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}'
+        + b',"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5,'
+        b'"reasoning_tokens":0,"observation_basis":"exact"}}'
     )
     response = (200, "application/json", body)
     with _callback_server([response, response]) as endpoint:
@@ -440,7 +459,8 @@ def test_long_json_integer_outside_usage_rejects_ndjson_completion() -> None:
     body = (
         b'{"type":"completion","content":"answer","attempt":'
         + b"9" * 5_000
-        + b',"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}\n'
+        + b',"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5,'
+        b'"reasoning_tokens":0,"observation_basis":"exact"}}\n'
     )
     with _callback_server([(200, "application/x-ndjson", body)]) as endpoint:
         with pytest.raises(LLMUsageFailure, match="recognized usage counter") as raised:
@@ -910,7 +930,13 @@ def test_noncanonical_transfer_encoding_keeps_usage_conservative(
             TokenUsage(2, 3, 0, exact=False),
         ),
         (
-            {"input_tokens": 2**63 - 1, "output_tokens": 0, "total_tokens": 2**63 - 1},
+            {
+                "input_tokens": 2**63 - 1,
+                "output_tokens": 0,
+                "total_tokens": 2**63 - 1,
+                "reasoning_tokens": 0,
+                "observation_basis": "exact",
+            },
             TokenUsage(2**63 - 1, 0, 2**63 - 1, exact=True),
         ),
         (

@@ -82,6 +82,61 @@ def test_usage_accepts_complete_zero_and_preserves_hidden_total() -> None:
     assert hidden.exact is True and hidden.total_tokens == 19
 
 
+def test_usage_preserves_nested_openai_reasoning_tokens() -> None:
+    usage = _usage_from(
+        {
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "completion_tokens_details": {"reasoning_tokens": 4},
+            }
+        }
+    )
+
+    assert usage == TokenUsage(10, 5, 15, reasoning_tokens=4, exact=True)
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        {"reasoning_tokens": "bad"},
+        {"reasoning_tokens": 6},
+        "bad",
+    ],
+)
+def test_usage_rejects_malformed_nested_openai_reasoning_tokens(details: object) -> None:
+    usage = _usage_from(
+        {
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "completion_tokens_details": details,
+            }
+        }
+    )
+
+    assert usage.exact is False
+
+
+def test_usage_rejects_conflicting_flat_and_nested_reasoning_tokens() -> None:
+    usage = _usage_from(
+        {
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "reasoning_tokens": 3,
+                "completion_tokens_details": {"reasoning_tokens": 4},
+            }
+        }
+    )
+
+    assert usage.reasoning_tokens == 3
+    assert usage.exact is False
+
+
 class StubOpenAIServer:
     """Minimal OpenAI-compatible /chat/completions stub.
 

@@ -195,10 +195,31 @@ evidence with that status rather than leaving the model to interpret prefixes.
   exception path so terminal usage completeness cannot remain incorrectly true.
   A controller-owned deadline terminal error also forces fallback independently
   of whether the ledger clock has crossed its reservation deadline yet.
-- `TokenUsage.exact` defaults false. Only validated provider adapters opt in;
-  ModelRelay/OpenAI/runner/Pyodide require explicit `total_tokens` so hidden
-  reasoning is retained, while Anthropic totals all documented input/cache
-  counters plus output. Batch error items always carry unavailable usage.
+- `TokenUsage.observation_basis` is the single completeness authority:
+  `unavailable`, `incomplete`, `estimated_categories`, or `exact`.
+  `TokenUsage.exact` is derived from it; the legacy `exact=` constructor input
+  is normalized immediately and must never be stored or folded independently.
+  Provider adapters that do not receive an explicit basis may derive one from
+  their validated wire contract. Batch error items without usage always carry
+  the explicit unavailable basis.
+- Runner callback usage is stricter than generic provider usage: every `exact`
+  or `estimated_categories` observation requires an explicit basis plus
+  signed-int64 input, output, total, and reasoning counters. Missing/invalid reasoning or
+  basis is incomplete and cannot refund a reservation. Keep the recognized
+  callback counter allowlists in `droste_runner/http_clients.py` and the Deno
+  relay broker synchronized so oversized reasoning counters survive as typed
+  partial evidence rather than invalidating an otherwise valid envelope.
+- `reasoning_tokens` is a non-negative breakdown inside `completion_tokens`.
+  Preserve it through internal usage copies, folds, and root/subcall
+  `ExecutionStats`, but do not add it to totals or Trace ABI v4 events.
+  Observation basis and reasoning usage are
+  internal callback/accounting facts, so Runner v8 and Trace v4 remain
+  unchanged.
+- OpenAI-compatible chat usage reports reasoning at
+  `completion_tokens_details.reasoning_tokens`, not as a top-level counter.
+  Flatten that provider-specific detail only at the adapter boundary, and make
+  malformed or conflicting flat/nested values incomplete rather than silently
+  recording an exact zero.
 - Inexact usage is partial evidence, not synonymous with unavailable usage.
   Preserve every independently validated non-negative input, output, total,
   and cache counter even when another field is absent, malformed, or

@@ -68,6 +68,7 @@ _RUNNER_USAGE_COUNTERS = frozenset(
         "cache_read_input_tokens",
         "cache_write_input_tokens",
         "cache_creation_input_tokens",
+        "reasoning_tokens",
     }
 )
 
@@ -91,7 +92,11 @@ def _token_usage(payload: object) -> TokenUsage:
             else value
             for key, value in payload.items()
         }
-    return token_usage_from_mapping(payload)
+    return token_usage_from_mapping(
+        payload,
+        observation_basis_name="observation_basis",
+        require_reasoning=True,
+    )
 
 
 def _has_json_media_type(exc: urllib.error.HTTPError) -> bool:

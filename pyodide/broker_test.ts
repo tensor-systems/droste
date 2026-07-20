@@ -359,7 +359,9 @@ Deno.test("canonical typed callback failures preserve raw counters and redact st
     "usage":{
       "input_tokens":9999999999999999999999999999999999999999,
       "output_tokens":3.0,
-      "total_tokens":9223372036854775807
+      "total_tokens":9223372036854775807,
+      "reasoning_tokens":8888888888888888888888888888888888888888,
+      "observation_basis":"incomplete"
     }
   }`;
   const safe = validateAndRedactRunnerCallbackFailureBody(raw, [
@@ -368,6 +370,9 @@ Deno.test("canonical typed callback failures preserve raw counters and redact st
   ]);
   assert(
     safe.includes("9999999999999999999999999999999999999999"),
+  );
+  assert(
+    safe.includes("8888888888888888888888888888888888888888"),
   );
   assert(safe.includes("9223372036854775807"));
   assert(safe.includes('"score":0.5'));

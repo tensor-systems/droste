@@ -99,6 +99,7 @@ class ExecutionContext:
         self.stats.root_input_tokens += usage.prompt_tokens
         self.stats.root_cache_read_tokens += usage.cache_read_tokens
         self.stats.root_cache_creation_tokens += usage.cache_creation_tokens
+        self.stats.root_reasoning_tokens += usage.reasoning_tokens
         self.stats.root_output_tokens += usage.completion_tokens
         self.stats.root_total_tokens += usage.total_tokens
         self.stats.total_tokens += usage.total_tokens
@@ -120,6 +121,7 @@ class ExecutionContext:
         self.stats.subcall_input_tokens += usage.prompt_tokens
         self.stats.subcall_cache_read_tokens += usage.cache_read_tokens
         self.stats.subcall_cache_creation_tokens += usage.cache_creation_tokens
+        self.stats.subcall_reasoning_tokens += usage.reasoning_tokens
         self.stats.subcall_output_tokens += usage.completion_tokens
         self.stats.subcall_total_tokens += usage.total_tokens
         self.stats.total_tokens += usage.total_tokens
@@ -151,17 +153,7 @@ class ExecutionContext:
     def _validate_usage(usage: TokenUsage) -> None:
         if not isinstance(usage, TokenUsage):
             raise TypeError("token usage must be TokenUsage")
-        values = (
-            usage.prompt_tokens,
-            usage.completion_tokens,
-            usage.total_tokens,
-            usage.cache_read_tokens,
-            usage.cache_creation_tokens,
-        )
-        if any(
-            isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in values
-        ):
-            raise ValueError("token usage must contain non-negative integers")
+        usage.__post_init__()
 
     def observe_capability(self, result: CapabilityResult) -> None:
         """Append the broker-owned content-free capability projection."""

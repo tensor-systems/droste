@@ -63,8 +63,24 @@ def test_http_subcall_usage_requires_explicit_provider_total() -> None:
     )
 
     missing = client._record_usage({"input_tokens": 2, "output_tokens": 3})
-    hidden = client._record_usage({"input_tokens": 2, "output_tokens": 3, "total_tokens": 19})
-    zero = client._record_usage({"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+    hidden = client._record_usage(
+        {
+            "input_tokens": 2,
+            "output_tokens": 3,
+            "total_tokens": 19,
+            "reasoning_tokens": 1,
+            "observation_basis": "exact",
+        }
+    )
+    zero = client._record_usage(
+        {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "reasoning_tokens": 0,
+            "observation_basis": "exact",
+        }
+    )
 
     assert missing.exact is False
     assert hidden.exact is True and hidden.total_tokens == 19
@@ -138,6 +154,8 @@ class _StubHandler(BaseHTTPRequestHandler):
                     "cache_write_input_tokens": 0,
                     "output_tokens": 1,
                     "total_tokens": 2,
+                    "reasoning_tokens": 0,
+                    "observation_basis": "exact",
                 },
             }
         else:
@@ -149,6 +167,8 @@ class _StubHandler(BaseHTTPRequestHandler):
                     "cache_write_input_tokens": 2,
                     "output_tokens": 3,
                     "total_tokens": 5,
+                    "reasoning_tokens": 1,
+                    "observation_basis": "exact",
                 },
             }
         raw = json.dumps(body).encode("utf-8")
@@ -533,7 +553,13 @@ class _CapturingHandler(BaseHTTPRequestHandler):
             type(self).root_payloads.append(json.loads(raw_body.decode("utf-8")))
             body = {
                 "result": ROOT_REPLY,
-                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                "usage": {
+                    "input_tokens": 1,
+                    "output_tokens": 1,
+                    "total_tokens": 2,
+                    "reasoning_tokens": 0,
+                    "observation_basis": "exact",
+                },
             }
         else:
             type(self).subcall_payloads.append(json.loads(raw_body.decode("utf-8")))
