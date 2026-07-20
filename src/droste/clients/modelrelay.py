@@ -153,7 +153,11 @@ def _output_text(data: Any) -> str:
 
 def _usage_from(data: Any) -> TokenUsage:
     usage = data.get("usage") if isinstance(data, dict) else None
-    return token_usage_from_mapping(usage)
+    return token_usage_from_mapping(
+        usage,
+        observation_basis_name="observation_basis",
+        require_reasoning=True,
+    )
 
 
 def _copy_usage(usage: TokenUsage) -> TokenUsage:

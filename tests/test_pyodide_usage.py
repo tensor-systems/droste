@@ -4,8 +4,28 @@ import json
 
 import pytest
 
-from droste import LLMUsageFailure, TokenUsage
+from droste import LLMUsageFailure, TokenUsage, UsageObservationBasis
 from droste.substrates.pyodide import BridgedLLMClient, _token_usage
+
+
+def _usage_mapping(
+    *,
+    input_tokens: object = 7,
+    output_tokens: object = 3,
+    total_tokens: object = 10,
+    reasoning_tokens: object = 0,
+    observation_basis: object = "exact",
+    **extra: object,
+) -> dict[str, object]:
+    usage = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "reasoning_tokens": reasoning_tokens,
+        "observation_basis": observation_basis,
+    }
+    usage.update(extra)
+    return usage
 
 
 @pytest.mark.parametrize(
@@ -27,8 +47,53 @@ def test_token_usage_partial_or_malformed_preserves_independent_counts(
     assert _token_usage(payload).exact is False
 
 
-def test_token_usage_complete_all_zero_usage_is_exact() -> None:
-    usage = _token_usage({"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+@pytest.mark.parametrize(
+    ("raw_basis", "expected_basis"),
+    [
+        ("exact", UsageObservationBasis.EXACT),
+        ("estimated_categories", UsageObservationBasis.ESTIMATED_CATEGORIES),
+        ("incomplete", UsageObservationBasis.INCOMPLETE),
+        (None, UsageObservationBasis.INCOMPLETE),
+        ("wrong", UsageObservationBasis.INCOMPLETE),
+    ],
+)
+def test_token_usage_requires_canonical_modelrelay_observation_basis(
+    raw_basis: object,
+    expected_basis: UsageObservationBasis,
+) -> None:
+    mapping = _usage_mapping(observation_basis=raw_basis)
+    if raw_basis is None:
+        mapping.pop("observation_basis")
+
+    usage = _token_usage(mapping)
+
+    assert usage.observation_basis is expected_basis
+    assert usage.reasoning_tokens == 0
+
+
+@pytest.mark.parametrize("reasoning_tokens", [None, "0"])
+def test_token_usage_complete_basis_requires_explicit_valid_reasoning(
+    reasoning_tokens: object,
+) -> None:
+    mapping = _usage_mapping(reasoning_tokens=reasoning_tokens)
+    if reasoning_tokens is None:
+        mapping.pop("reasoning_tokens")
+
+    usage = _token_usage(mapping)
+
+    assert usage.observation_basis is UsageObservationBasis.INCOMPLETE
+
+
+def test_token_usage_declared_exact_all_zero_categories_is_exact() -> None:
+    usage = _token_usage(
+        _usage_mapping(
+            input_tokens=0,
+            output_tokens=0,
+            total_tokens=0,
+            cache_read_input_tokens=0,
+            cache_write_input_tokens=0,
+        )
+    )
 
     assert usage.exact is True
     assert usage.total_tokens == 0
@@ -45,7 +110,12 @@ def test_bridged_client_preserves_provider_total_with_hidden_reasoning() -> None
                         "content": [{"type": "text", "text": "done"}],
                     }
                 ],
-                "usage": {"input_tokens": 2, "output_tokens": 3, "total_tokens": 19},
+                "usage": _usage_mapping(
+                    input_tokens=2,
+                    output_tokens=3,
+                    total_tokens=19,
+                    reasoning_tokens=3,
+                ),
             }
         )
 
@@ -58,6 +128,7 @@ def test_bridged_client_preserves_provider_total_with_hidden_reasoning() -> None
     assert text == "done"
     assert usage.exact is True
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (2, 3, 19)
+    assert usage.reasoning_tokens == 3
 
 
 def test_bridged_client_preserves_usage_when_output_parsing_fails() -> None:
@@ -65,7 +136,7 @@ def test_bridged_client_preserves_usage_when_output_parsing_fails() -> None:
         return json.dumps(
             {
                 "output": [None],
-                "usage": {"input_tokens": 7, "output_tokens": 3, "total_tokens": 19},
+                "usage": _usage_mapping(total_tokens=19),
             }
         )
 
@@ -76,7 +147,12 @@ def test_bridged_client_preserves_usage_when_output_parsing_fails() -> None:
             return_usage=True,
         )
 
-    assert raised.value.usage == TokenUsage(7, 3, 19, exact=True)
+    assert raised.value.usage == TokenUsage(
+        7,
+        3,
+        19,
+        observation_basis=UsageObservationBasis.EXACT,
+    )
     assert isinstance(raised.value.cause, AttributeError)
 
 
@@ -85,7 +161,7 @@ def test_bridged_client_preserves_partial_usage_when_output_parsing_fails() -> N
         return json.dumps(
             {
                 "output": [None],
-                "usage": {"input_tokens": 7, "output_tokens": "bad", "total_tokens": 19},
+                "usage": _usage_mapping(output_tokens="bad", total_tokens=19),
             }
         )
 
