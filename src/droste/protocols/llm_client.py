@@ -39,9 +39,12 @@ def aggregate_observation_basis(
 class TokenUsage:
     """Token usage from one LLM call with one canonical observation basis.
 
-    ``exact`` remains a derived property for settlement callers. The optional
-    constructor argument of the same name is normalized immediately and is not
-    stored, so older embedders do not create a second completeness authority.
+    ``core_complete`` and ``exact`` are derived from that basis. The former
+    means the provider's input, output, and total counters are complete enough
+    for compute-budget settlement; the latter means every billed category is
+    exact. The optional ``exact`` constructor argument is normalized
+    immediately and is not stored, so older embedders do not create a second
+    completeness authority.
     """
 
     prompt_tokens: int
@@ -125,6 +128,15 @@ class TokenUsage:
         """Whether all billed usage categories were observed exactly."""
 
         return self.observation_basis is UsageObservationBasis.EXACT
+
+    @property
+    def core_complete(self) -> bool:
+        """Whether input, output, and total are complete provider counters."""
+
+        return self.observation_basis in (
+            UsageObservationBasis.EXACT,
+            UsageObservationBasis.ESTIMATED_CATEGORIES,
+        )
 
     @classmethod
     def unavailable(cls) -> TokenUsage:

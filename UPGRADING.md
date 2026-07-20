@@ -11,9 +11,25 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.19.1)
+## Unreleased (post-0.19.2)
 
 No changes yet.
+
+## 0.19.2 (from 0.19.1)
+
+### Estimated categories settle complete provider token totals
+
+`TokenUsage.core_complete` is now the compute-budget settlement authority. It
+is true for both `exact` and `estimated_categories` observations because those
+bases guarantee complete provider input, output, and total counters. Root and
+subcall reservations therefore reconcile to the reported provider total for
+either basis instead of retaining the conservative requested-token maximum.
+
+`TokenUsage.exact` remains the distinct billed-category completeness signal.
+Embedders should continue to use it for evidence and reporting that requires
+every optional billing category to be exact; do not substitute
+`core_complete` there. Existing integrations that already forward the
+canonical `observation_basis` need no wire-protocol change.
 
 ## 0.19.1 (from 0.19.0)
 

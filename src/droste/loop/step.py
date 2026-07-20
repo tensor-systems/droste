@@ -556,7 +556,7 @@ def call_root(
                 outbound_messages[index][CACHE_ANCHOR_MARKER] = True
 
     def settle_completed_usage(usage: TokenUsage, *, success: bool) -> RLMError | None:
-        actual = BudgetRequest(tokens=usage.total_tokens if usage.exact else request.tokens)
+        actual = BudgetRequest(tokens=usage.total_tokens if usage.core_complete else request.tokens)
         accounting_error: RLMError | None = None
         try:
             if success:

@@ -69,6 +69,24 @@ def test_token_usage_exact_is_derived_from_observation_basis() -> None:
 
     assert exact.exact
     assert not estimated.exact
+    assert exact.core_complete
+    assert estimated.core_complete
+
+
+@pytest.mark.parametrize(
+    "basis",
+    [UsageObservationBasis.UNAVAILABLE, UsageObservationBasis.INCOMPLETE],
+)
+def test_token_usage_incomplete_core_counters_are_not_settlement_authority(
+    basis: UsageObservationBasis,
+) -> None:
+    usage = (
+        TokenUsage.unavailable()
+        if basis is UsageObservationBasis.UNAVAILABLE
+        else TokenUsage(7, 4, 11, observation_basis=basis)
+    )
+
+    assert not usage.core_complete
 
 
 def test_token_usage_legacy_exact_input_normalizes_without_second_authority() -> None:
