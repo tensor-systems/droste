@@ -1972,7 +1972,7 @@ def subcall_registrations(
             with usage_callback_lock:
                 for item in usage:
                     usage_callback(item)
-        if usage and not all(item.exact for item in usage):
+        if usage and not all(item.core_complete for item in usage):
             return
         context.checkpoint(
             tokens=sum(item.total_tokens for item in usage),

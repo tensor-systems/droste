@@ -12,7 +12,7 @@ from droste import (
 )
 from droste.execution.budget import conservative_token_estimate
 from droste.loop.step import call_root
-from droste.protocols.llm_client import LLMUsageFailure, TokenUsage
+from droste.protocols.llm_client import LLMUsageFailure, TokenUsage, UsageObservationBasis
 
 
 class Clock:
@@ -358,6 +358,33 @@ def test_root_success_settles_exact_usage_instead_of_visible_bytes() -> None:
     assert usage.total_tokens == 17
     assert error is None
     assert context.ledger.snapshot().consumed.tokens == 17
+
+
+def test_root_estimated_categories_settles_complete_core_total_but_keeps_partial_evidence() -> None:
+    class EstimatedCategoriesLLM:
+        def responses_create(self, *args, **kwargs):
+            return "completed", TokenUsage(
+                7,
+                4,
+                19,
+                reasoning_tokens=2,
+                observation_basis=UsageObservationBasis.ESTIMATED_CATEGORIES,
+            )
+
+    context = create_execution_context(budget=_budget())
+
+    response, usage, error = call_root(
+        EstimatedCategoriesLLM(),  # type: ignore[arg-type]
+        [{"role": "user", "content": "question"}],
+        model="model",
+        context=context,
+    )
+
+    assert response == "completed" and error is None
+    assert usage.core_complete is True and usage.exact is False
+    assert context.ledger.snapshot().consumed.tokens == 19
+    assert context.stats.root_usage_complete is False
+    assert context.stats.resolved_usage(0).as_dict()["kind"] == "partial"
 
 
 def test_root_success_without_trusted_usage_consumes_full_reservation() -> None:

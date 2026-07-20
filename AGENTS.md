@@ -97,6 +97,11 @@ evidence with that status rather than leaving the model to interpret prefixes.
   backward or exceed the reservation. Wall time remains broker-measured.
 - Keep `SandboxLimits` separate. Output capture and local execution timeout are
   REPL guardrails, not provider/model compute spend.
+- `TokenUsage.core_complete` is the sole token-settlement completeness check:
+  both `exact` and `estimated_categories` have complete provider input/output/total
+  counters. Keep `TokenUsage.exact` separate for billed-category completeness in
+  stats and evidence; do not withhold an actual-total refund solely because an
+  optional billed category was estimated.
 
 ## Trace ABI
 

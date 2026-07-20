@@ -24,7 +24,7 @@ from droste.execution.budget import (
     conservative_token_estimate,
 )
 from droste.execution.context import create_execution_context
-from droste.protocols.llm_client import LLMUsageFailure, TokenUsage
+from droste.protocols.llm_client import LLMUsageFailure, TokenUsage, UsageObservationBasis
 from droste.protocols.subcall_client import (
     SubcallBatchFailure,
     SubcallBatchResult,
@@ -252,6 +252,37 @@ def test_exact_batch_sums_item_usage_and_refunds_for_near_budget_reuse() -> None
     assert context.stats.subcall_cache_creation_tokens == 4
     assert context.ledger.snapshot().consumed.tokens == 33
     assert context.ledger.snapshot().consumed.subcalls == 3
+
+
+def test_mixed_exact_and_estimated_categories_batch_settles_complete_core_totals() -> None:
+    context = create_execution_context(budget=_budget(subcalls=2))
+    client = _ExactSubcalls(
+        [
+            TokenUsage(5, 2, 11, exact=True),
+            TokenUsage(
+                6,
+                3,
+                19,
+                reasoning_tokens=2,
+                observation_basis=UsageObservationBasis.ESTIMATED_CATEGORIES,
+            ),
+        ]
+    )
+
+    result = _broker(
+        context.ledger,
+        client,
+        usage_callback=context.record_subcall_usage,
+        settlement_callback=context.record_subcall_settlement,
+    ).call(LLM_BATCH_CAPABILITY.capability_id, ["one", "two"])
+
+    assert result.ok is True
+    assert context.ledger.snapshot().consumed.tokens == 30
+    assert context.stats.subcall_total_tokens == 30
+    assert context.stats.subcall_usage_complete is False
+    assert context.stats.resolved_usage(0).as_dict()["kind"] == "partial"
+    deltas = {metric.name: metric for metric in result.budget_delta}
+    assert deltas["token_settlement_exact"].value == 1
 
 
 def test_concurrent_exact_queries_serialize_usage_callback_and_reconcile_totals() -> None:
