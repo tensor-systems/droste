@@ -11,7 +11,11 @@ import pytest
 
 from droste.environments import RunnerEnvironment
 from droste.loop.trajectory import IterationRecord
-from droste.protocols.llm_client import CACHE_ANCHOR_MARKER, TokenUsage
+from droste.protocols.llm_client import (
+    CACHE_ANCHOR_MARKER,
+    TokenUsage,
+    UsageObservationBasis,
+)
 from droste_runner import runner
 from droste_runner.http_clients import HTTPSubcallClient, RootLLMClient, _token_usage
 from droste_runner.protocol import (
@@ -57,6 +61,111 @@ def test_runner_usage_parser_preserves_independently_valid_partial_counts() -> N
         {"input_tokens": False, "output_tokens": 3, "total_tokens": 19}
     ) == TokenUsage(0, 3, 19)
     assert _token_usage({"input_tokens": 7, "output_tokens": 3}) == TokenUsage(7, 3, 0)
+
+
+def test_runner_usage_parser_requires_explicit_exact_observation_contract() -> None:
+    usage = _token_usage(
+        {
+            "input_tokens": 7,
+            "output_tokens": 4,
+            "total_tokens": 11,
+            "reasoning_tokens": 3,
+            "observation_basis": "exact",
+        }
+    )
+
+    assert usage == TokenUsage(
+        7,
+        4,
+        11,
+        reasoning_tokens=3,
+        observation_basis=UsageObservationBasis.EXACT,
+    )
+    assert usage.exact
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"input_tokens": 7, "output_tokens": 4, "total_tokens": 11},
+        {
+            "input_tokens": 7,
+            "output_tokens": 4,
+            "total_tokens": 11,
+            "observation_basis": "exact",
+        },
+        {
+            "input_tokens": 7,
+            "output_tokens": 4,
+            "total_tokens": 11,
+            "reasoning_tokens": 3,
+            "observation_basis": "unknown",
+        },
+        {
+            "input_tokens": 7,
+            "output_tokens": 4,
+            "total_tokens": 11,
+            "reasoning_tokens": 5,
+            "observation_basis": "exact",
+        },
+    ],
+)
+def test_runner_usage_parser_never_infers_exact_observation(usage: dict[str, object]) -> None:
+    assert _token_usage(usage).observation_basis is UsageObservationBasis.INCOMPLETE
+
+
+def test_runner_usage_parser_preserves_estimated_categories() -> None:
+    usage = _token_usage(
+        {
+            "input_tokens": 7,
+            "output_tokens": 4,
+            "total_tokens": 11,
+            "reasoning_tokens": 3,
+            "observation_basis": "estimated_categories",
+        }
+    )
+
+    assert usage.reasoning_tokens == 3
+    assert usage.observation_basis is UsageObservationBasis.ESTIMATED_CATEGORIES
+    assert not usage.exact
+
+
+def test_runner_usage_parser_rejects_missing_estimated_reasoning_category() -> None:
+    usage = _token_usage(
+        {
+            "input_tokens": 7,
+            "output_tokens": 4,
+            "total_tokens": 11,
+            "observation_basis": "estimated_categories",
+        }
+    )
+
+    assert usage.observation_basis is UsageObservationBasis.INCOMPLETE
+
+
+def test_runner_usage_parser_rejects_impossible_estimated_category_subsets() -> None:
+    usage = _token_usage(
+        {
+            "input_tokens": 7,
+            "output_tokens": 4,
+            "total_tokens": 11,
+            "reasoning_tokens": 5,
+            "observation_basis": "estimated_categories",
+        }
+    )
+
+    assert usage.observation_basis is UsageObservationBasis.INCOMPLETE
+
+
+def test_runner_usage_parser_rejects_malformed_unavailable_counters() -> None:
+    usage = _token_usage(
+        {
+            "input_tokens": "bad",
+            "observation_basis": "unavailable",
+        }
+    )
+
+    assert usage.observation_basis is UsageObservationBasis.INCOMPLETE
 
 
 @pytest.mark.parametrize("out_of_range", [-(2**63) - 1, 2**63])
@@ -224,7 +333,13 @@ def test_root_client_collects_response_metadata_as_one_record(monkeypatch) -> No
             return json.dumps(
                 {
                     "result": "ok",
-                    "usage": {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5},
+                    "usage": {
+                        "input_tokens": 2,
+                        "output_tokens": 3,
+                        "total_tokens": 5,
+                        "reasoning_tokens": 1,
+                        "observation_basis": "exact",
+                    },
                     "provider": "provider-a",
                     "response_id": "response-1",
                     "stop_reason": "stop",
@@ -254,7 +369,13 @@ def test_root_client_collects_response_metadata_as_one_record(monkeypatch) -> No
     text, usage = client.responses_create([], model="", return_usage=True)
 
     assert text == "ok"
-    assert usage == TokenUsage(prompt_tokens=2, completion_tokens=3, total_tokens=5, exact=True)
+    assert usage == TokenUsage(
+        prompt_tokens=2,
+        completion_tokens=3,
+        total_tokens=5,
+        reasoning_tokens=1,
+        observation_basis=UsageObservationBasis.EXACT,
+    )
     assert client.response_metadata == RootResponseMetadata(
         provider="provider-a",
         response_id="response-1",

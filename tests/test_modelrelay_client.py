@@ -23,6 +23,7 @@ from droste import (
     LLMUsageFailure,
     SubcallBatchFailure,
     TokenUsage,
+    UsageObservationBasis,
 )
 from droste.capabilities import broker_subcalls
 from droste.clients.modelrelay import (
@@ -81,6 +82,7 @@ def test_usage_preserves_modelrelay_cache_classes_inside_inclusive_input() -> No
                 "cache_write_input_tokens": 3,
                 "output_tokens": 4,
                 "total_tokens": 24,
+                "reasoning_tokens": 2,
             }
         }
     )
@@ -91,7 +93,8 @@ def test_usage_preserves_modelrelay_cache_classes_inside_inclusive_input() -> No
         24,
         cache_read_tokens=7,
         cache_creation_tokens=3,
-        exact=True,
+        reasoning_tokens=2,
+        observation_basis=UsageObservationBasis.EXACT,
     )
 
 
@@ -444,8 +447,24 @@ def test_root_request_count_accumulates_across_calls(stub_native):
 
 def test_usage_accumulators_preserve_cache_breakdown_across_folds() -> None:
     usages = [
-        TokenUsage(11, 2, 13, cache_read_tokens=7, cache_creation_tokens=3),
-        TokenUsage(17, 5, 22, cache_read_tokens=13, cache_creation_tokens=2),
+        TokenUsage(
+            11,
+            2,
+            13,
+            cache_read_tokens=7,
+            cache_creation_tokens=3,
+            reasoning_tokens=1,
+            observation_basis=UsageObservationBasis.EXACT,
+        ),
+        TokenUsage(
+            17,
+            5,
+            22,
+            cache_read_tokens=13,
+            cache_creation_tokens=2,
+            reasoning_tokens=3,
+            observation_basis=UsageObservationBasis.ESTIMATED_CATEGORIES,
+        ),
     ]
     expected = TokenUsage(
         prompt_tokens=28,
@@ -453,6 +472,8 @@ def test_usage_accumulators_preserve_cache_breakdown_across_folds() -> None:
         total_tokens=35,
         cache_read_tokens=20,
         cache_creation_tokens=5,
+        reasoning_tokens=4,
+        observation_basis=UsageObservationBasis.ESTIMATED_CATEGORIES,
     )
 
     root = ModelRelayClient(model="root-model", api_key="mr_sk_t")
@@ -468,6 +489,21 @@ def test_usage_accumulators_preserve_cache_breakdown_across_folds() -> None:
     for usage in usages:
         subcall._account_usage(usage)
     assert subcall.total_usage == expected
+
+
+def test_usage_accumulators_preserve_first_unavailable_observation() -> None:
+    root = ModelRelayClient(model="root-model", api_key="mr_sk_t")
+    subcall = ModelRelaySubcallClient(
+        model="sub-model",
+        context=create_execution_context(),
+        api_key="mr_sk_t",
+    )
+
+    root._account_usage(TokenUsage.unavailable())
+    subcall._account_usage(TokenUsage.unavailable())
+
+    assert root.total_usage.observation_basis is UsageObservationBasis.UNAVAILABLE
+    assert subcall.total_usage.observation_basis is UsageObservationBasis.UNAVAILABLE
 
 
 def test_root_request_count_is_thread_safe(stub_native):

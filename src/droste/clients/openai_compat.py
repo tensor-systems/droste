@@ -120,10 +120,22 @@ def _message_content(data: Any, *, label: str) -> str:
 
 def _usage_from(data: Any) -> TokenUsage:
     usage = data.get("usage") if isinstance(data, dict) else None
+    reasoning_names = ("reasoning_tokens",)
+    if isinstance(usage, dict) and "completion_tokens_details" in usage:
+        usage = dict(usage)
+        details = usage.get("completion_tokens_details")
+        nested_name = "_droste_completion_reasoning_tokens"
+        if isinstance(details, dict):
+            if "reasoning_tokens" in details:
+                usage[nested_name] = details["reasoning_tokens"]
+        else:
+            usage[nested_name] = None
+        reasoning_names = ("reasoning_tokens", nested_name)
     return token_usage_from_mapping(
         usage,
         prompt_names=("prompt_tokens", "input_tokens"),
         completion_names=("completion_tokens", "output_tokens"),
+        reasoning_names=reasoning_names,
     )
 
 

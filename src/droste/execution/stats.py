@@ -97,6 +97,7 @@ class ExecutionStats:
     root_input_tokens: int = 0
     root_cache_read_tokens: int = 0
     root_cache_creation_tokens: int = 0
+    root_reasoning_tokens: int = 0
     root_output_tokens: int = 0
     root_total_tokens: int = 0
     root_requests: int = 0
@@ -105,6 +106,7 @@ class ExecutionStats:
     subcall_input_tokens: int = 0
     subcall_cache_read_tokens: int = 0
     subcall_cache_creation_tokens: int = 0
+    subcall_reasoning_tokens: int = 0
     subcall_output_tokens: int = 0
     subcall_total_tokens: int = 0
     subcall_usage_complete: bool = True

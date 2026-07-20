@@ -117,7 +117,7 @@ from .prompts.pack import (
     resolve_prompt_pack,
 )
 from .protocols.environment import EnvCapabilities, ExecutionResult, RLMEnvironment
-from .protocols.llm_client import LLMClient, LLMUsageFailure, TokenUsage
+from .protocols.llm_client import LLMClient, LLMUsageFailure, TokenUsage, UsageObservationBasis
 from .protocols.subcall_capacity import SubcallInputCapacity
 from .protocols.subcall_client import (
     SubcallBatchFailure,
@@ -205,6 +205,7 @@ __all__ = [
     "LLMClient",
     "LLMUsageFailure",
     "TokenUsage",
+    "UsageObservationBasis",
     "SubcallClient",
     "SubcallBatchFailure",
     "SubcallBatchResult",
