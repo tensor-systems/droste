@@ -11,9 +11,28 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.19.2)
+## Unreleased (post-0.20.0)
 
 No changes yet.
+
+## 0.20.0 (from 0.19.2)
+
+### Trace ABI v5 reports cumulative usage at model-call boundaries
+
+Trace ABI v5 adds the transient, content-free `usage_progress` event. Droste
+emits one after each root or subcall numeric usage observation settles. Its
+`boundary` identifies the role that just settled, while its root, subcall, and
+overall counters are cumulative snapshots. Consumers must replace their live
+display from each event rather than sum events, and must not interpolate
+between them. Partial observations retain reported counters and set the
+affected scope's `complete` value to false.
+
+Runner protocol v9 embeds Trace ABI v5. Runner hosts must send
+`"protocol_version": 9`, accept `startup` events reporting Trace ABI 5, and
+forward `usage_progress` through the existing event descriptor. Strict v4/v8
+consumers will reject the new contract by design. The packaged conformance
+helpers and fixtures are now named `trace_v5_execution_ndjson()`,
+`trace_v5_lifecycle_ndjson()`, and `runner_v9_refusal_ndjson()`.
 
 ## 0.19.2 (from 0.19.1)
 

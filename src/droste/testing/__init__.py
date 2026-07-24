@@ -16,22 +16,22 @@ from .provider import FAKE_RECORDS_MANIFEST, fake_records_provider
 from .subcall_client import MockSubcallClient
 
 
-def trace_v4_lifecycle_ndjson() -> bytes:
-    """Return the shared Trace ABI v4 lifecycle conformance corpus."""
+def trace_v5_lifecycle_ndjson() -> bytes:
+    """Return the shared Trace ABI v5 lifecycle conformance corpus."""
 
-    return files(__package__).joinpath("fixtures/trace-v4-lifecycle.ndjson").read_bytes()
-
-
-def trace_v4_execution_ndjson() -> bytes:
-    """Return the shared Trace ABI v4 response/code/output/error conformance corpus."""
-
-    return files(__package__).joinpath("fixtures/trace-v4-execution.ndjson").read_bytes()
+    return files(__package__).joinpath("fixtures/trace-v5-lifecycle.ndjson").read_bytes()
 
 
-def runner_v8_refusal_ndjson() -> bytes:
-    """Return the pre-admission runner-v8 refusal fixture."""
+def trace_v5_execution_ndjson() -> bytes:
+    """Return the shared Trace ABI v5 response/code/output/error conformance corpus."""
 
-    return files(__package__).joinpath("fixtures/runner-v8-refusal.ndjson").read_bytes()
+    return files(__package__).joinpath("fixtures/trace-v5-execution.ndjson").read_bytes()
+
+
+def runner_v9_refusal_ndjson() -> bytes:
+    """Return the pre-admission runner-v9 refusal fixture."""
+
+    return files(__package__).joinpath("fixtures/runner-v9-refusal.ndjson").read_bytes()
 
 
 __all__ = [
@@ -46,10 +46,10 @@ __all__ = [
     "Settlement",
     "ThreadOutcome",
     "fake_records_provider",
-    "runner_v8_refusal_ndjson",
+    "runner_v9_refusal_ndjson",
     "require_ordered_terminal_events",
     "require_unknown_completion",
     "run_while_blocked",
-    "trace_v4_execution_ndjson",
-    "trace_v4_lifecycle_ndjson",
+    "trace_v5_execution_ndjson",
+    "trace_v5_lifecycle_ndjson",
 ]

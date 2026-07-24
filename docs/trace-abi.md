@@ -1,4 +1,4 @@
-# Trace ABI v4
+# Trace ABI v5
 
 Droste exposes one append-only event stream and one policy-resolved terminal
 `RunRecord`. The engine creates values; it does not choose a database or write
@@ -15,7 +15,7 @@ does not change merely because a released fixture is added.
 
 ## Event envelope
 
-Every event is a strict v4 value with these fields:
+Every event is a strict v5 value with these fields:
 
 ```json
 {
@@ -23,7 +23,7 @@ Every event is a strict v4 value with these fields:
   "seq": 1,
   "timestamp": "2026-07-14T05:00:00Z",
   "type": "progress",
-  "version": 4,
+  "version": 5,
   "persistence_class": "transient",
   "parent_run_id": "optional-parent",
   "depth": 0,
@@ -49,14 +49,14 @@ The persistence class is exhaustive and fixed by event type:
 | --- | --- | --- |
 | `durable` | `usage`, `budget`, `policy`, `capability`, `done` | Always in the terminal record |
 | `configurable` | `iteration_start`, `llm_response`, `code`, `output`, `execution_error`, `subcall`, `repair`, `extract`, `result`, `replay` | Included only when named by `TraceRetentionPolicy.retain` |
-| `transient` | `startup`, `progress`, `reasoning_delta` | Live delivery only; never in the terminal record |
+| `transient` | `startup`, `progress`, `reasoning_delta`, `usage_progress` | Live delivery only; never in the terminal record |
 
 Retention governs the terminal record, not the live channel. `result` is
 always delivered once before `done`, even when it is not retained. `replay` is
 different: it is emitted only when the host explicitly selects replay
 retention.
 
-## Exhaustive v4 bodies
+## Exhaustive v5 bodies
 
 Every event body has a fixed top-level schema. Optional fields are marked `?`.
 Objects named below are JSON objects; all other types are primitive.
@@ -75,6 +75,7 @@ Objects named below are JSON objects; all other types are primitive.
 | `repair` | `phase: "start"|"completion"|"failure"`, `kind: "missing_code"|"execution_error"|"terminal"`, `iteration`, `error?` only on failure |
 | `extract` | `phase: "start"|"completion"|"failure"`, `iteration`, `extract_error?` only on failure |
 | `result`, `replay` | `result: object` |
+| `usage_progress` | `boundary: "root"|"subcall"`, `kind`, cumulative `root`, `subcall`, `unattributed`, and `total_tokens` |
 | `usage` | `kind: "resolved"|"partial"`, `root: object`, `subcall: object`, `unattributed: object`, `total_tokens: integer`, `wall_time_ms: integer` |
 | `budget` | `kind: "snapshot"|"mutation"`, `source: string`, plus the kind-specific fields below |
 | `policy` | `contract_enforced: boolean`, `outcome: string`, `violation_type: string|null` |
@@ -107,7 +108,17 @@ Legacy/custom-client tokens that cannot be assigned safely appear under
 `unattributed.total_tokens`; the three token scopes must sum to
 `total_tokens`. None of these facts is inferred by counting stream events.
 
-The budget body remains a discriminated event in Trace ABI v4. The terminal snapshot uses
+`usage_progress` is the live, transient projection of those same cumulative
+counters. The engine emits it only after a root or subcall provider boundary
+settles a numeric usage observation. `boundary` identifies the role that just
+settled; the two scope objects remain cumulative, so consumers replace their
+current display rather than summing events. Exact observations therefore move
+the display at model-call boundaries without estimating between them. A
+partial observation preserves its reported counters and marks the affected
+scope incomplete. The last progress snapshot reconciles with terminal `usage`
+unless a later boundary has no numeric usage observation.
+
+The budget body remains a discriminated event in Trace ABI v5. The terminal snapshot uses
 `kind="snapshot"`, `source="budget_ledger"`, and `configured`, `consumed`,
 and `remaining` objects. The ledger may emit any number of
 `kind="mutation"` values with `action` (`reserve`, `commit`, `refund`, or
@@ -197,14 +208,14 @@ and sdist. Python consumers load them through package resources:
 
 ```python
 from droste.testing import (
-    runner_v8_refusal_ndjson,
-    trace_v4_execution_ndjson,
-    trace_v4_lifecycle_ndjson,
+    runner_v9_refusal_ndjson,
+    trace_v5_execution_ndjson,
+    trace_v5_lifecycle_ndjson,
 )
 
-execution_lines = trace_v4_execution_ndjson().splitlines()
-event_lines = trace_v4_lifecycle_ndjson().splitlines()
-pre_admission_refusal = runner_v8_refusal_ndjson()
+execution_lines = trace_v5_execution_ndjson().splitlines()
+event_lines = trace_v5_lifecycle_ndjson().splitlines()
+pre_admission_refusal = runner_v9_refusal_ndjson()
 ```
 
 The compact execution NDJSON contains a two-iteration root trace plus a

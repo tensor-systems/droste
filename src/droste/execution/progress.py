@@ -45,6 +45,7 @@ EVENT_TYPES = frozenset(
         "extract",  # discriminated terminal extraction lifecycle facts
         "result",  # canonical unary-equivalent final result (without trajectory)
         "replay",  # configurable replay input/output details
+        "usage_progress",  # transient cumulative usage at a settled model boundary
         "usage",  # durable resolved token/call accounting
         "budget",  # durable configured/consumed budget facts
         "policy",  # durable policy decision facts
