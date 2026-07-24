@@ -202,7 +202,7 @@ def test_run_reports_actual_subcall_count(monkeypatch, capfd) -> None:
     try:
         response = run(
             {
-                "protocol_version": 8,
+                "protocol_version": 9,
                 "model": "test-model",
                 "question": "is it spam?",
                 "budget": _budget(subcalls=10, depth=2),
@@ -252,8 +252,8 @@ def test_run_reports_actual_subcall_count(monkeypatch, capfd) -> None:
         "concurrency": 2,
         "seed": 17,
     }
-    assert manifest["abis"]["runner"] == 8
-    assert manifest["abis"]["trace"] == 4
+    assert manifest["abis"]["runner"] == 9
+    assert manifest["abis"]["trace"] == 5
     assert manifest["engine"]["source_revision"] == "commit-a"
     assert manifest["id"].startswith("sha256:")
     assert "trajectory" not in response
@@ -295,7 +295,7 @@ def test_run_reports_actual_subcall_count(monkeypatch, capfd) -> None:
     ]
     assert len({event["call_id"] for event in live_subcalls}) == 1
     assert live_subcalls[1]["checkpoint"] == {"tokens": 5, "subcalls": 1}
-    assert all(event["iteration"] == 1 and event["version"] == 4 for event in live_subcalls)
+    assert all(event["iteration"] == 1 and event["version"] == 5 for event in live_subcalls)
     assert capability["outcome"]["capability_id"]["operation"] == "llm_query"
     assert "params" not in capability["outcome"]
     assert "result" not in capability["outcome"]
@@ -345,7 +345,7 @@ def test_runner_trajectory_adds_status_without_rewriting_result(monkeypatch) -> 
     monkeypatch.setattr(import_module("droste_runner.run"), "run_rlm", fake_run_rlm)
     response = runner_module.run(
         {
-            "protocol_version": 8,
+            "protocol_version": 9,
             "model": "test-model",
             "question": "q",
             "budget": _budget(),
@@ -584,7 +584,7 @@ def _run_with_capture(request_extra: dict[str, Any]) -> list[dict[str, Any]]:
     base = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         request: dict[str, Any] = {
-            "protocol_version": 8,
+            "protocol_version": 9,
             "model": "test-model",
             "question": "is it spam?",
             "budget": _budget(subcalls=10, depth=2),
@@ -649,7 +649,7 @@ def test_zero_subcall_output_budget_is_rejected() -> None:
         budget["subcall_output_tokens"] = 0
         run(
             {
-                "protocol_version": 8,
+                "protocol_version": 9,
                 "model": "m",
                 "question": "q",
                 "budget": budget,

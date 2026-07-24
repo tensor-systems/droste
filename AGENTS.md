@@ -105,7 +105,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
 
 ## Trace ABI
 
-- Every structured event is a strict Trace ABI v4 value. Stamp it exactly once
+- Every structured event is a strict Trace ABI v5 value. Stamp it exactly once
   through `ExecutionContext`; do not emit raw or partially enveloped event
   dictionaries at host boundaries.
 - Treat every envelope/body, classification, and ordering change as an ABI
@@ -134,6 +134,13 @@ evidence with that status rather than leaving the model to interpret prefixes.
   participate in dispatch or authorization.
 - Serialize trace append and live callback delivery per execution context so
   concurrent emitters observe the same monotonic order that is recorded.
+- `usage_progress` is a transient cumulative snapshot emitted only after a
+  root or subcall numeric usage observation settles. Update usage counters and
+  append that boundary event under the same execution-context emission lock so
+  concurrent subcalls cannot expose a regressing total. Every request, success,
+  completeness, and token counter read by that projection uses the same lock.
+  Do not emit it from usage-unavailable markers or infer intermediate token
+  counts.
 - Runner refusals happen before a run is admitted and therefore are not trace
   events. Keep their packaged fixture beside the event corpus, but require the
   relay filter to reject it rather than adding a second event vocabulary.
@@ -171,7 +178,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - A strict published event vocabulary/body change requires a Trace ABI bump and,
   when embedded in runner output, an atomic runner-protocol bump. Do not expand
   an old strict version in place or add a compatibility decoder in the engine.
-- Trace ABI v4 usage is `resolved` only when both root and subcall scopes have
+- Trace ABI v5 usage is `resolved` only when both root and subcall scopes have
   complete provider usage. Missing or malformed usage preserves any known
   counts, marks that scope `complete=false`, and makes terminal usage
   `kind="partial"`; never report conservative reservations as provider usage.
@@ -221,10 +228,10 @@ evidence with that status rather than leaving the model to interpret prefixes.
   partial evidence rather than invalidating an otherwise valid envelope.
 - `reasoning_tokens` is a non-negative breakdown inside `completion_tokens`.
   Preserve it through internal usage copies, folds, and root/subcall
-  `ExecutionStats`, but do not add it to totals or Trace ABI v4 events.
+  `ExecutionStats`, but do not add it to totals or Trace ABI v5 events.
   Observation basis and reasoning usage are
-  internal callback/accounting facts, so Runner v8 and Trace v4 remain
-  unchanged.
+  internal callback/accounting facts; do not add them to the public usage
+  projections.
 - OpenAI-compatible chat usage reports reasoning at
   `completion_tokens_details.reasoning_tokens`, not as a top-level counter.
   Flatten that provider-specific detail only at the adapter boundary, and make
@@ -254,7 +261,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
   partial and settle conservatively rather than falling back to the start
   estimate.
 - `ExecutionStats` folds those same cache classes separately for root and
-  subcall scopes. Trace ABI v4 exposes them in every durable usage breakdown;
+  subcall scopes. Trace ABI v5 exposes them in every durable usage breakdown;
   complete scopes require the disjoint cache classes to fit inside inclusive
   input tokens, while partial scopes preserve independently validated counts.
   ModelRelay names the classes `cache_read_input_tokens` and
@@ -380,7 +387,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
   They are assertions that the Deno/WASM host supplies those boundaries, not
   Python-side enforcement. Never weaken them or silently accept a native
   signal timeout for Pyodide.
-- Every request MUST carry `"protocol_version": 8` and one complete `budget`
+- Every request MUST carry `"protocol_version": 9` and one complete `budget`
   object. Missing/mismatched versions or incomplete budgets fail before work.
   See docs/architecture.md, "The runner protocol".
 - Version refusal precedes operation resolution and carries `operation: null`.

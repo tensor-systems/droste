@@ -110,6 +110,7 @@ def test_run_rlm_event_stream_through_attached_sink() -> None:
         "progress",
         "budget",
         "budget",
+        "usage_progress",
         "budget",
         "budget",
         "budget",
@@ -135,6 +136,11 @@ def test_run_rlm_event_stream_through_attached_sink() -> None:
     assert startup["scaffold_manifest_version"] == 2
     assert output["answer_ready"] is True
     assert output["answer_content_chars"] == len("ok")
+    usage_progress = next(e for e in events if e["type"] == "usage_progress")
+    assert usage_progress["boundary"] == "root"
+    assert usage_progress["total_tokens"] == 2
+    assert usage_progress["root"]["input_tokens"] == 1
+    assert usage_progress["root"]["output_tokens"] == 1
 
 
 def test_render_verbose_projects_the_trace_view() -> None:

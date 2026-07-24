@@ -80,9 +80,9 @@ jobs:
           staging="droste-relay-$GITHUB_REF_NAME"
           mkdir -p "$staging/conformance" relay-dist
           cp src/droste/substrates/_relay/*.ts pyodide/README.md "$staging/"
-          cp src/droste/testing/fixtures/trace-v4-execution.ndjson \
-            src/droste/testing/fixtures/trace-v4-lifecycle.ndjson \
-            src/droste/testing/fixtures/runner-v8-refusal.ndjson \
+          cp src/droste/testing/fixtures/trace-v5-execution.ndjson \
+            src/droste/testing/fixtures/trace-v5-lifecycle.ndjson \
+            src/droste/testing/fixtures/runner-v9-refusal.ndjson \
             "$staging/conformance/"
           printf '%s %s\n' "$GITHUB_REF_NAME" "$GITHUB_SHA" > "$staging/DROSTE_VERSION"
           tar czf "relay-dist/$staging.tar.gz" "$staging"

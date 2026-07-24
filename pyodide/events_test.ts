@@ -58,6 +58,32 @@ const BODIES: Record<string, Record<string, unknown>> = {
     total_tokens: 0,
     wall_time_ms: 0,
   },
+  usage_progress: {
+    boundary: "root",
+    kind: "resolved",
+    root: {
+      input_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      requests: 0,
+      successes: 0,
+      complete: true,
+    },
+    subcall: {
+      input_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      requests: 0,
+      successes: 0,
+      complete: true,
+    },
+    unattributed: { total_tokens: 0 },
+    total_tokens: 0,
+  },
   budget: {
     kind: "snapshot",
     source: "test",
@@ -131,7 +157,7 @@ function wire(
     run_id: "run-1",
     seq: 1,
     timestamp: "2026-07-14T00:00:00Z",
-    version: 4,
+    version: 5,
     persistence_class: persistence ?? PERSISTENCE_BY_TYPE[type],
     depth: 0,
     ...body,
@@ -299,7 +325,7 @@ Deno.test("successful output beginning ERROR remains an output event", () => {
 
 Deno.test("Python and relay accept the same execution golden NDJSON", async () => {
   const fixture = new URL(
-    "../src/droste/testing/fixtures/trace-v4-execution.ndjson",
+    "../src/droste/testing/fixtures/trace-v5-execution.ndjson",
     import.meta.url,
   );
   const lines = (await Deno.readTextFile(fixture)).trim().split("\n");
@@ -343,11 +369,11 @@ Deno.test("Python and relay accept the same execution golden NDJSON", async () =
 
 Deno.test("Python and relay accept the same lifecycle golden NDJSON", async () => {
   const fixture = new URL(
-    "../src/droste/testing/fixtures/trace-v4-lifecycle.ndjson",
+    "../src/droste/testing/fixtures/trace-v5-lifecycle.ndjson",
     import.meta.url,
   );
   const lines = (await Deno.readTextFile(fixture)).trim().split("\n");
-  assertEquals(lines.length, 58);
+  assertEquals(lines.length, 67);
   assert(lines.every(isRlmEvent));
 
   const runs = new Map<string, Record<string, unknown>[]>();
@@ -499,13 +525,13 @@ Deno.test("Python and relay accept the same lifecycle golden NDJSON", async () =
 
 Deno.test("runner refusal fixture remains outside the event stream", async () => {
   const fixture = new URL(
-    "../src/droste/testing/fixtures/runner-v8-refusal.ndjson",
+    "../src/droste/testing/fixtures/runner-v9-refusal.ndjson",
     import.meta.url,
   );
   const bytes = await Deno.readTextFile(fixture);
   const refusal = JSON.parse(bytes) as Record<string, unknown>;
   assertEquals(refusal.status, "refusal");
-  assertEquals(refusal.protocol_version, 8);
+  assertEquals(refusal.protocol_version, 9);
   assertEquals(refusal.run_id, null);
   assertEquals(refusal.run_record, null);
   assertEquals(
@@ -537,6 +563,7 @@ Deno.test("vocabulary matches the engine's emitters", () => {
       "startup",
       "subcall",
       "usage",
+      "usage_progress",
     ].sort(),
   );
 });

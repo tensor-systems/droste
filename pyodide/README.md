@@ -243,7 +243,7 @@ The process has three independent output lanes:
 | Descriptor | Contract |
 |------------|----------|
 | fd1 | Exactly one unary response JSON line. Adapter-owned responses use its HostResponse schema; pre-adapter event-channel failures use the relay-level error above. |
-| configured event descriptor (fd3 by convention) | Canonical Trace ABI v4 NDJSON only. |
+| configured event descriptor (fd3 by convention) | Canonical Trace ABI v5 NDJSON only. |
 | fd2 | Diagnostics only; never parse or promote these bytes as events. |
 
 Drain fd2 and the event descriptor concurrently. A hard cancellation or
@@ -466,7 +466,7 @@ Roughly three tiers of coverage:
 - **Extract-fallback failure rate is unknown.** When `max_iterations` is
   exhausted without `answer["ready"]`, one more LLM call tries to synthesize a
   best-effort answer; a failure there now surfaces as a structured
-  `extract_error` (result field + the Trace ABI v4 `extract` failure event) instead of
+  `extract_error` (result field + the Trace ABI v5 `extract` failure event) instead of
   silently falling back to raw loop output, but there's no data yet on how
   often that call actually fails or why. No retry has been added — that's a
   decision for once real failure data exists, not before.

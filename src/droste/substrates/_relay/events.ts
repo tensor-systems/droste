@@ -20,6 +20,7 @@ export const RLM_EVENT_TYPES = new Set<string>([
   "extract", // discriminated extract start/completion/failure
   "result", // canonical unary-equivalent final result
   "replay", // configurable replay details
+  "usage_progress", // cumulative usage at a settled root or subcall boundary
   "usage", // durable resolved-or-partial provider accounting
   "budget", // durable budget facts
   "policy", // durable policy decisions
@@ -31,6 +32,7 @@ export const PERSISTENCE_BY_TYPE: Readonly<Record<string, string>> = {
   startup: "transient",
   progress: "transient",
   reasoning_delta: "transient",
+  usage_progress: "transient",
   iteration_start: "configurable",
   llm_response: "configurable",
   code: "configurable",
@@ -103,6 +105,44 @@ function validUsageBreakdown(value: unknown): boolean {
     (value.complete !== true ||
       Number(value.cache_read_tokens) + Number(value.cache_creation_tokens) <=
         Number(value.input_tokens));
+}
+
+function validUsageBody(
+  body: Record<string, unknown>,
+  progress: boolean,
+): boolean {
+  const required = [
+    "kind",
+    "root",
+    "subcall",
+    "unattributed",
+    "total_tokens",
+  ];
+  if (progress) required.unshift("boundary");
+  else required.push("wall_time_ms");
+  const root = body.root;
+  const subcall = body.subcall;
+  return exactBody(body, required) &&
+    ["resolved", "partial"].includes(String(body.kind)) &&
+    (!progress ||
+      ["root", "subcall"].includes(String(body.boundary))) &&
+    isObject(root) && isObject(subcall) &&
+    validUsageBreakdown(root) && validUsageBreakdown(subcall) &&
+    body.kind === (
+        root.complete === true && subcall.complete === true
+          ? "resolved"
+          : "partial"
+      ) &&
+    isObject(body.unattributed) &&
+    exactBody(body.unattributed, ["total_tokens"]) &&
+    isInteger(body.unattributed.total_tokens) &&
+    body.unattributed.total_tokens >= 0 &&
+    isInteger(body.total_tokens) && Number(body.total_tokens) >= 0 &&
+    (progress ||
+      (isInteger(body.wall_time_ms) && Number(body.wall_time_ms) >= 0)) &&
+    Number(root.total_tokens) + Number(subcall.total_tokens) +
+          Number(body.unattributed.total_tokens) ===
+      Number(body.total_tokens);
 }
 
 function validSubcallBody(body: Record<string, unknown>): boolean {
@@ -241,37 +281,10 @@ function validBody(type: string, body: Record<string, unknown>): boolean {
     case "result":
     case "replay":
       return exactBody(body, ["result"]) && isObject(body.result);
-    case "usage": {
-      const root = body.root;
-      const subcall = body.subcall;
-      return exactBody(
-        body,
-        [
-          "kind",
-          "root",
-          "subcall",
-          "unattributed",
-          "total_tokens",
-          "wall_time_ms",
-        ],
-      ) && ["resolved", "partial"].includes(String(body.kind)) &&
-        isObject(root) && isObject(subcall) &&
-        validUsageBreakdown(root) && validUsageBreakdown(subcall) &&
-        body.kind === (
-            root.complete === true && subcall.complete === true
-              ? "resolved"
-              : "partial"
-          ) &&
-        isObject(body.unattributed) &&
-        exactBody(body.unattributed, ["total_tokens"]) &&
-        isInteger(body.unattributed.total_tokens) &&
-        body.unattributed.total_tokens >= 0 &&
-        integerField("total_tokens") && Number(body.total_tokens) >= 0 &&
-        integerField("wall_time_ms") && Number(body.wall_time_ms) >= 0 &&
-        Number(root.total_tokens) + Number(subcall.total_tokens) +
-              Number(body.unattributed.total_tokens) ===
-          Number(body.total_tokens);
-    }
+    case "usage_progress":
+      return validUsageBody(body, true);
+    case "usage":
+      return validUsageBody(body, false);
     case "budget":
       if (!stringField("kind") || !stringField("source")) return false;
       return body.kind === "snapshot"
@@ -365,7 +378,7 @@ export function isRlmEvent(line: string): boolean {
         Number.isInteger(o.seq) && o.seq > 0 &&
         typeof o.timestamp === "string" &&
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(o.timestamp) &&
-        o.version === 4 &&
+        o.version === 5 &&
         o.persistence_class === PERSISTENCE_BY_TYPE[o.type] &&
         Number.isInteger(o.depth) && o.depth >= 0 &&
         (o.depth === 0

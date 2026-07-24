@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from ..capabilities import CapabilityAttemptEvent, CapabilityResult
 
-from ..protocols.llm_client import TokenUsage
+from ..protocols.llm_client import TokenUsage, UsageObservationBasis
 from .budget import Budget, BudgetLedger
 from .config import ExecutionConfig, SandboxLimits
 from .progress import EVENT_TYPES, EventCallback, ProgressCallback, progress_event
@@ -81,60 +81,79 @@ class ExecutionContext:
             return record
 
     def record_root_attempt(self) -> None:
-        self.stats.root_requests += 1
+        with self._emission_lock:
+            self.stats.root_requests += 1
 
     def record_root_success(self, usage: TokenUsage) -> None:
         self._validate_usage(usage)
-        if self.stats.root_successes >= self.stats.root_requests:
-            raise ValueError("root successes cannot exceed requests")
-        self.stats.root_successes += 1
-        self.record_root_usage(usage)
+        with self._emission_lock:
+            if self.stats.root_successes >= self.stats.root_requests:
+                raise ValueError("root successes cannot exceed requests")
+            self.stats.root_successes += 1
+            self.record_root_usage(usage)
 
     def record_root_usage(self, usage: TokenUsage) -> None:
         """Record billable root usage independently of usable-output success."""
 
         self._validate_usage(usage)
-        if not usage.exact:
-            self.stats.root_usage_complete = False
-        self.stats.root_input_tokens += usage.prompt_tokens
-        self.stats.root_cache_read_tokens += usage.cache_read_tokens
-        self.stats.root_cache_creation_tokens += usage.cache_creation_tokens
-        self.stats.root_reasoning_tokens += usage.reasoning_tokens
-        self.stats.root_output_tokens += usage.completion_tokens
-        self.stats.root_total_tokens += usage.total_tokens
-        self.stats.total_tokens += usage.total_tokens
+        with self._emission_lock:
+            if not usage.exact:
+                self.stats.root_usage_complete = False
+            self.stats.root_input_tokens += usage.prompt_tokens
+            self.stats.root_cache_read_tokens += usage.cache_read_tokens
+            self.stats.root_cache_creation_tokens += usage.cache_creation_tokens
+            self.stats.root_reasoning_tokens += usage.reasoning_tokens
+            self.stats.root_output_tokens += usage.completion_tokens
+            self.stats.root_total_tokens += usage.total_tokens
+            self.stats.total_tokens += usage.total_tokens
+            if usage.observation_basis is not UsageObservationBasis.UNAVAILABLE:
+                self._emit_usage_progress("root")
 
     def record_subcall_attempts(self, count: int = 1) -> None:
         self._validate_count(count)
-        self.stats.calls_made += count
+        with self._emission_lock:
+            self.stats.calls_made += count
 
     def record_subcall_successes(self, count: int = 1) -> None:
         self._validate_count(count)
-        if self.stats.successful_calls + count > self.stats.calls_made:
-            raise ValueError("subcall successes cannot exceed attempts")
-        self.stats.successful_calls += count
+        with self._emission_lock:
+            if self.stats.successful_calls + count > self.stats.calls_made:
+                raise ValueError("subcall successes cannot exceed attempts")
+            self.stats.successful_calls += count
 
     def record_subcall_usage(self, usage: TokenUsage) -> None:
         self._validate_usage(usage)
-        if not usage.exact:
-            self.stats.subcall_usage_complete = False
-        self.stats.subcall_input_tokens += usage.prompt_tokens
-        self.stats.subcall_cache_read_tokens += usage.cache_read_tokens
-        self.stats.subcall_cache_creation_tokens += usage.cache_creation_tokens
-        self.stats.subcall_reasoning_tokens += usage.reasoning_tokens
-        self.stats.subcall_output_tokens += usage.completion_tokens
-        self.stats.subcall_total_tokens += usage.total_tokens
-        self.stats.total_tokens += usage.total_tokens
+        with self._emission_lock:
+            if not usage.exact:
+                self.stats.subcall_usage_complete = False
+            self.stats.subcall_input_tokens += usage.prompt_tokens
+            self.stats.subcall_cache_read_tokens += usage.cache_read_tokens
+            self.stats.subcall_cache_creation_tokens += usage.cache_creation_tokens
+            self.stats.subcall_reasoning_tokens += usage.reasoning_tokens
+            self.stats.subcall_output_tokens += usage.completion_tokens
+            self.stats.subcall_total_tokens += usage.total_tokens
+            self.stats.total_tokens += usage.total_tokens
+            if usage.observation_basis is not UsageObservationBasis.UNAVAILABLE:
+                self._emit_usage_progress("subcall")
+
+    def _emit_usage_progress(self, boundary: str) -> None:
+        """Emit one cumulative, content-free snapshot at a settled model boundary."""
+
+        usage = self.stats.resolved_usage(wall_time_ms=0).as_dict()
+        usage.pop("wall_time_ms")
+        self.emit_event({"type": "usage_progress", "boundary": boundary, **usage})
 
     def record_root_usage_unavailable(self) -> None:
         """Mark root usage partial without inventing provider token counts."""
 
-        self.stats.root_usage_complete = False
+        with self._emission_lock:
+            self.stats.root_usage_complete = False
 
     def record_subcall_usage_unavailable(self) -> None:
         """Mark subcall usage partial without conflating it with reservations."""
 
-        self.stats.subcall_usage_complete = False
+        with self._emission_lock:
+            self.stats.subcall_usage_complete = False
 
     def record_subcall_settlement(self, exact: bool) -> None:
         """Record whether one brokered inference settlement had complete usage."""
