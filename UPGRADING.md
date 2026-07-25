@@ -11,9 +11,28 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.20.0)
+## Unreleased (post-0.20.1)
 
 No changes yet.
+
+## 0.20.1 (from 0.20.0)
+
+### Hosts can validate answer metadata before the root finishes
+
+`run_rlm(..., ready_metadata_validator=...)` adds an optional trusted-host
+gate after core ready and JSON-metadata validation. The callback receives a
+detached metadata copy and returns content-free violation strings. Any
+violation revokes `answer["ready"]` and enters the existing root repair path,
+so embedders no longer need to discover a repairable product contract only
+after the billed run has completed.
+
+The callback is not part of `RLMConfig` or the scaffold manifest because it is
+host-side result admission, not model-visible inference configuration. It must
+be synchronous, deterministic, free of model calls and external mutation, and
+hosts should retain their final defense-in-depth validation.
+If the callback raises or violates its return contract, Droste raises
+`ReadyMetadataValidatorError` to the host without issuing a model repair call
+or including the host exception in model-visible feedback.
 
 ## 0.20.0 (from 0.19.2)
 

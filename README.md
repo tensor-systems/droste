@@ -316,6 +316,14 @@ incomplete `llm_batch_json` result blocks confirmation. Only an error-free
 repeat with the exact prompts, contexts, schema, and validator object resolves
 that partial evidence. Omit the hint to retain purely prompt-driven behavior.
 
+Embedders with product-specific metadata contracts may pass
+`ready_metadata_validator` to `run_rlm`. It receives a detached copy of
+validated `answer["metadata"]` only after Droste's core ready checks pass.
+Return an empty sequence to accept it, or content-free violation strings to
+revoke readiness and send those violations through the existing root repair
+path. The validator is synchronous trusted host logic; it must not dispatch
+model calls or mutate external state.
+
 ### Result
 
 ```python

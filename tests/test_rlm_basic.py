@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from droste import RLMConfig, run_rlm
+from droste import ReadyMetadataValidatorError, RLMConfig, run_rlm
 from droste.loop.step import copy_answer_metadata
 from droste.protocols.llm_client import TokenUsage
 from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
@@ -91,6 +91,205 @@ def test_run_rlm_preserves_confirmed_json_answer_metadata():
         "artifact": {"kind": "table", "rows": 3},
         "confidence": 0.9,
     }
+
+
+def test_run_rlm_repairs_ready_metadata_rejected_by_host_validator():
+    seen_metadata = []
+    mock_llm = MockLLMClient(
+        responses=[
+            MockResponse(
+                text=(
+                    "```python\n"
+                    "answer['content'] = 'supported answer'\n"
+                    "answer['metadata'] = {'evidence': 'invalid'}\n"
+                    "answer['ready'] = True\n"
+                    "```"
+                ),
+                usage=TokenUsage(
+                    prompt_tokens=1,
+                    completion_tokens=1,
+                    total_tokens=2,
+                    exact=True,
+                ),
+            ),
+            MockResponse(
+                text=(
+                    "```python\n"
+                    "answer['metadata'] = {'evidence': ['record-1']}\n"
+                    "answer['ready'] = True\n"
+                    "```"
+                ),
+                usage=TokenUsage(
+                    prompt_tokens=1,
+                    completion_tokens=1,
+                    total_tokens=2,
+                    exact=True,
+                ),
+            ),
+        ]
+    )
+
+    def validate(metadata):
+        seen_metadata.append(metadata)
+        return (
+            ["Evidence must be an array."] if not isinstance(metadata.get("evidence"), list) else []
+        )
+
+    result = run_rlm(
+        question="test",
+        environment=MockEnvironment(),
+        root_llm=mock_llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(),
+        ready_metadata_validator=validate,
+    )
+
+    assert result.ready
+    assert result.answer == "supported answer"
+    assert result.answer_metadata == {"evidence": ["record-1"]}
+    assert result.iterations == 1
+    assert seen_metadata == [
+        {"evidence": "invalid"},
+        {"evidence": ["record-1"]},
+    ]
+    assert [entry.attempt_kind for entry in result.trajectory] == ["repair"]
+
+
+def test_ready_metadata_validator_runs_only_after_core_metadata_validation():
+    seen_metadata = []
+    mock_llm = MockLLMClient(
+        responses=[
+            MockResponse(
+                text=(
+                    "```python\n"
+                    "answer['content'] = 'draft'\n"
+                    "answer['metadata'] = {'bad': {1}}\n"
+                    "answer['ready'] = True\n"
+                    "```"
+                ),
+                usage=TokenUsage(
+                    prompt_tokens=1,
+                    completion_tokens=1,
+                    total_tokens=2,
+                    exact=True,
+                ),
+            ),
+            MockResponse(
+                text=(
+                    "```python\nanswer['metadata'] = {'fixed': True}\nanswer['ready'] = True\n```"
+                ),
+                usage=TokenUsage(
+                    prompt_tokens=1,
+                    completion_tokens=1,
+                    total_tokens=2,
+                    exact=True,
+                ),
+            ),
+        ]
+    )
+
+    result = run_rlm(
+        question="test",
+        environment=MockEnvironment(),
+        root_llm=mock_llm,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(),
+        ready_metadata_validator=lambda metadata: seen_metadata.append(metadata) or [],
+    )
+
+    assert result.ready
+    assert seen_metadata == [{"fixed": True}]
+
+
+def test_ready_metadata_validator_cannot_mutate_confirmed_metadata():
+    def validate(metadata):
+        metadata["value"] = "mutated"
+        return []
+
+    result = run_rlm(
+        question="test",
+        environment=MockEnvironment(),
+        root_llm=MockLLMClient(
+            responses=[
+                MockResponse(
+                    text=(
+                        "```python\n"
+                        "answer['content'] = 'ok'\n"
+                        "answer['metadata'] = {'value': 'original'}\n"
+                        "answer['ready'] = True\n"
+                        "```"
+                    ),
+                    usage=TokenUsage(
+                        prompt_tokens=1,
+                        completion_tokens=1,
+                        total_tokens=2,
+                        exact=True,
+                    ),
+                )
+            ]
+        ),
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(),
+        ready_metadata_validator=validate,
+    )
+
+    assert result.ready
+    assert result.answer_metadata == {"value": "original"}
+
+
+@pytest.mark.parametrize(
+    "validator",
+    [
+        lambda _metadata: "not a sequence",
+        lambda _metadata: {},
+        lambda _metadata: set(),
+        lambda _metadata: iter(()),
+        lambda _metadata: [""],
+        lambda _metadata: (_ for _ in ()).throw(RuntimeError("host-only secret")),
+    ],
+)
+def test_ready_metadata_validator_failure_escapes_without_model_repair(validator):
+    client = MockLLMClient(
+        responses=[
+            MockResponse(
+                text=(
+                    "```python\n"
+                    "answer['content'] = 'done'\n"
+                    "answer['metadata'] = {'value': 'original'}\n"
+                    "answer['ready'] = True\n"
+                    "```"
+                ),
+                usage=TokenUsage(
+                    prompt_tokens=1,
+                    completion_tokens=1,
+                    total_tokens=2,
+                    exact=True,
+                ),
+            ),
+            MockResponse(
+                text="this repair must not be requested",
+                usage=TokenUsage(
+                    prompt_tokens=1,
+                    completion_tokens=1,
+                    total_tokens=2,
+                    exact=True,
+                ),
+            ),
+        ]
+    )
+
+    with pytest.raises(ReadyMetadataValidatorError) as error:
+        run_rlm(
+            question="test",
+            environment=MockEnvironment(),
+            root_llm=client,
+            subcalls=MockSubcallClient(),
+            config=RLMConfig(),
+            ready_metadata_validator=validator,
+        )
+
+    assert "host-only secret" not in str(error.value)
+    assert client._call_count == 1
 
 
 def test_run_rlm_repairs_non_json_answer_metadata():

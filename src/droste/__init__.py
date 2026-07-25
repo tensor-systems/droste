@@ -103,6 +103,7 @@ from .loop.rlm import (
     preflight_rlm,
     run_rlm,
 )
+from .loop.step import ReadyMetadataValidator, ReadyMetadataValidatorError
 from .policy import PolicyHints
 from .prompts.builder import SystemPromptBuilder
 from .prompts.pack import (
@@ -160,6 +161,8 @@ __all__ = [
     "RLMPreflight",
     "RLMResult",
     "RLM_PREFLIGHT_SCHEMA_VERSION",
+    "ReadyMetadataValidator",
+    "ReadyMetadataValidatorError",
     "extract_code_block",
     "DEFAULT_TOKEN_BUDGET",
     "DEFAULT_SUBCALL_BUDGET",

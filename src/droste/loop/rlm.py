@@ -56,6 +56,7 @@ from ..structured import _StructuredBatchEvidence, aggregate_json_counts, bind_s
 from .code_extractor import extract_code_block
 from .step import (
     EMPTY_OUTPUT_NUDGE,
+    ReadyMetadataValidator,
     RLMConfig,
     RLMResult,
     TranscriptWindowEntry,
@@ -651,6 +652,7 @@ def run_rlm(
     on_event: EventCallback | None = None,
     prompt_pack: PromptPack | None = None,
     consumer_prompt_catalog: PromptPackCatalog | None = None,
+    ready_metadata_validator: ReadyMetadataValidator | None = None,
 ) -> RLMResult:
     try:
         cfg = config or RLMConfig()
@@ -808,6 +810,7 @@ def run_rlm(
                 data_accessor_names=data_accessor_names,
                 namespaced_accessor_pairs=namespaced_accessor_pairs,
                 semantic_evidence=semantic_evidence,
+                ready_metadata_validator=ready_metadata_validator,
             )
 
         def early_result(run_error: RLMError | None) -> RLMResult:

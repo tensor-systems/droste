@@ -28,6 +28,12 @@ can omit them to keep behavior purely prompt-driven.
 With `PolicyHints(semantic=True)`, an incomplete structured batch remains
 unconfirmed until the exact prompts, contexts, schema, and validator object are
 rerun without errors; a different successful batch is not completion evidence.
+Product-specific metadata contracts belong in `run_rlm`'s trusted
+`ready_metadata_validator`. The hook receives only the detached JSON metadata
+after Droste's core ready checks pass. Return content-free violation strings to
+revoke readiness and route the same root through the existing repair path;
+never perform a second/fallback model call in the validator or weaken the
+host's final defense-in-depth validation.
 
 Terminal step failures with usable partial work go through the bounded extract
 fallback. A successful recovery is `extracted=True`, `error=None`, with the
