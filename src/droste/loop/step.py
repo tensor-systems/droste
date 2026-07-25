@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeAlias
 from uuid import uuid4
 
 from ..exceptions import PolicyError, RLMError, SandboxError
@@ -71,6 +73,15 @@ MAX_ANSWER_METADATA_BYTES = 64 * 1024
 MAX_ANSWER_METADATA_NODES = 10_000
 MAX_ANSWER_METADATA_DEPTH = 100
 MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
+
+ReadyMetadataValidator: TypeAlias = Callable[
+    [Mapping[str, Any]],
+    Sequence[str],
+]
+
+
+class ReadyMetadataValidatorError(RuntimeError):
+    """Trusted host validator failed instead of returning repairable violations."""
 
 
 @dataclass
@@ -622,6 +633,7 @@ def execute_step(
     data_accessor_names: set[str],
     namespaced_accessor_pairs: set[tuple[str, str]],
     semantic_evidence: _StructuredBatchEvidence | None = None,
+    ready_metadata_validator: ReadyMetadataValidator | None = None,
 ) -> StepOutcome:
     """Execute one code block: the identical path for a first attempt and for
     repaired code. Policy pre-check, execute, output budget, event emit,
@@ -669,6 +681,25 @@ def execute_step(
                 answer_metadata = copy_answer_metadata(answer)
             except ValueError as exc:
                 violations.append(str(exc))
+        if answer.get("ready") and not violations and ready_metadata_validator is not None:
+            try:
+                validator_violations = ready_metadata_validator(deepcopy(answer_metadata))
+                if isinstance(validator_violations, str) or not isinstance(
+                    validator_violations, Sequence
+                ):
+                    raise TypeError(
+                        "ready_metadata_validator must return a sequence of violation strings"
+                    )
+                for violation in validator_violations:
+                    if not isinstance(violation, str) or not violation.strip():
+                        raise TypeError(
+                            "ready_metadata_validator violations must be non-empty strings"
+                        )
+                    violations.append(violation.strip())
+            except Exception as exc:
+                raise ReadyMetadataValidatorError(
+                    "ready_metadata_validator failed; inspect the chained host exception"
+                ) from exc
         if violations:
             # Revoke readiness BEFORE emitting the output event, so the
             # published answer_ready is the post-gate truth — never a state
@@ -690,6 +721,11 @@ def execute_step(
         )
         if violations:
             raise PolicyError("Policy violation: " + " | ".join(violations))
+    except ReadyMetadataValidatorError:
+        # This callback is trusted host code, not model-generated sandbox code.
+        # Its failures cannot be repaired by another model call and its details
+        # must not cross the host/model boundary.
+        raise
     except Exception as exec_error:
         # Failed code cannot submit a confirmed answer, even if it set ready
         # before raising or rebound the answer dict entirely. Keep accumulated
