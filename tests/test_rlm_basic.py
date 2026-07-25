@@ -132,9 +132,7 @@ def test_run_rlm_repairs_ready_metadata_rejected_by_host_validator():
     def validate(metadata):
         seen_metadata.append(metadata)
         return (
-            ["Evidence must be an array."]
-            if not isinstance(metadata.get("evidence"), list)
-            else []
+            ["Evidence must be an array."] if not isinstance(metadata.get("evidence"), list) else []
         )
 
     result = run_rlm(
@@ -178,10 +176,7 @@ def test_ready_metadata_validator_runs_only_after_core_metadata_validation():
             ),
             MockResponse(
                 text=(
-                    "```python\n"
-                    "answer['metadata'] = {'fixed': True}\n"
-                    "answer['ready'] = True\n"
-                    "```"
+                    "```python\nanswer['metadata'] = {'fixed': True}\nanswer['ready'] = True\n```"
                 ),
                 usage=TokenUsage(
                     prompt_tokens=1,
