@@ -2,7 +2,7 @@
 //
 // ModelRelay's streaming /responses (profile "responses-stream/v2") emits ndjson
 // events: `start`, repeated `update` ({delta:"<chunk>"}), and a terminal
-// `completion` ({content, usage}). This forwards each text delta via `onDelta`
+// `completion` ({content, usage, stop_reason}). This forwards each text delta via `onDelta`
 // (the host renders the model's reasoning live) and reconstructs the SAME payload
 // the non-streaming /responses returns — so the RLM loop, which calls the unary
 // client and reads `output[].content[].text` + `usage`, is unaffected.
@@ -19,6 +19,7 @@ export async function streamResponses(
   let assembled = ""; // accumulated from deltas (live display + fallback text)
   let finalContent: string | null = null; // authoritative text from `completion`
   let usage: unknown = null;
+  let stopReason: string | null = null;
   // The wire contract (responses-stream/v2) terminates every stream with
   // exactly one `completion` or `error` record. Anything else — a dropped
   // connection, a proxy timeout — leaves this false, and the accumulated
@@ -53,6 +54,17 @@ export async function streamResponses(
       return;
     }
     if (ev.type === "completion") {
+      const candidate = ev.stop_reason;
+      if (
+        typeof candidate !== "string" ||
+        candidate.length === 0 ||
+        candidate !== candidate.trim()
+      ) {
+        throw new Error(
+          "ModelRelay completion event is missing a valid stop_reason",
+        );
+      }
+      stopReason = candidate;
       sawCompletion = true;
       if (typeof ev.content === "string") finalContent = ev.content;
       if (ev.usage) usage = ev.usage;
@@ -93,6 +105,7 @@ export async function streamResponses(
 
   const text = finalContent ?? assembled;
   const payload: Record<string, unknown> = {
+    stop_reason: stopReason,
     output: [{
       type: "message",
       role: "assistant",

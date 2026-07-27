@@ -11,7 +11,17 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
-## Unreleased (post-0.21.0)
+## Unreleased (post-0.21.1)
+
+## 0.21.1 (from 0.21.0)
+
+### Streamed Responses preserve their terminal stop reason
+
+The Deno relay now requires `completion.stop_reason` in ModelRelay's negotiated
+`responses-stream/v2` contract and carries it into the reconstructed unary
+response. Missing, non-string, empty, or whitespace-padded values fail closed.
+Embedders must deploy a ModelRelay version that emits this documented field
+before staging the 0.21.1 relay assets.
 
 ## 0.21.0 (from 0.20.1)
 

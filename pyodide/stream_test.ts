@@ -40,6 +40,7 @@ Deno.test("reconstructs output + usage from completion; forwards deltas in order
   assert.equal(payload.output[0].type, "message");
   assert.equal(payload.output[0].role, "assistant");
   assert.equal(payload.output[0].content[0].text, "Hello world");
+  assert.equal(payload.stop_reason, "end_turn");
   assert.deepEqual(payload.usage, {
     input_tokens: 1,
     cache_read_input_tokens: 1,
@@ -55,7 +56,12 @@ Deno.test("prefers completion.content over accumulated deltas (authoritative)", 
     ndjson([
       { type: "update", delta: "par" },
       { type: "update", delta: "tial" },
-      { type: "completion", content: "the full canonical answer", usage: {} },
+      {
+        type: "completion",
+        content: "the full canonical answer",
+        stop_reason: "completed",
+        usage: {},
+      },
     ]),
     () => {},
   );
@@ -65,11 +71,10 @@ Deno.test("prefers completion.content over accumulated deltas (authoritative)", 
   );
 });
 
-Deno.test("real wire shape: completion carries usage only, text from deltas", async () => {
-  // Verified against live ModelRelay (gemini-3-flash-preview): the production
-  // `completion` event has NO `content` — only `usage`. The full assistant text
-  // is the concatenation of `update` deltas, so reconstruction relies on the
-  // accumulated-delta fallback while still taking usage from `completion`.
+Deno.test("v2 wire shape: completion carries terminal facts, text from deltas", async () => {
+  // Text streams omit `completion.content` after emitting deltas. The full
+  // assistant text is their concatenation, while usage and stop reason come
+  // from the terminal record.
   const deltas: string[] = [];
   const out = await streamResponses(
     ndjson([
@@ -83,6 +88,7 @@ Deno.test("real wire shape: completion carries usage only, text from deltas", as
       { type: "update", delta: " there" },
       {
         type: "completion",
+        stop_reason: "completed",
         usage: { input_tokens: 8, output_tokens: 46, total_tokens: 54 },
       },
     ]),
@@ -95,6 +101,7 @@ Deno.test("real wire shape: completion carries usage only, text from deltas", as
     output_tokens: 46,
     total_tokens: 54,
   });
+  assert.equal(payload.stop_reason, "completed");
   assert.deepEqual(deltas, ["Hello", " there"]);
 });
 
@@ -107,6 +114,7 @@ Deno.test("tolerates the content_delta/{delta:{content}} shape", async () => {
       {
         type: "completion",
         content: "Hi!",
+        stop_reason: "completed",
         usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
       },
     ]),
@@ -123,13 +131,55 @@ Deno.test("ignores keepalive/non-JSON lines and unknown event types", async () =
     "not json",
     JSON.stringify({ type: "ping" }),
     JSON.stringify({ type: "update", delta: "ok" }),
-    JSON.stringify({ type: "completion", content: "ok", usage: {} }),
+    JSON.stringify({
+      type: "completion",
+      content: "ok",
+      stop_reason: "completed",
+      usage: {},
+    }),
   ].join("\n");
   const r = new Response(body, {
     headers: { "content-type": "application/x-ndjson" },
   });
   const out = await streamResponses(r, () => {});
   assert.equal(JSON.parse(out).output[0].content[0].text, "ok");
+});
+
+Deno.test("preserves max-output termination in the unary response", async () => {
+  const out = await streamResponses(
+    ndjson([
+      { type: "update", delta: "partial" },
+      {
+        type: "completion",
+        stop_reason: "max_output_tokens",
+        usage: { input_tokens: 10, output_tokens: 8, total_tokens: 18 },
+      },
+    ]),
+    () => {},
+  );
+  assert.equal(JSON.parse(out).stop_reason, "max_output_tokens");
+});
+
+Deno.test("rejects a completion without a canonical stop reason", async () => {
+  for (
+    const stopReason of [undefined, null, 7, "", " ", " completed"]
+  ) {
+    await assert.rejects(
+      () =>
+        streamResponses(
+          ndjson([
+            { type: "update", delta: "unsafe partial" },
+            {
+              type: "completion",
+              stop_reason: stopReason,
+              usage: {},
+            },
+          ]),
+          () => {},
+        ),
+      /completion event is missing a valid stop_reason/,
+    );
+  }
 });
 
 Deno.test("a stream that ends without a terminal event throws (droste#43)", async () => {
