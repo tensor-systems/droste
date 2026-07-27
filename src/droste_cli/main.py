@@ -36,6 +36,7 @@ from typing import Any
 
 from droste import (
     DEFAULT_DEPTH_BUDGET,
+    DEFAULT_MAX_ITERATIONS,
     DEFAULT_ROOT_OUTPUT_TOKENS,
     DEFAULT_SUBCALL_BUDGET,
     DEFAULT_SUBCALL_OUTPUT_TOKENS,
@@ -169,6 +170,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_WALL_TIME_MS,
         help=f"wall-clock budget in milliseconds (default: {DEFAULT_WALL_TIME_MS})",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=DEFAULT_MAX_ITERATIONS,
+        help=f"maximum RLM loop iterations (default: {DEFAULT_MAX_ITERATIONS})",
     )
     parser.add_argument(
         "--root-output-tokens",
@@ -360,6 +367,8 @@ def run_ask(args: argparse.Namespace) -> int:
         raise CLIError("--budget-depth must be non-negative")
     if args.budget_wall_ms < 1:
         raise CLIError("--budget-wall-ms must be positive")
+    if args.max_iterations < 1:
+        raise CLIError("--max-iterations must be positive")
     if args.root_output_tokens < 1 or args.subcall_output_tokens < 1:
         raise CLIError("root and subcall output token ceilings must be positive")
     if args.max_bytes < 1:
@@ -474,6 +483,7 @@ def run_ask(args: argparse.Namespace) -> int:
         subcalls=args.budget_subcalls,
         depth=args.budget_depth,
         wall_ms=args.budget_wall_ms,
+        max_iterations=args.max_iterations,
         root_output_tokens=args.root_output_tokens,
         subcall_output_tokens=args.subcall_output_tokens,
     )
@@ -613,7 +623,7 @@ def run_ask(args: argparse.Namespace) -> int:
         # Extraction was attempted and failed — the printed answer above is
         # raw loop output (e.g. a debug print()), not a synthesized answer.
         print(
-            f"droste: note: max iterations reached and answer extraction failed "
+            f"droste: note: run ended unconfirmed and answer extraction failed "
             f"({result.extract_error.type}: {result.extract_error.message}); "
             "showing raw loop output, not a synthesized answer",
             file=sys.stderr,

@@ -1,4 +1,4 @@
-# Scaffold manifest v2
+# Scaffold manifest v3
 
 A scaffold manifest is the content-addressed identity of everything that can
 materially change a Droste rollout. It lets a trainer reject a checkpoint/run
@@ -21,11 +21,11 @@ inference facts.
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "engine": {"version": "0.10.6", "source_revision": null},
   "abis": {
-    "kernel": 1, "capability": 1, "trace": 1,
-    "prompt_pack": 2, "provider": 4, "runner": 5
+    "kernel": 1, "capability": 1, "trace": 6,
+    "prompt_pack": 2, "provider": 4, "runner": 10
   },
   "prompt_pack": {
     "id": "droste.generic.full", "revision": "2.0.0",
@@ -62,6 +62,7 @@ inference facts.
   },
   "budget": {
     "tokens": 500000, "subcalls": 50, "depth": 1, "wall_ms": 300000,
+    "max_iterations": 30,
     "root_output_tokens": 4096, "subcall_output_tokens": 2048
   },
   "sandbox": {

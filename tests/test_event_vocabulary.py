@@ -133,7 +133,7 @@ def test_run_rlm_event_stream_through_attached_sink() -> None:
     assert "stdout_truncated" not in output
     startup = events[0]
     assert startup["scaffold_manifest_id"] == result.scaffold_manifest.manifest_id
-    assert startup["scaffold_manifest_version"] == 2
+    assert startup["scaffold_manifest_version"] == 3
     assert output["answer_ready"] is True
     assert output["answer_content_chars"] == len("ok")
     usage_progress = next(e for e in events if e["type"] == "usage_progress")

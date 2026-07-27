@@ -87,8 +87,9 @@ evidence with that status rather than leaving the model to interpret prefixes.
 ## Budget Ledger
 
 - Compute authorization is one frozen `Budget` vector: tokens, subcalls,
-  depth, wall time, and root/subcall output ceilings. Do not add host-specific
-  counters, client enforcement, aliases, or `max_*` translations.
+  depth, wall time, max iterations, and root/subcall output ceilings. Do not
+  add host-specific counters, client enforcement, aliases, or translation
+  layers.
 - `BudgetLedger` is the sole mutable authority. Reserve the complete vector
   atomically before dispatch, reconcile exactly once afterward, and refund all
   unused authorization. Every error and process-control path must settle.
@@ -111,7 +112,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
 
 ## Trace ABI
 
-- Every structured event is a strict Trace ABI v5 value. Stamp it exactly once
+- Every structured event is a strict Trace ABI v6 value. Stamp it exactly once
   through `ExecutionContext`; do not emit raw or partially enveloped event
   dictionaries at host boundaries.
 - Treat every envelope/body, classification, and ordering change as an ABI
@@ -184,7 +185,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - A strict published event vocabulary/body change requires a Trace ABI bump and,
   when embedded in runner output, an atomic runner-protocol bump. Do not expand
   an old strict version in place or add a compatibility decoder in the engine.
-- Trace ABI v5 usage is `resolved` only when both root and subcall scopes have
+- Trace ABI v6 usage is `resolved` only when both root and subcall scopes have
   complete provider usage. Missing or malformed usage preserves any known
   counts, marks that scope `complete=false`, and makes terminal usage
   `kind="partial"`; never report conservative reservations as provider usage.
@@ -234,7 +235,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
   partial evidence rather than invalidating an otherwise valid envelope.
 - `reasoning_tokens` is a non-negative breakdown inside `completion_tokens`.
   Preserve it through internal usage copies, folds, and root/subcall
-  `ExecutionStats`, but do not add it to totals or Trace ABI v5 events.
+  `ExecutionStats`, but do not add it to totals or Trace ABI v6 events.
   Observation basis and reasoning usage are
   internal callback/accounting facts; do not add them to the public usage
   projections.
@@ -267,7 +268,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
   partial and settle conservatively rather than falling back to the start
   estimate.
 - `ExecutionStats` folds those same cache classes separately for root and
-  subcall scopes. Trace ABI v5 exposes them in every durable usage breakdown;
+  subcall scopes. Trace ABI v6 exposes them in every durable usage breakdown;
   complete scopes require the disjoint cache classes to fit inside inclusive
   input tokens, while partial scopes preserve independently validated counts.
   ModelRelay names the classes `cache_read_input_tokens` and
@@ -393,7 +394,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
   They are assertions that the Deno/WASM host supplies those boundaries, not
   Python-side enforcement. Never weaken them or silently accept a native
   signal timeout for Pyodide.
-- Every request MUST carry `"protocol_version": 9` and one complete `budget`
+- Every request MUST carry `"protocol_version": 10` and one complete `budget`
   object. Missing/mismatched versions or incomplete budgets fail before work.
   See docs/architecture.md, "The runner protocol".
 - Version refusal precedes operation resolution and carries `operation: null`.

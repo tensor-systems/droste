@@ -8,6 +8,7 @@ from droste import (
     BudgetExhausted,
     BudgetLedger,
     BudgetRequest,
+    IterationLimitExceeded,
     create_execution_context,
 )
 from droste.execution.budget import conservative_token_estimate
@@ -43,6 +44,22 @@ def test_budget_is_one_strict_immutable_value() -> None:
         budget.tokens = 2  # type: ignore[misc]
     with pytest.raises(ValueError, match="unknown extra"):
         Budget.from_dict({**budget.as_dict(), "extra": 1})
+    with pytest.raises(ValueError, match="budget.max_iterations must be positive"):
+        _budget(max_iterations=0)
+    with pytest.raises(ValueError, match="budget.max_iterations must be a non-negative integer"):
+        Budget(max_iterations=True)  # type: ignore[arg-type]
+
+
+def test_execution_context_refuses_first_iteration_beyond_limit() -> None:
+    context = create_execution_context(budget=_budget(max_iterations=2))
+    context.begin_iteration(1)
+    context.begin_iteration(2)
+
+    with pytest.raises(IterationLimitExceeded) as raised:
+        context.begin_iteration(3)
+
+    assert raised.value.limit == 2
+    assert raised.value.attempted == 3
 
 
 def test_vector_reservation_is_atomic_and_preserves_root_synthesis() -> None:

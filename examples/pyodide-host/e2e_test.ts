@@ -29,11 +29,11 @@ const RELAY_TS =
 const EVENT_CHANNEL_PROBE =
   new URL("../../pyodide/event_channel_probe.ts", import.meta.url).pathname;
 const RUNNER_REFUSAL_FIXTURE = new URL(
-  "../../src/droste/testing/fixtures/runner-v9-refusal.ndjson",
+  "../../src/droste/testing/fixtures/runner-v10-refusal.ndjson",
   import.meta.url,
 );
 const TRACE_LIFECYCLE_FIXTURE = new URL(
-  "../../src/droste/testing/fixtures/trace-v5-lifecycle.ndjson",
+  "../../src/droste/testing/fixtures/trace-v6-lifecycle.ndjson",
   import.meta.url,
 );
 const TEST_BUDGET = {
@@ -41,6 +41,7 @@ const TEST_BUDGET = {
   subcalls: 50,
   depth: 1,
   wall_ms: 300_000,
+  max_iterations: 30,
   root_output_tokens: 4_096,
   subcall_output_tokens: 2_048,
 };
@@ -1009,7 +1010,7 @@ Deno.test({
         !stderrText.split("\n").some((line) => line.trim().startsWith("{")),
         `fd2 must remain diagnostic-only:\n${stderrText}`,
       );
-      assertEquals(startup.runner_protocol, 9);
+      assertEquals(startup.runner_protocol, 10);
       assertEquals(startup.provider_protocol, 4);
       assert(
         typeof startup.engine_version === "string" &&
@@ -1161,7 +1162,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "relay.ts: adapter exceptions retain strict run/preflight protocol-v9 envelopes",
+    "relay.ts: adapter exceptions retain strict run/preflight protocol-v10 envelopes",
   fn: async () => {
     const { port, shutdown } = await startMockModelRelay();
     try {
@@ -1169,13 +1170,13 @@ Deno.test({
       for (const operation of ["run", "preflight"] as const) {
         const { lastLine, eventText } = await runRelayRaw(
           sourcesDir,
-          { protocol_version: 9, operation },
+          { protocol_version: 10, operation },
           port,
           {},
           "_failing_adapter",
         );
         const response = JSON.parse(lastLine);
-        assertEquals(response.protocol_version, 9);
+        assertEquals(response.protocol_version, 10);
         assertEquals(response.operation, operation);
         assertEquals(response.status, "error");
         assertEquals(response.error.type, "RuntimeError");
@@ -1229,7 +1230,7 @@ Deno.test({
       const preflight = await runRelayRaw(
         sourcesDir,
         {
-          protocol_version: 9,
+          protocol_version: 10,
           operation: "preflight",
           model: "test-model",
           budget: TEST_BUDGET,

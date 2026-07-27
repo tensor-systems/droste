@@ -20,12 +20,12 @@ from ..prompts.pack import (
     prompt_pack_content_sha256,
 )
 from ..protocols.subcall_capacity import SubcallInputCapacity
-from .budget import Budget
+from .budget import DEFAULT_MAX_ITERATIONS, Budget
 from .config import DEFAULT_SUBCALL_CONCURRENCY, SandboxLimits, validate_subcall_concurrency
 from .trace import TRACE_ABI_VERSION
 
-SCAFFOLD_MANIFEST_VERSION = 2
-_SUPPORTED_SCAFFOLD_MANIFEST_VERSIONS = frozenset({1, SCAFFOLD_MANIFEST_VERSION})
+SCAFFOLD_MANIFEST_VERSION = 3
+_SUPPORTED_SCAFFOLD_MANIFEST_VERSIONS = frozenset({1, 2, SCAFFOLD_MANIFEST_VERSION})
 KERNEL_ABI_VERSION = 1
 CAPABILITY_ABI_VERSION = 1
 TERMINAL_CONTRACT_ID = "answer-ready-v1"
@@ -268,7 +268,14 @@ def _validate_manifest_body(body: Mapping[str, Any], *, schema_version: int) -> 
 
     if not isinstance(body["budget"], Mapping):
         raise TypeError("budget must be an object")
-    Budget.from_dict(body["budget"])
+    raw_budget = body["budget"]
+    if schema_version < 3:
+        if "max_iterations" in raw_budget:
+            raise ValueError(
+                f"budget has unknown max_iterations for scaffold schema {schema_version}"
+            )
+        raw_budget = {**raw_budget, "max_iterations": DEFAULT_MAX_ITERATIONS}
+    Budget.from_dict(raw_budget)
     sandbox = _exact_object(
         body["sandbox"],
         name="sandbox",

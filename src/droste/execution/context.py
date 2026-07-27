@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from ..capabilities import CapabilityAttemptEvent, CapabilityResult
 
+from ..exceptions import IterationLimitExceeded
 from ..protocols.llm_client import TokenUsage, UsageObservationBasis
 from .budget import Budget, BudgetLedger
 from .config import ExecutionConfig, SandboxLimits
@@ -183,6 +184,8 @@ class ExecutionContext:
 
         if isinstance(iteration, bool) or not isinstance(iteration, int) or iteration < 1:
             raise ValueError("execution iteration must be positive")
+        if iteration > self.budget.max_iterations:
+            raise IterationLimitExceeded(self.budget.max_iterations, iteration)
         self._iteration = iteration
 
     def observe_capability_attempt(self, event: CapabilityAttemptEvent) -> None:

@@ -236,10 +236,10 @@ flowchart LR
 
 **Runner inputs**
 
-- `protocol_version`: **required** on every request (currently `8`) — a
+- `protocol_version`: **required** on every request (currently `10`) — a
   missing or mismatched version gets a structured refusal, so hosts detect
   incompatibility instead of failing on a missing field.
-- `budget`: **required** complete six-field compute authorization object.
+- `budget`: **required** complete seven-field compute authorization object.
 - `root_endpoint` + `subcall_endpoint` + `token`: required for HTTP-backed
   runs.
 - `operation`: `run` (default) or `preflight`; preflight resolves and checks
@@ -293,6 +293,7 @@ RLMConfig(
         subcalls=50,
         depth=1,
         wall_ms=300_000,
+        max_iterations=30,
         root_output_tokens=4_096,
         subcall_output_tokens=2_048,
     ),

@@ -6,7 +6,7 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Mapping
 
 from ..capabilities import CapabilityManifest
-from ..exceptions import PolicyError, RLMError
+from ..exceptions import IterationLimitExceeded, PolicyError, RLMError
 from ..execution.budget import BudgetExhausted
 from ..execution.config import validate_subcall_concurrency
 from ..execution.context import ExecutionContext, create_execution_context
@@ -484,6 +484,7 @@ def _budget_prompt(cfg: "RLMConfig", subcalls: SubcallClient) -> str:
         "## Authorized compute\n"
         f"tokens={cfg.budget.tokens}; subcalls={cfg.budget.subcalls}; "
         f"depth={cfg.budget.depth}; wall_ms={cfg.budget.wall_ms}; "
+        f"max_iterations={cfg.budget.max_iterations}; "
         f"root_output_tokens_per_call={cfg.budget.root_output_tokens}; "
         f"subcall_output_tokens_per_call={cfg.budget.subcall_output_tokens}\n"
         f"client_reported_subcall_output_limit={rendered_limit}\n"
@@ -790,7 +791,7 @@ def run_rlm(
         error: RLMError | None = None
         answer_metadata: dict[str, Any] = {}
         scaffold_manifest: ScaffoldManifest | None = resolved_scaffold.scaffold_manifest
-        terminal_budget_handoff = False
+        terminal_handoff = False
         finalization_base_messages: list[dict[str, str]] = []
         finalization_base_code = ""
 
@@ -856,8 +857,22 @@ def run_rlm(
             }
         )
         while not answer.get("ready"):
-            iterations += 1
-            context.begin_iteration(iterations)
+            next_iteration = iterations + 1
+            try:
+                context.begin_iteration(next_iteration)
+            except IterationLimitExceeded as exc:
+                error = RLMError(
+                    type="IterationLimitExceeded",
+                    message=str(exc),
+                    details={
+                        "reason": "iteration_limit_reached",
+                        "limit": exc.limit,
+                        "attempted": exc.attempted,
+                    },
+                )
+                terminal_handoff = True
+                break
+            iterations = next_iteration
             context.emit_event(
                 iteration_start_event(iterations, context.ledger.snapshot().remaining.tokens)
             )
@@ -1015,7 +1030,7 @@ def run_rlm(
                 terminal_error = _terminal_semantic_budget_error(semantic_evidence, context)
                 if terminal_error is not None:
                     error = terminal_error
-                    terminal_budget_handoff = True
+                    terminal_handoff = True
                     break
                 continue
 
@@ -1032,7 +1047,7 @@ def run_rlm(
             if terminal_error is not None:
                 trajectory.append(failed_record)
                 error = terminal_error
-                terminal_budget_handoff = True
+                terminal_handoff = True
                 break
 
             context.emit_progress(f"Iteration {iterations}: Retrying with error feedback...")
@@ -1132,7 +1147,7 @@ def run_rlm(
             terminal_error = _terminal_semantic_budget_error(semantic_evidence, context)
             if terminal_error is not None:
                 error = terminal_error
-                terminal_budget_handoff = True
+                terminal_handoff = True
                 break
 
         # A fail-closed budget handoff can strand useful values in the
@@ -1141,12 +1156,13 @@ def run_rlm(
         # There is deliberately no missing-code or execution repair, and every
         # model-visible subcall callable (including saved aliases) is revoked
         # before the code runs.
-        if terminal_budget_handoff:
+        if terminal_handoff:
             subcall_gate.block()
 
         if (
-            terminal_budget_handoff
+            terminal_handoff
             and error is not None
+            and error.type != "IterationLimitExceeded"
             and not str(answer.get("content") or "").strip()
         ):
             context.emit_progress(
@@ -1251,7 +1267,7 @@ def run_rlm(
         recovered_error: RLMError | None = None
         if (
             not answer.get("ready")
-            and terminal_budget_handoff
+            and terminal_handoff
             and trajectory
             and _has_extractable_work(answer, has_successful_step)
         ):
