@@ -54,6 +54,8 @@ def test_parse_flags_and_positionals():
             "2",
             "--budget-wall-ms",
             "9000",
+            "--max-iterations",
+            "4",
             "--root-output-tokens",
             "1024",
             "--json",
@@ -70,8 +72,9 @@ def test_parse_flags_and_positionals():
         args.budget_subcalls,
         args.budget_depth,
         args.budget_wall_ms,
+        args.max_iterations,
         args.root_output_tokens,
-    ) == (3000, 7, 2, 9000, 1024)
+    ) == (3000, 7, 2, 9000, 4, 1024)
     assert args.json and args.verbose and args.quiet
 
 
@@ -82,6 +85,7 @@ def test_parse_defaults():
     assert args.budget_subcalls == 50
     assert args.budget_depth == 1
     assert args.budget_wall_ms == 300_000
+    assert args.max_iterations == 30
     assert args.root_output_tokens == 4096
     assert args.max_bytes == 50_000_000
     assert args.max_file_bytes == 2_000_000
@@ -487,6 +491,14 @@ def test_token_budget_below_one_is_usage_error(tmp_path, capsys):
     code = main([str(f), "q", "--model", "m", "--budget-tokens", "0"])
     assert code == 2
     assert "must be positive" in capsys.readouterr().err
+
+
+def test_iteration_limit_below_one_is_usage_error(tmp_path, capsys):
+    f = tmp_path / "a.txt"
+    f.write_text("hi")
+    code = main([str(f), "q", "--model", "m", "--max-iterations", "0"])
+    assert code == 2
+    assert "--max-iterations must be positive" in capsys.readouterr().err
 
 
 def test_bad_byte_budgets_are_usage_errors(tmp_path, capsys):

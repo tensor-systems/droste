@@ -4,7 +4,7 @@ const mode = Deno.args[0];
 const channel = eventChannelFromEnvironment();
 const fixture = await Deno.readTextFile(
   new URL(
-    "../src/droste/testing/fixtures/trace-v5-lifecycle.ndjson",
+    "../src/droste/testing/fixtures/trace-v6-lifecycle.ndjson",
     import.meta.url,
   ),
 );

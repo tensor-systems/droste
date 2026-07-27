@@ -1,4 +1,4 @@
-# Trace ABI v5
+# Trace ABI v6
 
 Droste exposes one append-only event stream and one policy-resolved terminal
 `RunRecord`. The engine creates values; it does not choose a database or write
@@ -15,7 +15,7 @@ does not change merely because a released fixture is added.
 
 ## Event envelope
 
-Every event is a strict v5 value with these fields:
+Every event is a strict v6 value with these fields:
 
 ```json
 {
@@ -23,7 +23,7 @@ Every event is a strict v5 value with these fields:
   "seq": 1,
   "timestamp": "2026-07-14T05:00:00Z",
   "type": "progress",
-  "version": 5,
+  "version": 6,
   "persistence_class": "transient",
   "parent_run_id": "optional-parent",
   "depth": 0,
@@ -56,7 +56,7 @@ always delivered once before `done`, even when it is not retained. `replay` is
 different: it is emitted only when the host explicitly selects replay
 retention.
 
-## Exhaustive v5 bodies
+## Exhaustive v6 bodies
 
 Every event body has a fixed top-level schema. Optional fields are marked `?`.
 Objects named below are JSON objects; all other types are primitive.
@@ -118,9 +118,11 @@ partial observation preserves its reported counters and marks the affected
 scope incomplete. The last progress snapshot reconciles with terminal `usage`
 unless a later boundary has no numeric usage observation.
 
-The budget body remains a discriminated event in Trace ABI v5. The terminal snapshot uses
+The budget body remains a discriminated event in Trace ABI v6. The terminal snapshot uses
 `kind="snapshot"`, `source="budget_ledger"`, and `configured`, `consumed`,
-and `remaining` objects. The ledger may emit any number of
+and `remaining` objects. The configured object includes the structural
+`max_iterations` ceiling; terminal `iterations` records how many iterations
+actually began. The ledger may emit any number of
 `kind="mutation"` values with `action` (`reserve`, `commit`, `refund`, or
 `exhaust`), `resource`, non-negative `amount`, and optional `call_id`.
 Consumers must not assume exactly one mutation.
@@ -208,14 +210,14 @@ and sdist. Python consumers load them through package resources:
 
 ```python
 from droste.testing import (
-    runner_v9_refusal_ndjson,
-    trace_v5_execution_ndjson,
-    trace_v5_lifecycle_ndjson,
+    runner_v10_refusal_ndjson,
+    trace_v6_execution_ndjson,
+    trace_v6_lifecycle_ndjson,
 )
 
-execution_lines = trace_v5_execution_ndjson().splitlines()
-event_lines = trace_v5_lifecycle_ndjson().splitlines()
-pre_admission_refusal = runner_v9_refusal_ndjson()
+execution_lines = trace_v6_execution_ndjson().splitlines()
+event_lines = trace_v6_lifecycle_ndjson().splitlines()
+pre_admission_refusal = runner_v10_refusal_ndjson()
 ```
 
 The compact execution NDJSON contains a two-iteration root trace plus a

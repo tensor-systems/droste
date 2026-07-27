@@ -85,6 +85,36 @@ function validStringObject(value: unknown, fields: readonly string[]): boolean {
     fields.every((field) => typeof value[field] === "string");
 }
 
+function validBudgetVector(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  const positive = [
+    "tokens",
+    "wall_ms",
+    "max_iterations",
+    "root_output_tokens",
+    "subcall_output_tokens",
+  ];
+  const nonNegative = ["subcalls", "depth"];
+  return exactBody(value, [...positive, ...nonNegative]) &&
+    positive.every((field) =>
+      isInteger(value[field]) && Number(value[field]) > 0
+    ) &&
+    nonNegative.every((field) =>
+      isInteger(value[field]) && Number(value[field]) >= 0
+    ) &&
+    Number(value.root_output_tokens) <= Number(value.tokens) &&
+    Number(value.subcall_output_tokens) <= Number(value.tokens);
+}
+
+function validBudgetRequest(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  const fields = ["tokens", "subcalls", "wall_ms", "depth"];
+  return exactBody(value, fields) &&
+    fields.every((field) =>
+      isInteger(value[field]) && Number(value[field]) >= 0
+    );
+}
+
 function validUsageBreakdown(value: unknown): boolean {
   if (!isObject(value)) return false;
   const integerFields = [
@@ -295,8 +325,9 @@ function validBody(type: string, body: Record<string, unknown>): boolean {
           "consumed",
           "remaining",
         ]) &&
-          isObject(body.configured) && isObject(body.consumed) &&
-          isObject(body.remaining)
+          validBudgetVector(body.configured) &&
+          validBudgetRequest(body.consumed) &&
+          validBudgetRequest(body.remaining)
         : body.kind === "mutation" &&
           exactBody(body, ["kind", "source", "action", "resource", "amount"], [
             "call_id",
@@ -378,7 +409,7 @@ export function isRlmEvent(line: string): boolean {
         Number.isInteger(o.seq) && o.seq > 0 &&
         typeof o.timestamp === "string" &&
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(o.timestamp) &&
-        o.version === 5 &&
+        o.version === 6 &&
         o.persistence_class === PERSISTENCE_BY_TYPE[o.type] &&
         Number.isInteger(o.depth) && o.depth >= 0 &&
         (o.depth === 0

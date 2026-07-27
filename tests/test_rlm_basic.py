@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from droste import ReadyMetadataValidatorError, RLMConfig, run_rlm
+from droste import Budget, ReadyMetadataValidatorError, RLMConfig, run_rlm
 from droste.loop.step import copy_answer_metadata
 from droste.protocols.llm_client import TokenUsage
 from droste.testing import MockEnvironment, MockLLMClient, MockResponse, MockSubcallClient
@@ -56,6 +56,52 @@ def test_non_contract_plain_response_is_returned_as_answer():
     assert result.answer == response
     assert result.ready is False
     assert result.trajectory == []
+
+
+def test_iteration_limit_extracts_without_starting_an_unauthorized_iteration():
+    client = MockLLMClient(
+        responses=[
+            MockResponse(
+                text="```python\nanswer['content'] = 'supported draft'\n```",
+                usage=TokenUsage(
+                    prompt_tokens=1,
+                    completion_tokens=1,
+                    total_tokens=2,
+                    exact=True,
+                ),
+            ),
+            MockResponse(
+                text="supported final answer",
+                usage=TokenUsage(
+                    prompt_tokens=1,
+                    completion_tokens=1,
+                    total_tokens=2,
+                    exact=True,
+                ),
+            ),
+        ]
+    )
+
+    result = run_rlm(
+        question="test",
+        environment=MockEnvironment(),
+        root_llm=client,
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(budget=Budget(max_iterations=1)),
+    )
+
+    assert result.iterations == 1
+    assert result.extracted is True
+    assert result.answer == "supported final answer"
+    assert result.error is None
+    assert result.recovered_error is not None
+    assert result.recovered_error.type == "IterationLimitExceeded"
+    assert result.recovered_error.details == {
+        "reason": "iteration_limit_reached",
+        "limit": 1,
+        "attempted": 2,
+    }
+    assert len(result.trajectory) == 1
 
 
 def test_run_rlm_preserves_confirmed_json_answer_metadata():

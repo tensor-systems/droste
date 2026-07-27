@@ -8,6 +8,7 @@ Budget(
     subcalls=50,
     depth=1,
     wall_ms=300_000,
+    max_iterations=30,
     root_output_tokens=4_096,
     subcall_output_tokens=2_048,
 )
@@ -30,6 +31,12 @@ Provider transports do not enforce budgets. They issue requests and report
 mechanism usage. The capability broker is the admission/finalization boundary,
 so handler errors, invalid results, annotator errors, and process-control exits
 all settle the reservation exactly once.
+
+The RLM iteration ceiling is structural rather than reservable. The execution
+context checks it before publishing an iteration or issuing that iteration's
+root request. Reaching it produces `IterationLimitExceeded`, never
+`BudgetExhausted`, so non-convergence remains distinguishable from spend
+exhaustion. Completed work may still enter the one bounded extraction pass.
 
 Trusted handlers receive a frozen `CapabilityExecutionContext`. Its reservation
 is identified only by the call's `call_id`; providers never receive the ledger.
@@ -63,7 +70,7 @@ reservations fails loudly.
 
 ## Trace facts
 
-Every mutation is a durable Trace ABI v5 `budget` event from
+Every mutation is a durable Trace ABI v6 `budget` event from
 `source="budget_ledger"`: `reserve`, `commit`, `refund`, or `exhaust`.
 Mutation events carry `resource`, non-negative `amount`, and `call_id`. The
 terminal snapshot records the configured, consumed, and remaining vectors.
@@ -72,7 +79,6 @@ become a second accounting authority.
 
 ## Runner and CLI
 
-Runner protocol v4 and later require an exact `budget` object with all six fields.
-Missing and unknown fields fail before work. The CLI resolves its six budget
-flags into the same value. There are no legacy `max_*` aliases or translation
-rules.
+Runner protocol v10 requires an exact `budget` object with all seven fields.
+Missing and unknown fields fail before work. The CLI resolves its seven budget
+flags into the same value. There are no legacy aliases or translation rules.

@@ -455,7 +455,7 @@ function writeRelayEvent(obj: Record<string, unknown>): void {
     depth: 1,
     seq: ++relaySeq,
     timestamp: new Date().toISOString(),
-    version: 5,
+    version: 6,
     persistence_class: "transient",
   };
   eventChannel.writeFrame(JSON.stringify(event));

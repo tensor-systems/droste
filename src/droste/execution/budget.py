@@ -19,6 +19,7 @@ DEFAULT_TOKEN_BUDGET = 500_000
 DEFAULT_SUBCALL_BUDGET = 50
 DEFAULT_DEPTH_BUDGET = 1
 DEFAULT_WALL_TIME_MS = 300_000
+DEFAULT_MAX_ITERATIONS = 30
 DEFAULT_ROOT_OUTPUT_TOKENS = 4_096
 DEFAULT_SUBCALL_OUTPUT_TOKENS = 2_048
 
@@ -43,15 +44,16 @@ class Budget:
     """One fully resolved caller authorization vector.
 
     ``tokens`` and ``subcalls`` are consumable. ``wall_ms`` defines one shared
-    run deadline, and ``depth`` is a nesting ceiling. The two output fields are
-    per-request ceilings and remain separate facts within the same
-    authorization value.
+    run deadline; ``depth`` and ``max_iterations`` are structural ceilings.
+    The two output fields are per-request ceilings and remain separate facts
+    within the same authorization value.
     """
 
     tokens: int = DEFAULT_TOKEN_BUDGET
     subcalls: int = DEFAULT_SUBCALL_BUDGET
     depth: int = DEFAULT_DEPTH_BUDGET
     wall_ms: int = DEFAULT_WALL_TIME_MS
+    max_iterations: int = DEFAULT_MAX_ITERATIONS
     root_output_tokens: int = DEFAULT_ROOT_OUTPUT_TOKENS
     subcall_output_tokens: int = DEFAULT_SUBCALL_OUTPUT_TOKENS
 
@@ -60,6 +62,7 @@ class Budget:
         _non_negative_int(self.subcalls, "budget.subcalls")
         _non_negative_int(self.depth, "budget.depth")
         _positive_int(self.wall_ms, "budget.wall_ms")
+        _positive_int(self.max_iterations, "budget.max_iterations")
         _positive_int(self.root_output_tokens, "budget.root_output_tokens")
         _positive_int(self.subcall_output_tokens, "budget.subcall_output_tokens")
         if self.root_output_tokens > self.tokens:
@@ -73,6 +76,7 @@ class Budget:
             "subcalls": self.subcalls,
             "depth": self.depth,
             "wall_ms": self.wall_ms,
+            "max_iterations": self.max_iterations,
             "root_output_tokens": self.root_output_tokens,
             "subcall_output_tokens": self.subcall_output_tokens,
         }
@@ -84,6 +88,7 @@ class Budget:
             "subcalls",
             "depth",
             "wall_ms",
+            "max_iterations",
             "root_output_tokens",
             "subcall_output_tokens",
         }

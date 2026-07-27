@@ -27,6 +27,17 @@ class PolicyError(SandboxError):
     pass
 
 
+class IterationLimitExceeded(RuntimeError):
+    """Raised before an RLM loop can exceed its authorized iteration count."""
+
+    def __init__(self, limit: int, attempted: int) -> None:
+        self.limit = limit
+        self.attempted = attempted
+        super().__init__(
+            f"iteration limit reached after {limit} iteration(s); refused iteration {attempted}"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class BatchItemErrorDetails:
     """Allowlisted, payload-free metadata for one failed batch item.

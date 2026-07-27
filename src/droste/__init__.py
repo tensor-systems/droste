@@ -48,11 +48,13 @@ from .environments import EnvironmentConfig, create_environment, create_environm
 from .exceptions import (
     BatchItemError,
     BatchItemErrorDetails,
+    IterationLimitExceeded,
     PolicyError,
     RLMError,
 )
 from .execution.budget import (
     DEFAULT_DEPTH_BUDGET,
+    DEFAULT_MAX_ITERATIONS,
     DEFAULT_ROOT_OUTPUT_TOKENS,
     DEFAULT_SUBCALL_BUDGET,
     DEFAULT_SUBCALL_OUTPUT_TOKENS,
@@ -167,6 +169,7 @@ __all__ = [
     "DEFAULT_TOKEN_BUDGET",
     "DEFAULT_SUBCALL_BUDGET",
     "DEFAULT_DEPTH_BUDGET",
+    "DEFAULT_MAX_ITERATIONS",
     "DEFAULT_WALL_TIME_MS",
     "DEFAULT_ROOT_OUTPUT_TOKENS",
     "DEFAULT_SUBCALL_OUTPUT_TOKENS",
@@ -201,6 +204,7 @@ __all__ = [
     "BatchItemError",
     "BatchItemErrorDetails",
     "PolicyError",
+    "IterationLimitExceeded",
     "PolicyHints",
     "RLMEnvironment",
     "EnvCapabilities",

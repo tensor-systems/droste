@@ -13,7 +13,20 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.20.1)
 
-No changes yet.
+### RLM runs have an explicit iteration ceiling
+
+`Budget.max_iterations` is now a required positive integer and defaults to
+30. The engine refuses the first iteration beyond that ceiling before issuing
+another root request. An unconfirmed run terminates with the distinct
+`IterationLimitExceeded` type and may use the existing bounded extraction pass
+when completed work is available.
+
+Runner protocol v10 requires `"max_iterations"` in the exact request budget.
+Scaffold manifest v3 and Trace ABI v6 include the field in their configured
+budget. Hosts must send protocol 10, accept manifest schema 3 and Trace ABI 6,
+and update to the `trace_v6_*` and `runner_v10_*` conformance fixtures.
+Manifest schemas 1 and 2 remain readable and resolve their historical missing
+field to the current default of 30; new manifests always use schema 3.
 
 ## 0.20.1 (from 0.20.0)
 
