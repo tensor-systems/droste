@@ -79,6 +79,11 @@ ReadyMetadataValidator: TypeAlias = Callable[
     Sequence[str],
 ]
 
+# Resolves the opaque value carried by each answer-state checkpoint. The engine
+# never inspects what this returns and never schema-checks it: hosts use it to
+# ferry their own answer-critical state (whatever that is) alongside the draft.
+CheckpointPayloadProvider: TypeAlias = Callable[[], Any]
+
 
 class ReadyMetadataValidatorError(RuntimeError):
     """Trusted host validator failed instead of returning repairable violations."""
@@ -108,6 +113,11 @@ class RLMConfig:
     on_run_record: RunRecordCallback | None = None
     rollout: RolloutConfiguration = field(default_factory=RolloutConfiguration)
     checkpoint_requirements: ScaffoldRequirements | None = None
+    # Called immediately before each answer-state checkpoint. Returns a
+    # JSON-serializable value, or None for "nothing to add". A provider that
+    # raises is reported and the checkpoint carries a null payload: a
+    # checkpoint can never fail a run.
+    checkpoint_payload_provider: CheckpointPayloadProvider | None = None
 
 
 @dataclass

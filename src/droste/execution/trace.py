@@ -17,7 +17,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
-TRACE_ABI_VERSION = 6
+TRACE_ABI_VERSION = 7
 
 
 class PersistenceClass(str, Enum):
@@ -41,6 +41,7 @@ CONFIGURABLE_EVENT_TYPES = frozenset(
         "repair",
         "result",
         "replay",
+        "checkpoint",
     }
 )
 TRANSIENT_EVENT_TYPES = frozenset({"startup", "progress", "reasoning_delta", "usage_progress"})
@@ -57,7 +58,7 @@ _NONE_TYPE = type(None)
 EventFieldType = type | tuple[type, ...]
 EventBodySchema = tuple[Mapping[str, EventFieldType], Mapping[str, EventFieldType]]
 
-# One exhaustive v6 table. The first mapping is required fields; the second is
+# One exhaustive v7 table. The first mapping is required fields; the second is
 # optional fields. Nested broker/result values keep their own schema authority.
 EVENT_BODY_SCHEMAS: Mapping[str, EventBodySchema] = MappingProxyType(
     {
@@ -113,6 +114,19 @@ EVENT_BODY_SCHEMAS: Mapping[str, EventBodySchema] = MappingProxyType(
         ),
         "result": ({"result": Mapping}, {}),
         "replay": ({"result": Mapping}, {}),
+        "checkpoint": (
+            {
+                "iteration": int,
+                "checkpoint_seq": int,
+                "draft": str,
+                "draft_chars": int,
+                "ready": bool,
+                # Opaque host value. The envelope pins the container only; the
+                # contents are never inspected and never schema-checked.
+                "payload": (Mapping, _NONE_TYPE),
+            },
+            {},
+        ),
         "usage_progress": (
             {
                 "boundary": str,
@@ -184,11 +198,11 @@ def _matches_field_type(value: Any, expected: EventFieldType) -> bool:
 
 
 def validate_event_body(event_type: str, body: Mapping[str, Any]) -> None:
-    """Validate one body against the exhaustive Trace ABI v6 table."""
+    """Validate one body against the exhaustive Trace ABI v7 table."""
     try:
         required, optional = EVENT_BODY_SCHEMAS[event_type]
     except KeyError as exc:
-        raise ValueError(f"event type {event_type!r} has no v5 body schema") from exc
+        raise ValueError(f"event type {event_type!r} has no v7 body schema") from exc
     missing = required.keys() - body.keys()
     if missing:
         raise ValueError(f"event {event_type!r} missing body fields: " + ", ".join(sorted(missing)))
@@ -231,9 +245,9 @@ def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
     if event_type == "subcall":
         phase = body["phase"]
         if phase not in {"start", "progress", "completion", "failure"}:
-            raise ValueError("subcall phase is not recognized by Trace ABI v6")
+            raise ValueError("subcall phase is not recognized by Trace ABI v7")
         if body["operation"] not in {"llm_query", "llm_batch", "llm_batch_with_errors"}:
-            raise ValueError("subcall operation is not recognized by Trace ABI v6")
+            raise ValueError("subcall operation is not recognized by Trace ABI v7")
         if not body["call_id"]:
             raise ValueError("subcall call_id must not be empty")
         if body["iteration"] < 1:
@@ -292,9 +306,9 @@ def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
             raise ValueError("subcall batch_count must be non-negative")
     elif event_type == "repair":
         if body["phase"] not in {"start", "completion", "failure"}:
-            raise ValueError("repair phase is not recognized by Trace ABI v6")
+            raise ValueError("repair phase is not recognized by Trace ABI v7")
         if body["kind"] not in {"missing_code", "execution_error", "terminal"}:
-            raise ValueError("repair kind is not recognized by Trace ABI v6")
+            raise ValueError("repair kind is not recognized by Trace ABI v7")
         if body["iteration"] < 1:
             raise ValueError("repair iteration must be positive")
         error = body.get("error")
@@ -310,7 +324,7 @@ def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
             raise ValueError("repair start/completion cannot carry error")
     elif event_type == "extract":
         if body["phase"] not in {"start", "completion", "failure"}:
-            raise ValueError("extract phase is not recognized by Trace ABI v6")
+            raise ValueError("extract phase is not recognized by Trace ABI v7")
         if body["iteration"] < 1:
             raise ValueError("extract iteration must be positive")
         extract_error = body.get("extract_error")
@@ -324,6 +338,13 @@ def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
             )
         elif extract_error is not None:
             raise ValueError("extract start/completion cannot carry extract_error")
+    elif event_type == "checkpoint":
+        if body["iteration"] < 1:
+            raise ValueError("checkpoint iteration must be positive")
+        if body["checkpoint_seq"] < 1:
+            raise ValueError("checkpoint checkpoint_seq must be positive")
+        if body["draft_chars"] != len(body["draft"]):
+            raise ValueError("checkpoint draft_chars must equal the draft length")
     elif event_type in {"usage", "usage_progress"}:
         if event_type == "usage_progress" and body["boundary"] not in {"root", "subcall"}:
             raise ValueError("usage_progress boundary must be 'root' or 'subcall'")
@@ -408,7 +429,7 @@ def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
             if not required <= body.keys():
                 raise ValueError("budget mutation requires action, resource, and amount")
             if body["action"] not in {"reserve", "commit", "refund", "exhaust"}:
-                raise ValueError("budget mutation action is not recognized by Trace ABI v6")
+                raise ValueError("budget mutation action is not recognized by Trace ABI v7")
             if body["amount"] < 0:
                 raise ValueError("budget mutation amount must be non-negative")
         else:
@@ -465,10 +486,10 @@ def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
             ScaffoldManifest.from_dict(scaffold_manifest)
     elif event_type == "policy":
         if body["outcome"] not in {"passed", "violated", "not_evaluated", "not_enforced"}:
-            raise ValueError("policy outcome is not recognized by Trace ABI v6")
+            raise ValueError("policy outcome is not recognized by Trace ABI v7")
     elif event_type == "done":
         if body["status"] not in {"success", "error", "cancelled"}:
-            raise ValueError("done status is not recognized by Trace ABI v6")
+            raise ValueError("done status is not recognized by Trace ABI v7")
         if body["iterations"] < 0:
             raise ValueError("done iterations must be non-negative")
         stdout_chars = body.get("stdout_chars")
@@ -619,7 +640,7 @@ _ENVELOPE_KEYS = frozenset(
 
 
 def parse_event(value: RunEvent | Mapping[str, Any]) -> RunEvent:
-    """The one strict parser for Trace ABI v6 event values."""
+    """The one strict parser for Trace ABI v7 event values."""
     if isinstance(value, RunEvent):
         return value
     required = {
@@ -860,6 +881,7 @@ class TraceRecorder:
     _events: list[RunEvent] = field(default_factory=list, init=False, repr=False)
     _terminal_record: RunRecord | None = field(default=None, init=False, repr=False)
     _started_monotonic: float | None = field(default=None, init=False, repr=False)
+    _last_checkpoint_seq: int = field(default=0, init=False, repr=False)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -921,6 +943,14 @@ class TraceRecorder:
             persistence_class=persistence_class_for(event_type),
             body=body,
         )
+        if event_type == "checkpoint":
+            # ``checkpoint_seq`` is the emitter's answer-state ordinal, so the
+            # recorder — the one authority for a run_id — pins it strictly
+            # increasing the way it pins ``seq``.
+            checkpoint_seq = value.body["checkpoint_seq"]
+            if checkpoint_seq <= self._last_checkpoint_seq:
+                raise ValueError("checkpoint_seq must strictly increase within a run")
+            self._last_checkpoint_seq = checkpoint_seq
         self._events.append(value)
         return value
 

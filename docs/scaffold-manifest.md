@@ -24,7 +24,7 @@ inference facts.
   "schema_version": 3,
   "engine": {"version": "0.10.6", "source_revision": null},
   "abis": {
-    "kernel": 1, "capability": 1, "trace": 6,
+    "kernel": 1, "capability": 1, "trace": 7,
     "prompt_pack": 2, "provider": 4, "runner": 10
   },
   "prompt_pack": {

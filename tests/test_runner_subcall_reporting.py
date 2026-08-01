@@ -253,7 +253,7 @@ def test_run_reports_actual_subcall_count(monkeypatch, capfd) -> None:
         "seed": 17,
     }
     assert manifest["abis"]["runner"] == 10
-    assert manifest["abis"]["trace"] == 6
+    assert manifest["abis"]["trace"] == 7
     assert manifest["engine"]["source_revision"] == "commit-a"
     assert manifest["id"].startswith("sha256:")
     assert "trajectory" not in response
@@ -295,7 +295,7 @@ def test_run_reports_actual_subcall_count(monkeypatch, capfd) -> None:
     ]
     assert len({event["call_id"] for event in live_subcalls}) == 1
     assert live_subcalls[1]["checkpoint"] == {"tokens": 5, "subcalls": 1}
-    assert all(event["iteration"] == 1 and event["version"] == 6 for event in live_subcalls)
+    assert all(event["iteration"] == 1 and event["version"] == 7 for event in live_subcalls)
     assert capability["outcome"]["capability_id"]["operation"] == "llm_query"
     assert "params" not in capability["outcome"]
     assert "result" not in capability["outcome"]

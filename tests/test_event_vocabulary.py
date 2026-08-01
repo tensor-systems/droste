@@ -118,6 +118,7 @@ def test_run_rlm_event_stream_through_attached_sink() -> None:
         "progress",
         "code",
         "output",
+        "checkpoint",
         "usage",
         "budget",
         "policy",

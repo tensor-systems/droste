@@ -1,6 +1,10 @@
 from .code_extractor import extract_code_block
 from .rlm import RLMConfig, RLMPreflight, RLMResult, preflight_rlm, run_rlm
-from .step import ReadyMetadataValidator, ReadyMetadataValidatorError
+from .step import (
+    CheckpointPayloadProvider,
+    ReadyMetadataValidator,
+    ReadyMetadataValidatorError,
+)
 from .trajectory import IterationRecord
 
 __all__ = [
@@ -11,6 +15,7 @@ __all__ = [
     "RLMResult",
     "extract_code_block",
     "IterationRecord",
+    "CheckpointPayloadProvider",
     "ReadyMetadataValidator",
     "ReadyMetadataValidatorError",
 ]

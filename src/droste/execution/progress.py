@@ -45,6 +45,7 @@ EVENT_TYPES = frozenset(
         "extract",  # discriminated terminal extraction lifecycle facts
         "result",  # canonical unary-equivalent final result (without trajectory)
         "replay",  # configurable replay input/output details
+        "checkpoint",  # {checkpoint_seq, draft, draft_chars, ready, payload} answer state
         "usage_progress",  # transient cumulative usage at a settled model boundary
         "usage",  # durable resolved token/call accounting
         "budget",  # durable configured/consumed budget facts
@@ -145,6 +146,29 @@ def extract_event(
             raise ValueError("extract errors require both error_type and message")
         value["extract_error"] = {"type": error_type, "message": message}
     return value
+
+
+def checkpoint_event(
+    iteration: int,
+    checkpoint_seq: int,
+    draft: str,
+    *,
+    ready: bool,
+    payload: Any = None,
+) -> dict[str, Any]:
+    """Build one answer-state checkpoint.
+
+    ``payload`` is an opaque host value: the engine carries it across without
+    ever inspecting it, exactly as the relay carries adapter ``meta``."""
+    return {
+        "type": "checkpoint",
+        "iteration": iteration,
+        "checkpoint_seq": checkpoint_seq,
+        "draft": draft,
+        "draft_chars": len(draft),
+        "ready": ready,
+        "payload": payload,
+    }
 
 
 # --- sinks -------------------------------------------------------------------

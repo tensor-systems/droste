@@ -18,6 +18,7 @@ from ..execution.manifest import (
 )
 from ..execution.progress import (
     EventCallback,
+    checkpoint_event,
     extract_event,
     iteration_start_event,
     llm_response_event,
@@ -137,6 +138,30 @@ def _warn_environment_cleanup(cleanup_error: BaseException) -> None:
         RuntimeWarning,
         stacklevel=3,
     )
+
+
+def _warn_checkpoint(reason: str, error: BaseException) -> None:
+    """Report a degraded checkpoint. A checkpoint never fails a run."""
+
+    detail = " ".join(str(error).split())[:1_000]
+    warnings.warn(
+        f"RLM checkpoint {reason}: {type(error).__name__}: {detail}",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
+def _checkpoint_payload(cfg: "RLMConfig") -> Any:
+    """Resolve the host's opaque checkpoint payload, never inspecting it."""
+
+    provider = cfg.checkpoint_payload_provider
+    if provider is None:
+        return None
+    try:
+        return provider()
+    except Exception as provider_error:
+        _warn_checkpoint("payload provider failed", provider_error)
+        return None
 
 
 ProgressCallback = Any
@@ -819,6 +844,8 @@ def run_rlm(
         transcript_window: list[TranscriptWindowEntry] = []
         previous_draft_snapshot = str(answer.get("content", ""))
         code = ""
+        checkpoint_seq = 0
+        checkpoint_draft = ""
 
         def step_kwargs() -> dict[str, Any]:
             return dict(
@@ -833,6 +860,32 @@ def run_rlm(
                 semantic_evidence=semantic_evidence,
                 ready_metadata_validator=ready_metadata_validator,
             )
+
+        def emit_checkpoint() -> None:
+            """Publish answer state so a killed run stays renderable by a host.
+
+            A checkpoint is worth emitting when the draft moved or the host has
+            something of its own to add; neither the host's provider nor the
+            emission itself may fail the run."""
+            nonlocal checkpoint_seq, checkpoint_draft
+            draft = str(answer.get("content") or "")
+            payload = _checkpoint_payload(cfg)
+            if draft == checkpoint_draft and payload is None:
+                return
+            checkpoint_seq += 1
+            checkpoint_draft = draft
+            try:
+                context.emit_event(
+                    checkpoint_event(
+                        iterations,
+                        checkpoint_seq,
+                        draft,
+                        ready=bool(answer.get("ready")),
+                        payload=payload,
+                    )
+                )
+            except Exception as checkpoint_error:
+                _warn_checkpoint("dropped", checkpoint_error)
 
         def early_result(run_error: RLMError | None) -> RLMResult:
             return finalize(
@@ -1043,6 +1096,7 @@ def run_rlm(
             last_execution_status = outcome.execution_status
             error = outcome.error
             answer_metadata = outcome.answer_metadata
+            emit_checkpoint()
             if outcome.error is None:
                 has_successful_step = True
                 trajectory.append(
@@ -1136,6 +1190,7 @@ def run_rlm(
                 last_execution_status = outcome.execution_status
                 error = outcome.error
                 answer_metadata = outcome.answer_metadata
+                emit_checkpoint()
                 if outcome.error is None:
                     code = repaired_code
                     has_successful_step = True

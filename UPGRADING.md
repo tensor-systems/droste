@@ -13,6 +13,30 @@ consumers, and Pyodide-substrate integrations staging the Deno relay.
 
 ## Unreleased (post-0.21.1)
 
+### Trace ABI v7 publishes answer-state checkpoints
+
+The new configurable `checkpoint` event carries the draft the engine currently
+holds — `checkpoint_seq`, `draft`, `draft_chars`, `ready`, and an opaque
+`payload` — after every executed step whose draft moved. A host that loses the
+process (a watchdog kill, a crashed substrate) can render the last checkpoint
+instead of nothing. It is retention-gated like every other content-bearing
+event, so it reaches a terminal record only when named in
+`TraceRetentionPolicy.retain`.
+
+`RLMConfig.checkpoint_payload_provider` is the optional callable that fills
+`payload`. It returns any JSON object or `None`; the engine never inspects the
+value and never schema-checks it. A provider that raises is reported through a
+`RuntimeWarning` and the checkpoint carries `payload: null` — a checkpoint can
+never fail a run.
+
+Hosts must accept Trace ABI 7 and update to the `trace_v7_*` conformance
+fixtures (`droste.testing.trace_v7_lifecycle_ndjson` /
+`trace_v7_execution_ndjson`, backing `trace-v7-lifecycle.ndjson` /
+`trace-v7-execution.ndjson`). Scaffold manifests report `abis.trace: 7`, so
+every manifest id changes; pinned ids must be re-derived. Strict v6 readers
+reject the new event and the new version, so this is an atomic consumer
+migration.
+
 ## 0.21.1 (from 0.21.0)
 
 ### Streamed Responses preserve their terminal stop reason
