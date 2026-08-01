@@ -137,3 +137,40 @@ def test_token_exhaustion_still_ends_the_run_fatally():
     assert result.error.type == "BudgetExhausted"
     assert result.error.details["resource"] == "tokens"
     assert result.extracted is False
+    # Fatal, so nothing is "recovered" — the distinction Cozy's chip relies on.
+    assert result.recovered_error is None
+
+
+def test_recovered_budget_exhaustion_is_always_the_wall_clock():
+    """Pins a cross-repo invariant. Cozy renders a recovered `BudgetExhausted`
+    as "ran out of time", which is only honest while the wall clock is the sole
+    budget resource that can reach a recoverable terminal handoff: token
+    exhaustion stays fatal (above) and semantic budgets surface as PolicyError.
+
+    If a future change lets another resource recover here, this fails — rather
+    than Cozy silently telling users the wrong thing about why their answer is
+    incomplete."""
+    responses = [
+        MockResponse(
+            text=(
+                "```python\n"
+                "import time\n"
+                "answer['content'] = 'partial finding'\n"
+                "time.sleep(0.05)\n"
+                "```"
+            ),
+            usage=_usage(),
+        ),
+        MockResponse(text="Best-effort synthesis.", usage=_usage()),
+    ]
+    result = run_rlm(
+        question="test",
+        environment=MockEnvironment(),
+        root_llm=MockLLMClient(responses=responses),
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(budget=Budget(wall_ms=20)),
+    )
+
+    assert result.recovered_error is not None
+    assert result.recovered_error.type == "BudgetExhausted"
+    assert result.recovered_error.details["resource"] == "wall_ms"
