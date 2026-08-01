@@ -543,6 +543,21 @@ def _has_extractable_work(answer: dict[str, Any], has_successful_step: bool) -> 
     return has_successful_step
 
 
+def _is_deadline_error(error: RLMError | None) -> bool:
+    """Whether a root failure is wall-clock deadline exhaustion.
+
+    Deadline exhaustion is a *time* verdict, not a correctness one: the work
+    already done is as trustworthy as it was a millisecond earlier. So it
+    routes to the terminal handoff and the extract fallback (like an exhausted
+    iteration budget) rather than ending the run through ``early_result``,
+    which would strand that work behind a fatal ``error`` every host discards.
+    """
+    if error is None or error.type != "BudgetExhausted":
+        return False
+    details = error.details
+    return isinstance(details, dict) and details.get("resource") == "wall_ms"
+
+
 def _terminal_semantic_budget_error(
     evidence: _StructuredBatchEvidence | None,
     context: ExecutionContext,
@@ -621,6 +636,11 @@ def _extract_final_answer(
             model=cfg.root_model or "",
             context=context,
             cache_anchors=None,
+            # This single call is the recovery for a terminal budget handoff,
+            # including deadline exhaustion. Reserving through the deadline
+            # would refuse it exactly when it is most needed, so the run would
+            # fall back to raw scraps. Token budget still binds.
+            deadline_exempt=True,
         )
         if root_error is not None:
             return "", root_error
@@ -935,6 +955,10 @@ def run_rlm(
 
             response, usage, root_error = call_live_root(messages)
             if root_error is not None:
+                if _is_deadline_error(root_error):
+                    error = root_error
+                    terminal_handoff = True
+                    break
                 return early_result(root_error)
             last_response = response
             context.emit_event(llm_response_event(iterations, response))
@@ -962,6 +986,10 @@ def run_rlm(
                                 message=root_error.message,
                             )
                         )
+                        if _is_deadline_error(root_error):
+                            error = root_error
+                            terminal_handoff = True
+                            break
                         return early_result(root_error)
                     last_response = repair_response
                     context.emit_event(llm_response_event(iterations, repair_response))
@@ -1085,6 +1113,10 @@ def run_rlm(
                     )
                 )
                 trajectory.append(failed_record)
+                if _is_deadline_error(root_error):
+                    error = root_error
+                    terminal_handoff = True
+                    break
                 return early_result(root_error)
             last_response = repair_response
             context.emit_event(llm_response_event(iterations, repair_response))
@@ -1163,6 +1195,7 @@ def run_rlm(
             terminal_handoff
             and error is not None
             and error.type != "IterationLimitExceeded"
+            and not _is_deadline_error(error)
             and not str(answer.get("content") or "").strip()
         ):
             context.emit_progress(

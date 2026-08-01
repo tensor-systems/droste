@@ -525,11 +525,19 @@ def call_root(
     context: ExecutionContext,
     cache_anchors: tuple[int, ...] | None = (0, -1),
     transcript_window: tuple[TranscriptWindowEntry, ...] = (),
+    deadline_exempt: bool = False,
 ) -> tuple[str, Any, RLMError | None]:
     """One root-LLM call with token accounting.
 
     Returns ``(response, usage, None)`` on success or ``("", None, error)`` —
     a root failure always ends the run, so the caller finalizes immediately.
+
+    ``deadline_exempt`` reserves without ``through_deadline``, so the call is
+    checked against tokens/subcalls/depth but not against the shared wall-clock
+    deadline. It exists for the single terminal extract pass: that pass is the
+    recovery *for* deadline exhaustion, so gating it on the deadline it is
+    recovering from would make the fallback unreachable. Token budget still
+    binds, and the caller must keep such calls to a bounded count.
     """
     outbound_messages, frontier = project_live_transcript(messages, transcript_window)
     call_id = "root:" + str(uuid4())
@@ -538,7 +546,7 @@ def call_root(
         tokens=input_estimate + context.budget.root_output_tokens,
     )
     try:
-        context.ledger.reserve(call_id, request, through_deadline=True)
+        context.ledger.reserve(call_id, request, through_deadline=not deadline_exempt)
     except BudgetExhausted as exc:
         return (
             "",
