@@ -11,6 +11,37 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
+## 0.23.0
+
+### Trace ABI v8 reports liveness during provider calls
+
+The new transient `heartbeat` event carries `elapsed_ms` and nothing else. It
+fires every 15 seconds while any provider call is outstanding, and stops when
+the call completes.
+
+It exists because a host cannot otherwise distinguish "blocked on the network"
+from "wedged in the interpreter" — both are silence — so no-progress watchdogs
+were killing healthy runs whose subcall simply took a while. Batch subcalls are
+the worst case: they post to `/responses/batch`, which the relay does not
+stream, so they emit no `reasoning_delta` either and go completely silent
+between start and completion however long they take.
+
+**Hosts running a no-progress watchdog should count `heartbeat` as progress.**
+If yours also ignores `reasoning_delta`, count that too — it already streamed
+during unary calls and is the same kind of signal.
+
+The heartbeat is emitted relay-side, deliberately. Pyodide runs on the relay's
+thread, so the timer cannot fire while generated code spins in WASM — which is
+exactly when a watchdog *should* fire. A heartbeat therefore never masks a
+genuine wedge; it only reports the healthy case.
+
+Being transient, it is never retained and never reaches a run record, whatever
+`TraceRetentionPolicy.retain` names.
+
+Hosts must accept Trace ABI 8 and update to the `trace_v8_*` conformance
+fixtures. `droste.testing` now exports `trace_v8_execution_ndjson` and
+`trace_v8_lifecycle_ndjson`; the `trace_v7_*` helpers are gone.
+
 ## 0.22.0
 
 ### Trace ABI v7 publishes answer-state checkpoints
