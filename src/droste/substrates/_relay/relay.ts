@@ -455,7 +455,7 @@ function writeRelayEvent(obj: Record<string, unknown>): void {
     depth: 1,
     seq: ++relaySeq,
     timestamp: new Date().toISOString(),
-    version: 7,
+    version: 8,
     persistence_class: "transient",
   };
   eventChannel.writeFrame(JSON.stringify(event));
@@ -552,6 +552,28 @@ function finishHTTPFailureAssociation(adapterRaised: boolean): number {
   return association.status;
 }
 
+// A provider call is the one place this process legitimately does nothing for
+// minutes: it is blocked on the network, not wedged. The host cannot tell those
+// apart from silence alone, and its no-progress watchdog was killing healthy
+// runs whose subcall simply took a while — batch calls especially, which do not
+// stream and so emit no `reasoning_delta` either.
+//
+// Emitting from here rather than from the engine is deliberate. Pyodide runs on
+// this same thread, so if generated code is spinning in WASM this timer cannot
+// fire and the watchdog still (correctly) sees a wedged process. It only ticks
+// while the event loop is free, which is exactly when the process is healthy.
+const HEARTBEAT_INTERVAL_MS = 15_000;
+
+function withProviderHeartbeat<T>(work: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  const timer = setInterval(() => {
+    emitEvent({ type: "heartbeat", elapsed_ms: Date.now() - startedAt });
+  }, HEARTBEAT_INTERVAL_MS);
+  // Never let liveness reporting hold the process open past its work.
+  if (typeof Deno !== "undefined" && Deno.unrefTimer) Deno.unrefTimer(timer);
+  return work().finally(() => clearInterval(timer));
+}
+
 py.globals.set(
   "host_fetch",
   async (m: string, u: string, h: string, b: string) => {
@@ -585,7 +607,11 @@ py.globals.set(
     if (wantsStream) {
       headers["Accept"] = 'application/x-ndjson; profile="responses-stream/v2"';
     }
-    const r = await fetch(u, { method: m, headers, body: b });
+    // The wait that matters: for a non-streamed call the server finishes
+    // before headers arrive, so this await IS the whole provider latency.
+    const r = await withProviderHeartbeat(() =>
+      fetch(u, { method: m, headers, body: b })
+    );
     // Exact runner callback JSON failures are protocol values for Python.
     // Every other HTTP error stays a thrown, bounded transport failure.
     if (!r.ok) {

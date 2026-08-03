@@ -1,4 +1,4 @@
-"""Answer-state checkpoints (Trace ABI v7).
+"""Answer-state checkpoints (Trace ABI v8).
 
 All answer-critical state used to live only in the loop's memory until the
 terminal result. A host that lost the process — a watchdog kill, a crashed
@@ -72,8 +72,8 @@ def _valid_body(**overrides: object) -> dict[str, object]:
 # --- Layer 1: the wire contract ----------------------------------------------
 
 
-def test_trace_abi_is_version_seven_and_knows_checkpoint() -> None:
-    assert TRACE_ABI_VERSION == 7
+def test_trace_abi_is_version_eight_and_knows_checkpoint() -> None:
+    assert TRACE_ABI_VERSION == 8
     assert "checkpoint" in EVENT_TYPES
 
 
@@ -167,7 +167,7 @@ def test_checkpoint_follows_each_executed_step_whose_draft_moved() -> None:
     assert [event["ready"] for event in checkpoints] == [False, True]
     assert [event["iteration"] for event in checkpoints] == [1, 2]
     assert all(event["payload"] is None for event in checkpoints)
-    assert all(event["version"] == 7 for event in checkpoints)
+    assert all(event["version"] == 8 for event in checkpoints)
     assert all(event["persistence_class"] == "configurable" for event in checkpoints)
 
 

@@ -17,7 +17,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
-TRACE_ABI_VERSION = 7
+TRACE_ABI_VERSION = 8
 
 
 class PersistenceClass(str, Enum):
@@ -44,7 +44,9 @@ CONFIGURABLE_EVENT_TYPES = frozenset(
         "checkpoint",
     }
 )
-TRANSIENT_EVENT_TYPES = frozenset({"startup", "progress", "reasoning_delta", "usage_progress"})
+TRANSIENT_EVENT_TYPES = frozenset(
+    {"startup", "progress", "reasoning_delta", "usage_progress", "heartbeat"}
+)
 
 PERSISTENCE_BY_TYPE: Mapping[str, PersistenceClass] = MappingProxyType(
     {
@@ -90,6 +92,9 @@ EVENT_BODY_SCHEMAS: Mapping[str, EventBodySchema] = MappingProxyType(
             {},
         ),
         "reasoning_delta": ({"text": str}, {}),
+        # Pure liveness, carrying no content: the relay is still waiting on a
+        # provider call. `elapsed_ms` is diagnostic only, never a budget input.
+        "heartbeat": ({"elapsed_ms": int}, {}),
         "subcall": (
             {
                 "phase": str,
