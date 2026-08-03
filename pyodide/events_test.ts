@@ -48,6 +48,14 @@ const BODIES: Record<string, Record<string, unknown>> = {
   extract: { phase: "start", iteration: 1 },
   result: { result: {} },
   replay: { result: {} },
+  checkpoint: {
+    iteration: 1,
+    checkpoint_seq: 1,
+    draft: "draft",
+    draft_chars: 5,
+    ready: false,
+    payload: null,
+  },
   usage: {
     kind: "resolved",
     root: {
@@ -161,7 +169,7 @@ function wire(
     run_id: "run-1",
     seq: 1,
     timestamp: "2026-07-14T00:00:00Z",
-    version: 6,
+    version: 7,
     persistence_class: persistence ?? PERSISTENCE_BY_TYPE[type],
     depth: 0,
     ...body,
@@ -178,6 +186,52 @@ Deno.test("carries the real payload for a code event (live code streaming)", () 
   assert(
     isRlmEvent(wire("code", { iteration: 2, code: "print(get_stats())" })),
   );
+});
+
+// `draft_chars` is Python's len() — code points. Comparing it against
+// String.length (UTF-16 code units) drops every draft containing a non-BMP
+// character, and keeps dropping them, because the draft keeps the character.
+// A messaging corpus is full of emoji, so this is the common case, not an edge.
+Deno.test("forwards a checkpoint whose draft is not ASCII", () => {
+  for (
+    const draft of [
+      "Sarah said 🎉",
+      "𝐛𝐨𝐥𝐝 math alphanumerics",
+      "𠮷野家", // astral CJK
+      "family: 👨‍👩‍👧‍👦",
+      "flag: 🇯🇵",
+    ]
+  ) {
+    const body = {
+      iteration: 1,
+      checkpoint_seq: 1,
+      draft,
+      // What droste actually stamps: len(draft) in Python.
+      draft_chars: [...draft].length,
+      ready: false,
+      payload: null,
+    };
+    assert(isRlmEvent(wire("checkpoint", body)), `should forward: ${draft}`);
+  }
+});
+
+Deno.test("still rejects a checkpoint whose draft_chars is simply wrong", () => {
+  const draft = "Sarah said 🎉";
+  for (const draft_chars of [[...draft].length + 1, draft.length + 5, 0]) {
+    assert(
+      !isRlmEvent(
+        wire("checkpoint", {
+          iteration: 1,
+          checkpoint_seq: 1,
+          draft,
+          draft_chars,
+          ready: false,
+          payload: null,
+        }),
+      ),
+      `should drop draft_chars=${draft_chars}`,
+    );
+  }
 });
 
 Deno.test("drops non-events: loader chatter, stray prints, empty lines", () => {
@@ -329,7 +383,7 @@ Deno.test("successful output beginning ERROR remains an output event", () => {
 
 Deno.test("Python and relay accept the same execution golden NDJSON", async () => {
   const fixture = new URL(
-    "../src/droste/testing/fixtures/trace-v6-execution.ndjson",
+    "../src/droste/testing/fixtures/trace-v7-execution.ndjson",
     import.meta.url,
   );
   const lines = (await Deno.readTextFile(fixture)).trim().split("\n");
@@ -373,7 +427,7 @@ Deno.test("Python and relay accept the same execution golden NDJSON", async () =
 
 Deno.test("Python and relay accept the same lifecycle golden NDJSON", async () => {
   const fixture = new URL(
-    "../src/droste/testing/fixtures/trace-v6-lifecycle.ndjson",
+    "../src/droste/testing/fixtures/trace-v7-lifecycle.ndjson",
     import.meta.url,
   );
   const lines = (await Deno.readTextFile(fixture)).trim().split("\n");
@@ -551,6 +605,7 @@ Deno.test("vocabulary matches the engine's emitters", () => {
     [
       "budget",
       "capability",
+      "checkpoint",
       "code",
       "done",
       "execution_error",

@@ -293,14 +293,14 @@ exceptions use the same closed five-field shape as other preflight responses;
 run exceptions use the ordinary run response shape.
 
 Completed responses also carry the policy-resolved
-[Trace ABI v6](trace-abi.md) `run_record`. Live events and terminal records use
+[Trace ABI v7](trace-abi.md) `run_record`. Live events and terminal records use
 the same strict envelope and projection. Persistence remains a host I/O
 decision; the engine never opens a trace store.
 
 The Deno/Pyodide relay keeps its three process output concerns physically
 separate. fd1 carries exactly one unary response JSON line. A required
 `DROSTE_RELAY_EVENT_FD` names one inherited writable descriptor (fd3 by
-convention) that carries canonical Trace ABI v6 NDJSON only. An external
+convention) that carries canonical Trace ABI v7 NDJSON only. An external
 launcher also includes that number in `DENO_EXTRA_STDIO_FDS`, which Deno
 consumes at startup to register inherited descriptors above fd2. Passing an
 OS-level descriptor without this Deno marker leaves it unavailable to relay
@@ -376,7 +376,7 @@ are versioned, each by a single integer:
   Protocol v9 embeds Trace ABI v5 and its transient cumulative
   `usage_progress` event at settled root/subcall boundaries. The bump prevents
   a v8 host from silently dropping the live accounting signal.
-  Protocol v10 embeds Trace ABI v6 and scaffold manifest v3, adding the
+  Protocol v10 embeds Trace ABI v7 and scaffold manifest v3, adding the
   required seventh `max_iterations` authorization field. The exact seven-field
   budget prevents a v9 host from silently submitting an unbounded loop
   contract.

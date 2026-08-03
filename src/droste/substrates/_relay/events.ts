@@ -20,6 +20,7 @@ export const RLM_EVENT_TYPES = new Set<string>([
   "extract", // discriminated extract start/completion/failure
   "result", // canonical unary-equivalent final result
   "replay", // configurable replay details
+  "checkpoint", // {checkpoint_seq, draft, draft_chars, ready, payload} answer state
   "usage_progress", // cumulative usage at a settled root or subcall boundary
   "usage", // durable resolved-or-partial provider accounting
   "budget", // durable budget facts
@@ -43,6 +44,7 @@ export const PERSISTENCE_BY_TYPE: Readonly<Record<string, string>> = {
   extract: "configurable",
   result: "configurable",
   replay: "configurable",
+  checkpoint: "configurable",
   usage: "durable",
   budget: "durable",
   policy: "durable",
@@ -311,6 +313,26 @@ function validBody(type: string, body: Record<string, unknown>): boolean {
     case "result":
     case "replay":
       return exactBody(body, ["result"]) && isObject(body.result);
+    case "checkpoint":
+      // `payload` is opaque: the container is pinned, the contents never are.
+      return exactBody(body, [
+        "iteration",
+        "checkpoint_seq",
+        "draft",
+        "draft_chars",
+        "ready",
+        "payload",
+      ]) && integerField("iteration") && Number(body.iteration) >= 1 &&
+        integerField("checkpoint_seq") && Number(body.checkpoint_seq) >= 1 &&
+        stringField("draft") && integerField("draft_chars") &&
+        // `draft_chars` is Python's len(): a COUNT OF CODE POINTS. JavaScript's
+        // String.length counts UTF-16 code units, so any non-BMP character
+        // (emoji, astral CJK) makes the two disagree and would drop the frame
+        // here — silently, and for every later checkpoint too, since the draft
+        // keeps the character. Spreading the string iterates code points.
+        Number(body.draft_chars) === [...String(body.draft)].length &&
+        typeof body.ready === "boolean" &&
+        (body.payload === null || isObject(body.payload));
     case "usage_progress":
       return validUsageBody(body, true);
     case "usage":
@@ -409,7 +431,7 @@ export function isRlmEvent(line: string): boolean {
         Number.isInteger(o.seq) && o.seq > 0 &&
         typeof o.timestamp === "string" &&
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(o.timestamp) &&
-        o.version === 6 &&
+        o.version === 7 &&
         o.persistence_class === PERSISTENCE_BY_TYPE[o.type] &&
         Number.isInteger(o.depth) && o.depth >= 0 &&
         (o.depth === 0

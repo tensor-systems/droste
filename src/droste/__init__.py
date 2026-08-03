@@ -105,7 +105,13 @@ from .loop.rlm import (
     preflight_rlm,
     run_rlm,
 )
-from .loop.step import ReadyMetadataValidator, ReadyMetadataValidatorError
+from .loop.step import (
+    CheckpointPayloadProvider,
+    ExtractableWorkProbe,
+    ExtractContextProvider,
+    ReadyMetadataValidator,
+    ReadyMetadataValidatorError,
+)
 from .policy import PolicyHints
 from .prompts.builder import SystemPromptBuilder
 from .prompts.pack import (
@@ -163,6 +169,9 @@ __all__ = [
     "RLMPreflight",
     "RLMResult",
     "RLM_PREFLIGHT_SCHEMA_VERSION",
+    "CheckpointPayloadProvider",
+    "ExtractableWorkProbe",
+    "ExtractContextProvider",
     "ReadyMetadataValidator",
     "ReadyMetadataValidatorError",
     "extract_code_block",

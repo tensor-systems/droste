@@ -1,4 +1,4 @@
-# Trace ABI v6
+# Trace ABI v7
 
 Droste exposes one append-only event stream and one policy-resolved terminal
 `RunRecord`. The engine creates values; it does not choose a database or write
@@ -15,7 +15,7 @@ does not change merely because a released fixture is added.
 
 ## Event envelope
 
-Every event is a strict v6 value with these fields:
+Every event is a strict v7 value with these fields:
 
 ```json
 {
@@ -23,7 +23,7 @@ Every event is a strict v6 value with these fields:
   "seq": 1,
   "timestamp": "2026-07-14T05:00:00Z",
   "type": "progress",
-  "version": 6,
+  "version": 7,
   "persistence_class": "transient",
   "parent_run_id": "optional-parent",
   "depth": 0,
@@ -48,7 +48,7 @@ The persistence class is exhaustive and fixed by event type:
 | Class | Event types | Rule |
 | --- | --- | --- |
 | `durable` | `usage`, `budget`, `policy`, `capability`, `done` | Always in the terminal record |
-| `configurable` | `iteration_start`, `llm_response`, `code`, `output`, `execution_error`, `subcall`, `repair`, `extract`, `result`, `replay` | Included only when named by `TraceRetentionPolicy.retain` |
+| `configurable` | `iteration_start`, `llm_response`, `code`, `output`, `execution_error`, `subcall`, `repair`, `extract`, `result`, `replay`, `checkpoint` | Included only when named by `TraceRetentionPolicy.retain` |
 | `transient` | `startup`, `progress`, `reasoning_delta`, `usage_progress` | Live delivery only; never in the terminal record |
 
 Retention governs the terminal record, not the live channel. `result` is
@@ -56,7 +56,7 @@ always delivered once before `done`, even when it is not retained. `replay` is
 different: it is emitted only when the host explicitly selects replay
 retention.
 
-## Exhaustive v6 bodies
+## Exhaustive v7 bodies
 
 Every event body has a fixed top-level schema. Optional fields are marked `?`.
 Objects named below are JSON objects; all other types are primitive.
@@ -75,6 +75,7 @@ Objects named below are JSON objects; all other types are primitive.
 | `repair` | `phase: "start"|"completion"|"failure"`, `kind: "missing_code"|"execution_error"|"terminal"`, `iteration`, `error?` only on failure |
 | `extract` | `phase: "start"|"completion"|"failure"`, `iteration`, `extract_error?` only on failure |
 | `result`, `replay` | `result: object` |
+| `checkpoint` | `iteration: integer`, `checkpoint_seq: integer`, `draft: string`, `draft_chars: integer`, `ready: boolean`, `payload: object|null` |
 | `usage_progress` | `boundary: "root"|"subcall"`, `kind`, cumulative `root`, `subcall`, `unattributed`, and `total_tokens` |
 | `usage` | `kind: "resolved"|"partial"`, `root: object`, `subcall: object`, `unattributed: object`, `total_tokens: integer`, `wall_time_ms: integer` |
 | `budget` | `kind: "snapshot"|"mutation"`, `source: string`, plus the kind-specific fields below |
@@ -118,7 +119,7 @@ partial observation preserves its reported counters and marks the affected
 scope incomplete. The last progress snapshot reconciles with terminal `usage`
 unless a later boundary has no numeric usage observation.
 
-The budget body remains a discriminated event in Trace ABI v6. The terminal snapshot uses
+The budget body remains a discriminated event in Trace ABI v7. The terminal snapshot uses
 `kind="snapshot"`, `source="budget_ledger"`, and `configured`, `consumed`,
 and `remaining` objects. The configured object includes the structural
 `max_iterations` ceiling; terminal `iterations` records how many iterations
@@ -193,6 +194,24 @@ start and exactly one completion or failure once entered. Extract fallback does
 the same; a failure carries the typed `extract_error`. The canonical `result`
 still carries the unary-equivalent answer and `done` remains content-free.
 
+## Answer-state checkpoints
+
+`checkpoint` publishes the answer state the engine holds right now, so a host
+that loses the process still has the last draft it saw. The engine emits one
+after every executed step whose draft moved, or whose host had something of its
+own to add. `checkpoint_seq` starts at one and strictly increases within a
+`run_id`; `draft_chars` always equals `len(draft)`.
+
+`payload` is opaque. Hosts fill it through `RLMConfig.checkpoint_payload_provider`,
+a callable returning any JSON object or `None`. The engine carries the value
+across without inspecting it and never schema-checks its contents, exactly as
+the relay carries adapter `meta`. A provider that raises is reported and the
+checkpoint carries `payload: null`: a checkpoint can never fail a run.
+
+The event is `configurable`, not `durable`. It carries draft content, so it
+reaches a terminal record only when a host names it in
+`TraceRetentionPolicy.retain`.
+
 ## Terminal reconciliation
 
 Finalization emits resolved `usage`, `budget`, and `policy`; always delivers the
@@ -211,12 +230,12 @@ and sdist. Python consumers load them through package resources:
 ```python
 from droste.testing import (
     runner_v10_refusal_ndjson,
-    trace_v6_execution_ndjson,
-    trace_v6_lifecycle_ndjson,
+    trace_v7_execution_ndjson,
+    trace_v7_lifecycle_ndjson,
 )
 
-execution_lines = trace_v6_execution_ndjson().splitlines()
-event_lines = trace_v6_lifecycle_ndjson().splitlines()
+execution_lines = trace_v7_execution_ndjson().splitlines()
+event_lines = trace_v7_lifecycle_ndjson().splitlines()
 pre_admission_refusal = runner_v10_refusal_ndjson()
 ```
 

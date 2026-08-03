@@ -70,7 +70,7 @@ reservations fails loudly.
 
 ## Trace facts
 
-Every mutation is a durable Trace ABI v6 `budget` event from
+Every mutation is a durable Trace ABI v7 `budget` event from
 `source="budget_ledger"`: `reserve`, `commit`, `refund`, or `exhaust`.
 Mutation events carry `resource`, non-negative `amount`, and `call_id`. The
 terminal snapshot records the configured, consumed, and remaining vectors.

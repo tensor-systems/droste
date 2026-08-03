@@ -18,6 +18,7 @@ from ..execution.manifest import (
 )
 from ..execution.progress import (
     EventCallback,
+    checkpoint_event,
     extract_event,
     iteration_start_event,
     llm_response_event,
@@ -105,6 +106,10 @@ Continue refining. When done, set `answer[\"ready\"] = True`."""
 _EXTRACT_CODE_CHARS = 1000
 _EXTRACT_OUTPUT_CHARS = 1500
 _EXTRACT_SUMMARY_CHARS = 60000
+# Host observations ride an uncached extract call, so this is deliberately far
+# tighter than the trajectory budget above: enough rows to answer from, not the
+# whole ledger.
+_EXTRACT_HOST_CONTEXT_CHARS = 8000
 
 # Sentinel used in extract summaries for iterations that printed nothing; the
 # conversational nudge shown to the in-loop model must not read as real output.
@@ -137,6 +142,30 @@ def _warn_environment_cleanup(cleanup_error: BaseException) -> None:
         RuntimeWarning,
         stacklevel=3,
     )
+
+
+def _warn_checkpoint(reason: str, error: BaseException) -> None:
+    """Report a degraded checkpoint. A checkpoint never fails a run."""
+
+    detail = " ".join(str(error).split())[:1_000]
+    warnings.warn(
+        f"RLM checkpoint {reason}: {type(error).__name__}: {detail}",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
+def _checkpoint_payload(cfg: "RLMConfig") -> Any:
+    """Resolve the host's opaque checkpoint payload, never inspecting it."""
+
+    provider = cfg.checkpoint_payload_provider
+    if provider is None:
+        return None
+    try:
+        return provider()
+    except Exception as provider_error:
+        _warn_checkpoint("payload provider failed", provider_error)
+        return None
 
 
 ProgressCallback = Any
@@ -543,6 +572,79 @@ def _has_extractable_work(answer: dict[str, Any], has_successful_step: bool) -> 
     return has_successful_step
 
 
+def _host_extract_context(cfg: "RLMConfig") -> str:
+    """Host-rendered observations to append to the terminal extract prompt.
+
+    Bounded here rather than trusting the host: this rides on an extract call
+    that is deliberately uncached (`cache_anchors=None`), so every character is
+    paid at full prefill, and an unbounded host could spend the recovery call's
+    whole input budget describing what it found.
+
+    A provider that raises contributes nothing, for the same reason the probe
+    does: a terminal recovery path must not be able to fail the run it is
+    recovering.
+    """
+
+    provider = cfg.extract_context_provider
+    if provider is None:
+        return ""
+    try:
+        rendered = provider()
+    except Exception as exc:  # noqa: BLE001 - never let a provider end the run
+        warnings.warn(
+            f"RLM extract-context provider failed, continuing without it: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return ""
+    if not isinstance(rendered, str) or not rendered.strip():
+        return ""
+    return rendered[:_EXTRACT_HOST_CONTEXT_CHARS]
+
+
+def _host_reports_extractable_work(cfg: "RLMConfig") -> bool:
+    """Whether the host says its own state holds work worth extracting.
+
+    The engine's test above sees only what the engine owns. Generated code that
+    retrieves real data through a host accessor and then raises before printing
+    leaves no draft, no successful step, and no stdout — so the engine concludes
+    there is nothing to extract while the host is holding everything the answer
+    needed. Asking rather than inferring keeps the engine ignorant of what the
+    host's data layer is, which is the whole point of the boundary.
+
+    A probe that raises is treated as "no": a terminal recovery path must not be
+    able to fail the run it is recovering.
+    """
+
+    probe = cfg.extractable_work_probe
+    if probe is None:
+        return False
+    try:
+        return bool(probe())
+    except Exception as exc:  # noqa: BLE001 - never let a probe end the run
+        warnings.warn(
+            f"RLM extractable-work probe failed, treating as no work: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return False
+
+
+def _is_deadline_error(error: RLMError | None) -> bool:
+    """Whether a root failure is wall-clock deadline exhaustion.
+
+    Deadline exhaustion is a *time* verdict, not a correctness one: the work
+    already done is as trustworthy as it was a millisecond earlier. So it
+    routes to the terminal handoff and the extract fallback (like an exhausted
+    iteration budget) rather than ending the run through ``early_result``,
+    which would strand that work behind a fatal ``error`` every host discards.
+    """
+    if error is None or error.type != "BudgetExhausted":
+        return False
+    details = error.details
+    return isinstance(details, dict) and details.get("resource") == "wall_ms"
+
+
 def _terminal_semantic_budget_error(
     evidence: _StructuredBatchEvidence | None,
     context: ExecutionContext,
@@ -580,6 +682,7 @@ def _extract_final_answer(
     cfg: "RLMConfig",
     context: ExecutionContext,
     prompt_pack: PromptPack,
+    host_context: str = "",
 ) -> tuple[str, RLMError | None]:
     """One extract pass:
     when a terminal budget handoff occurs without answer['ready'], make one
@@ -593,8 +696,13 @@ def _extract_final_answer(
     this" apart from "extraction failed, this is raw debug output," instead
     of both cases looking identical."""
     try:
+        # Host observations sit between the trajectory and the sentinel, and are
+        # labelled as retrieved data rather than as something the code printed —
+        # they exist precisely because the code did not print them.
+        observations = f"\n\nData retrieved during the run:\n{host_context}" if host_context else ""
         history = (
             _trajectory_summary(draft, trajectory)
+            + observations
             + f"\n\nUnable sentinel: {prompt_pack.unable_sentinel}"
         )
         slots = PromptSlots(
@@ -621,6 +729,11 @@ def _extract_final_answer(
             model=cfg.root_model or "",
             context=context,
             cache_anchors=None,
+            # This single call is the recovery for a terminal budget handoff,
+            # including deadline exhaustion. Reserving through the deadline
+            # would refuse it exactly when it is most needed, so the run would
+            # fall back to raw scraps. Token budget still binds.
+            deadline_exempt=True,
         )
         if root_error is not None:
             return "", root_error
@@ -799,6 +912,8 @@ def run_rlm(
         transcript_window: list[TranscriptWindowEntry] = []
         previous_draft_snapshot = str(answer.get("content", ""))
         code = ""
+        checkpoint_seq = 0
+        checkpoint_draft = ""
 
         def step_kwargs() -> dict[str, Any]:
             return dict(
@@ -813,6 +928,32 @@ def run_rlm(
                 semantic_evidence=semantic_evidence,
                 ready_metadata_validator=ready_metadata_validator,
             )
+
+        def emit_checkpoint() -> None:
+            """Publish answer state so a killed run stays renderable by a host.
+
+            A checkpoint is worth emitting when the draft moved or the host has
+            something of its own to add; neither the host's provider nor the
+            emission itself may fail the run."""
+            nonlocal checkpoint_seq, checkpoint_draft
+            draft = str(answer.get("content") or "")
+            payload = _checkpoint_payload(cfg)
+            if draft == checkpoint_draft and payload is None:
+                return
+            checkpoint_seq += 1
+            checkpoint_draft = draft
+            try:
+                context.emit_event(
+                    checkpoint_event(
+                        iterations,
+                        checkpoint_seq,
+                        draft,
+                        ready=bool(answer.get("ready")),
+                        payload=payload,
+                    )
+                )
+            except Exception as checkpoint_error:
+                _warn_checkpoint("dropped", checkpoint_error)
 
         def early_result(run_error: RLMError | None) -> RLMResult:
             return finalize(
@@ -935,6 +1076,10 @@ def run_rlm(
 
             response, usage, root_error = call_live_root(messages)
             if root_error is not None:
+                if _is_deadline_error(root_error):
+                    error = root_error
+                    terminal_handoff = True
+                    break
                 return early_result(root_error)
             last_response = response
             context.emit_event(llm_response_event(iterations, response))
@@ -962,6 +1107,10 @@ def run_rlm(
                                 message=root_error.message,
                             )
                         )
+                        if _is_deadline_error(root_error):
+                            error = root_error
+                            terminal_handoff = True
+                            break
                         return early_result(root_error)
                     last_response = repair_response
                     context.emit_event(llm_response_event(iterations, repair_response))
@@ -1015,6 +1164,7 @@ def run_rlm(
             last_execution_status = outcome.execution_status
             error = outcome.error
             answer_metadata = outcome.answer_metadata
+            emit_checkpoint()
             if outcome.error is None:
                 has_successful_step = True
                 trajectory.append(
@@ -1085,6 +1235,10 @@ def run_rlm(
                     )
                 )
                 trajectory.append(failed_record)
+                if _is_deadline_error(root_error):
+                    error = root_error
+                    terminal_handoff = True
+                    break
                 return early_result(root_error)
             last_response = repair_response
             context.emit_event(llm_response_event(iterations, repair_response))
@@ -1104,6 +1258,7 @@ def run_rlm(
                 last_execution_status = outcome.execution_status
                 error = outcome.error
                 answer_metadata = outcome.answer_metadata
+                emit_checkpoint()
                 if outcome.error is None:
                     code = repaired_code
                     has_successful_step = True
@@ -1163,6 +1318,7 @@ def run_rlm(
             terminal_handoff
             and error is not None
             and error.type != "IterationLimitExceeded"
+            and not _is_deadline_error(error)
             and not str(answer.get("content") or "").strip()
         ):
             context.emit_progress(
@@ -1265,11 +1421,20 @@ def run_rlm(
         was_extracted = False
         extract_error: RLMError | None = None
         recovered_error: RLMError | None = None
+        # Host observations are supplied ONLY when the host is what made this
+        # extraction possible. When the engine can already see the work — a
+        # retained draft, or a step that ran to completion — the prompt stays
+        # byte-identical to what it was before this hook existed, so runs that
+        # already extract successfully keep their answers, their spend, and
+        # their benchmark scores. The behavior change is confined to runs that
+        # produce nothing today.
+        engine_sees_work = _has_extractable_work(answer, has_successful_step)
+        host_sees_work = not engine_sees_work and _host_reports_extractable_work(cfg)
         if (
             not answer.get("ready")
             and terminal_handoff
             and trajectory
-            and _has_extractable_work(answer, has_successful_step)
+            and (engine_sees_work or host_sees_work)
         ):
             context.emit_progress("Loop ended unconfirmed: extracting best final answer...")
             context.emit_event(extract_event(iterations, "start"))
@@ -1282,6 +1447,7 @@ def run_rlm(
                 cfg,
                 context,
                 resolved_prompt_pack.pack,
+                host_context=_host_extract_context(cfg) if host_sees_work else "",
             )
             if extracted:
                 context.emit_event(extract_event(iterations, "completion"))

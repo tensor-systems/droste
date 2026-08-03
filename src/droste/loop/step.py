@@ -79,6 +79,28 @@ ReadyMetadataValidator: TypeAlias = Callable[
     Sequence[str],
 ]
 
+# Resolves the opaque value carried by each answer-state checkpoint. The engine
+# never inspects what this returns and never schema-checks it: hosts use it to
+# ferry their own answer-critical state (whatever that is) alongside the draft.
+CheckpointPayloadProvider: TypeAlias = Callable[[], Any]
+
+# Answers "is there work here worth one terminal extract call?" for state the
+# engine cannot see. The engine's own test — a retained draft, or a step that
+# executed successfully — misses the case where generated code retrieved real
+# data through a host accessor and then raised before printing any of it. The
+# engine has no signal there (no draft, no successful step, no stdout), but the
+# host does, and stays the only thing that knows what its own data layer did.
+ExtractableWorkProbe: TypeAlias = Callable[[], bool]
+
+# Renders host-held observations for the terminal extract prompt. The engine
+# builds that prompt from the draft and per-iteration code/stdout, which is
+# everything it can see — but a REPL only surfaces what generated code chose to
+# print, so a run that fetched rows and then raised leaves the extract pass
+# looking at failing code and nothing else. This lets the host contribute what
+# its accessors actually returned. Pre-rendered text: the engine bounds it and
+# concatenates it, and never parses or inspects it.
+ExtractContextProvider: TypeAlias = Callable[[], str]
+
 
 class ReadyMetadataValidatorError(RuntimeError):
     """Trusted host validator failed instead of returning repairable violations."""
@@ -108,6 +130,13 @@ class RLMConfig:
     on_run_record: RunRecordCallback | None = None
     rollout: RolloutConfiguration = field(default_factory=RolloutConfiguration)
     checkpoint_requirements: ScaffoldRequirements | None = None
+    # Called immediately before each answer-state checkpoint. Returns a
+    # JSON-serializable value, or None for "nothing to add". A provider that
+    # raises is reported and the checkpoint carries a null payload: a
+    # checkpoint can never fail a run.
+    checkpoint_payload_provider: CheckpointPayloadProvider | None = None
+    extractable_work_probe: ExtractableWorkProbe | None = None
+    extract_context_provider: ExtractContextProvider | None = None
 
 
 @dataclass
@@ -525,11 +554,19 @@ def call_root(
     context: ExecutionContext,
     cache_anchors: tuple[int, ...] | None = (0, -1),
     transcript_window: tuple[TranscriptWindowEntry, ...] = (),
+    deadline_exempt: bool = False,
 ) -> tuple[str, Any, RLMError | None]:
     """One root-LLM call with token accounting.
 
     Returns ``(response, usage, None)`` on success or ``("", None, error)`` —
     a root failure always ends the run, so the caller finalizes immediately.
+
+    ``deadline_exempt`` reserves without ``through_deadline``, so the call is
+    checked against tokens/subcalls/depth but not against the shared wall-clock
+    deadline. It exists for the single terminal extract pass: that pass is the
+    recovery *for* deadline exhaustion, so gating it on the deadline it is
+    recovering from would make the fallback unreachable. Token budget still
+    binds, and the caller must keep such calls to a bounded count.
     """
     outbound_messages, frontier = project_live_transcript(messages, transcript_window)
     call_id = "root:" + str(uuid4())
@@ -538,7 +575,7 @@ def call_root(
         tokens=input_estimate + context.budget.root_output_tokens,
     )
     try:
-        context.ledger.reserve(call_id, request, through_deadline=True)
+        context.ledger.reserve(call_id, request, through_deadline=not deadline_exempt)
     except BudgetExhausted as exc:
         return (
             "",
