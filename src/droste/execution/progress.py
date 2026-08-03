@@ -40,6 +40,7 @@ EVENT_TYPES = frozenset(
         "output",  # {iteration, stdout, calls_made, answer_ready, answer_content_chars}
         "execution_error",  # {iteration, error_type, message} — a step failed; repair may follow
         "reasoning_delta",  # relay-side {text}, from streamed /responses
+        "heartbeat",  # relay-side {elapsed_ms} — a provider call is still in flight
         "subcall",  # broker-correlated subcall lifecycle facts
         "repair",  # discriminated repair lifecycle facts
         "extract",  # discriminated terminal extraction lifecycle facts

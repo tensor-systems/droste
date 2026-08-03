@@ -16,16 +16,16 @@ from .provider import FAKE_RECORDS_MANIFEST, fake_records_provider
 from .subcall_client import MockSubcallClient
 
 
-def trace_v7_lifecycle_ndjson() -> bytes:
+def trace_v8_lifecycle_ndjson() -> bytes:
     """Return the shared Trace ABI v7 lifecycle conformance corpus."""
 
-    return files(__package__).joinpath("fixtures/trace-v7-lifecycle.ndjson").read_bytes()
+    return files(__package__).joinpath("fixtures/trace-v8-lifecycle.ndjson").read_bytes()
 
 
-def trace_v7_execution_ndjson() -> bytes:
+def trace_v8_execution_ndjson() -> bytes:
     """Return the shared Trace ABI v7 response/code/output/error conformance corpus."""
 
-    return files(__package__).joinpath("fixtures/trace-v7-execution.ndjson").read_bytes()
+    return files(__package__).joinpath("fixtures/trace-v8-execution.ndjson").read_bytes()
 
 
 def runner_v10_refusal_ndjson() -> bytes:
@@ -50,6 +50,6 @@ __all__ = [
     "require_ordered_terminal_events",
     "require_unknown_completion",
     "run_while_blocked",
-    "trace_v7_execution_ndjson",
-    "trace_v7_lifecycle_ndjson",
+    "trace_v8_execution_ndjson",
+    "trace_v8_lifecycle_ndjson",
 ]

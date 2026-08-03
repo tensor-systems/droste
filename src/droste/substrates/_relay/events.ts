@@ -15,6 +15,7 @@ export const RLM_EVENT_TYPES = new Set<string>([
   "output", // {iteration, stdout, calls_made, answer_ready, answer_content_chars}
   "execution_error", // {iteration, error_type, message} — a step failed; repair may follow (#35)
   "reasoning_delta", // {text} — emitted relay-side from streamed /responses
+  "heartbeat", // {elapsed_ms} — relay-side liveness while a provider call is in flight
   "subcall", // broker-correlated start/progress/completion/failure
   "repair", // discriminated repair start/completion/failure
   "extract", // discriminated extract start/completion/failure
@@ -33,6 +34,7 @@ export const PERSISTENCE_BY_TYPE: Readonly<Record<string, string>> = {
   startup: "transient",
   progress: "transient",
   reasoning_delta: "transient",
+  heartbeat: "transient",
   usage_progress: "transient",
   iteration_start: "configurable",
   llm_response: "configurable",
@@ -284,6 +286,11 @@ function validBody(type: string, body: Record<string, unknown>): boolean {
       return exactBody(body, ["iteration", "error_type", "message"]) &&
         integerField("iteration") && stringField("error_type") &&
         stringField("message");
+    case "heartbeat":
+      // Liveness only. Carries no content, so nothing to validate beyond the
+      // envelope and a non-negative elapsed reading.
+      return exactBody(body, ["elapsed_ms"]) && integerField("elapsed_ms") &&
+        Number(body.elapsed_ms) >= 0;
     case "reasoning_delta":
       return exactBody(body, ["text"]) && stringField("text");
     case "subcall":
@@ -431,7 +438,7 @@ export function isRlmEvent(line: string): boolean {
         Number.isInteger(o.seq) && o.seq > 0 &&
         typeof o.timestamp === "string" &&
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(o.timestamp) &&
-        o.version === 7 &&
+        o.version === 8 &&
         o.persistence_class === PERSISTENCE_BY_TYPE[o.type] &&
         Number.isInteger(o.depth) && o.depth >= 0 &&
         (o.depth === 0

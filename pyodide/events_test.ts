@@ -37,6 +37,7 @@ const BODIES: Record<string, Record<string, unknown>> = {
   },
   execution_error: { iteration: 1, error_type: "ValueError", message: "bad" },
   reasoning_delta: { text: "thinking" },
+  heartbeat: { elapsed_ms: 15000 },
   subcall: {
     phase: "start",
     call_id: "call-1",
@@ -169,7 +170,7 @@ function wire(
     run_id: "run-1",
     seq: 1,
     timestamp: "2026-07-14T00:00:00Z",
-    version: 7,
+    version: 8,
     persistence_class: persistence ?? PERSISTENCE_BY_TYPE[type],
     depth: 0,
     ...body,
@@ -383,7 +384,7 @@ Deno.test("successful output beginning ERROR remains an output event", () => {
 
 Deno.test("Python and relay accept the same execution golden NDJSON", async () => {
   const fixture = new URL(
-    "../src/droste/testing/fixtures/trace-v7-execution.ndjson",
+    "../src/droste/testing/fixtures/trace-v8-execution.ndjson",
     import.meta.url,
   );
   const lines = (await Deno.readTextFile(fixture)).trim().split("\n");
@@ -427,7 +428,7 @@ Deno.test("Python and relay accept the same execution golden NDJSON", async () =
 
 Deno.test("Python and relay accept the same lifecycle golden NDJSON", async () => {
   const fixture = new URL(
-    "../src/droste/testing/fixtures/trace-v7-lifecycle.ndjson",
+    "../src/droste/testing/fixtures/trace-v8-lifecycle.ndjson",
     import.meta.url,
   );
   const lines = (await Deno.readTextFile(fixture)).trim().split("\n");
@@ -609,6 +610,7 @@ Deno.test("vocabulary matches the engine's emitters", () => {
       "code",
       "done",
       "execution_error",
+      "heartbeat",
       "extract",
       "iteration_start",
       "llm_response",

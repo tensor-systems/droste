@@ -230,12 +230,12 @@ and sdist. Python consumers load them through package resources:
 ```python
 from droste.testing import (
     runner_v10_refusal_ndjson,
-    trace_v7_execution_ndjson,
-    trace_v7_lifecycle_ndjson,
+    trace_v8_execution_ndjson,
+    trace_v8_lifecycle_ndjson,
 )
 
-execution_lines = trace_v7_execution_ndjson().splitlines()
-event_lines = trace_v7_lifecycle_ndjson().splitlines()
+execution_lines = trace_v8_execution_ndjson().splitlines()
+event_lines = trace_v8_lifecycle_ndjson().splitlines()
 pre_admission_refusal = runner_v10_refusal_ndjson()
 ```
 

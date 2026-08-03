@@ -29,10 +29,10 @@ value and never schema-checks it. A provider that raises is reported through a
 `RuntimeWarning` and the checkpoint carries `payload: null` — a checkpoint can
 never fail a run.
 
-Hosts must accept Trace ABI 7 and update to the `trace_v7_*` conformance
-fixtures (`droste.testing.trace_v7_lifecycle_ndjson` /
-`trace_v7_execution_ndjson`, backing `trace-v7-lifecycle.ndjson` /
-`trace-v7-execution.ndjson`). Scaffold manifests report `abis.trace: 7`, so
+Hosts must accept Trace ABI 7 and update to the `trace_v8_*` conformance
+fixtures (`droste.testing.trace_v8_lifecycle_ndjson` /
+`trace_v8_execution_ndjson`, backing `trace-v8-lifecycle.ndjson` /
+`trace-v8-execution.ndjson`). Scaffold manifests report `abis.trace: 7`, so
 every manifest id changes; pinned ids must be re-derived. Strict v6 readers
 reject the new event and the new version, so this is an atomic consumer
 migration.

@@ -33,10 +33,10 @@ from droste.testing import (
     MockResponse,
     MockSubcallClient,
     runner_v10_refusal_ndjson,
-    trace_v7_execution_ndjson,
-    trace_v7_lifecycle_ndjson,
+    trace_v8_execution_ndjson,
+    trace_v8_lifecycle_ndjson,
 )
-from droste.testing._trace_fixtures import build_trace_v7_execution_ndjson
+from droste.testing._trace_fixtures import build_trace_v8_execution_ndjson
 from droste_runner.run import run as run_worker
 
 
@@ -233,7 +233,7 @@ def test_usage_progress_emits_cumulative_role_boundaries_without_estimating() ->
     assert progress[1]["root"]["total_tokens"] == 10
     assert progress[1]["subcall"]["total_tokens"] == 7
     assert progress[1]["persistence_class"] == "transient"
-    assert progress[1]["version"] == 7
+    assert progress[1]["version"] == 8
 
 
 def test_concurrent_subcall_usage_progress_is_serialized_and_monotonic() -> None:
@@ -582,7 +582,7 @@ def test_run_record_allows_repeated_durable_budget_mutations() -> None:
     ]
 
 
-def test_parser_requires_v7_envelope_and_rejects_false_classification() -> None:
+def test_parser_requires_v8_envelope_and_rejects_false_classification() -> None:
     with pytest.raises(ValueError, match="missing envelope fields"):
         parse_event({"type": "code", "iteration": 1, "code": "print(1)"})
 
@@ -592,7 +592,7 @@ def test_parser_requires_v7_envelope_and_rejects_false_classification() -> None:
             "run_id": "run",
             "seq": 1,
             "timestamp": "2026-07-14T00:00:00Z",
-            "version": 7,
+            "version": 8,
             "persistence_class": "configurable",
             "depth": 0,
             "iteration": 1,
@@ -607,7 +607,7 @@ def test_parser_requires_v7_envelope_and_rejects_false_classification() -> None:
             "run_id": "run",
             "seq": 2,
             "timestamp": "2026-07-14T00:00:00Z",
-            "version": 7,
+            "version": 8,
             "persistence_class": "transient",
             "depth": 0,
             "engine_version": "0.10.6",
@@ -624,7 +624,7 @@ def test_parser_requires_v7_envelope_and_rejects_false_classification() -> None:
                 "run_id": "run",
                 "seq": 1,
                 "timestamp": "2026-07-14T00:00:00Z",
-                "version": 7,
+                "version": 8,
                 "persistence_class": "durable",
                 "depth": 0,
                 "code": "print(1)",
@@ -638,7 +638,7 @@ def test_parser_requires_v7_envelope_and_rejects_false_classification() -> None:
                 "run_id": "run",
                 "seq": 1,
                 "timestamp": "2026-07-14T01:00:00+01:00",
-                "version": 7,
+                "version": 8,
                 "persistence_class": "transient",
                 "depth": 0,
                 "status": "working",
@@ -673,7 +673,7 @@ def test_event_bodies_reject_missing_unknown_and_wrong_primitive_fields() -> Non
         recorder.finish(terminal)
 
 
-def test_trace_v7_budget_snapshot_requires_max_iterations() -> None:
+def test_trace_v8_budget_snapshot_requires_max_iterations() -> None:
     recorder = TraceRecorder(run_id="strict-budget")
     budget = json.loads(json.dumps(_terminal()["budget"]))
     del budget["configured"]["max_iterations"]
@@ -844,11 +844,11 @@ def test_trace_abi_v3_is_rejected_instead_of_dropping_cache_usage() -> None:
         )
 
 
-def _trace_v7_golden_runs() -> dict[str, list[RunEvent]]:
+def _trace_v8_golden_runs() -> dict[str, list[RunEvent]]:
     runs: dict[str, list[RunEvent]] = {}
     previous_run_id: str | None = None
     closed: set[str] = set()
-    for line in trace_v7_lifecycle_ndjson().decode("utf-8").splitlines():
+    for line in trace_v8_lifecycle_ndjson().decode("utf-8").splitlines():
         event = parse_event(json.loads(line))
         if event.run_id != previous_run_id:
             if event.run_id in closed:
@@ -860,9 +860,9 @@ def _trace_v7_golden_runs() -> dict[str, list[RunEvent]]:
     return runs
 
 
-def test_trace_v7_execution_fixture_is_canonical_and_exact() -> None:
-    fixture = trace_v7_execution_ndjson()
-    assert fixture == build_trace_v7_execution_ndjson()
+def test_trace_v8_execution_fixture_is_canonical_and_exact() -> None:
+    fixture = trace_v8_execution_ndjson()
+    assert fixture == build_trace_v8_execution_ndjson()
     events = [parse_event(json.loads(line)) for line in fixture.decode("utf-8").splitlines()]
 
     root = events[:6]
@@ -894,8 +894,8 @@ def _error_type(value: object) -> object:
     return value.get("type") if isinstance(value, Mapping) else None
 
 
-def test_trace_v7_lifecycle_golden_ndjson_is_strict_ordered_and_terminal() -> None:
-    runs = _trace_v7_golden_runs()
+def test_trace_v8_lifecycle_golden_ndjson_is_strict_ordered_and_terminal() -> None:
+    runs = _trace_v8_golden_runs()
     assert set(runs) == {
         "golden-success",
         "golden-recovered",
@@ -991,8 +991,8 @@ def test_trace_v7_lifecycle_golden_ndjson_is_strict_ordered_and_terminal() -> No
     assert terminal["usage"]["subcall"]["cache_creation_tokens"] == 1
 
 
-def test_trace_v7_golden_corpus_covers_each_discriminated_lifecycle() -> None:
-    events = [event for run in _trace_v7_golden_runs().values() for event in run]
+def test_trace_v8_golden_corpus_covers_each_discriminated_lifecycle() -> None:
+    events = [event for run in _trace_v8_golden_runs().values() for event in run]
     subcalls = [event for event in events if event.type == "subcall"]
     repairs = [event for event in events if event.type == "repair"]
     extracts = [event for event in events if event.type == "extract"]
@@ -1019,7 +1019,7 @@ def test_trace_v7_golden_corpus_covers_each_discriminated_lifecycle() -> None:
     assert {event.body["boundary"] for event in usage_progress} == {"root", "subcall"}
     assert all(event.persistence_class is PersistenceClass.TRANSIENT for event in usage_progress)
 
-    output_limit = _trace_v7_golden_runs()["golden-output-limit"]
+    output_limit = _trace_v8_golden_runs()["golden-output-limit"]
     assert not any(event.type == "output" for event in output_limit)
     assert any(
         event.type == "execution_error" and event.body["error_type"] == "SandboxError"
@@ -1043,7 +1043,7 @@ def test_trace_v7_golden_corpus_covers_each_discriminated_lifecycle() -> None:
         event.body["message"] for event in output_limit if event.type == "execution_error"
     )
     assert f"exceeded {output_manifest['sandbox']['output_chars']} characters" in output_error
-    cancelled = _trace_v7_golden_runs()["golden-cancelled"]
+    cancelled = _trace_v8_golden_runs()["golden-cancelled"]
     assert cancelled[-1].body["status"] == "error"
     assert any(
         event.type == "execution_error" and event.body["error_type"] == "CapabilityCallError"
@@ -1057,7 +1057,7 @@ def test_trace_v7_golden_corpus_covers_each_discriminated_lifecycle() -> None:
     assert cancelled[-1].body["usage"]["root"]["complete"] is False
     assert cancelled[-1].body["usage"]["subcall"]["complete"] is False
 
-    extract_failed = _trace_v7_golden_runs()["golden-extract-failed"]
+    extract_failed = _trace_v8_golden_runs()["golden-extract-failed"]
     result = next(event.body["result"] for event in extract_failed if event.type == "result")
     assert result["answer"] == f"Error: {result['error']['message']}"
     assert result["error"]["details"]["withheld_content"] == "retained evidence"

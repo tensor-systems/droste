@@ -33,7 +33,7 @@ const RUNNER_REFUSAL_FIXTURE = new URL(
   import.meta.url,
 );
 const TRACE_LIFECYCLE_FIXTURE = new URL(
-  "../../src/droste/testing/fixtures/trace-v7-lifecycle.ndjson",
+  "../../src/droste/testing/fixtures/trace-v8-lifecycle.ndjson",
   import.meta.url,
 );
 const TEST_BUDGET = {
