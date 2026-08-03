@@ -3,6 +3,7 @@ from .rlm import RLMConfig, RLMPreflight, RLMResult, preflight_rlm, run_rlm
 from .step import (
     CheckpointPayloadProvider,
     ExtractableWorkProbe,
+    ExtractContextProvider,
     ReadyMetadataValidator,
     ReadyMetadataValidatorError,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "IterationRecord",
     "CheckpointPayloadProvider",
     "ExtractableWorkProbe",
+    "ExtractContextProvider",
     "ReadyMetadataValidator",
     "ReadyMetadataValidatorError",
 ]

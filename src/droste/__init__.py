@@ -108,6 +108,7 @@ from .loop.rlm import (
 from .loop.step import (
     CheckpointPayloadProvider,
     ExtractableWorkProbe,
+    ExtractContextProvider,
     ReadyMetadataValidator,
     ReadyMetadataValidatorError,
 )
@@ -170,6 +171,7 @@ __all__ = [
     "RLM_PREFLIGHT_SCHEMA_VERSION",
     "CheckpointPayloadProvider",
     "ExtractableWorkProbe",
+    "ExtractContextProvider",
     "ReadyMetadataValidator",
     "ReadyMetadataValidatorError",
     "extract_code_block",

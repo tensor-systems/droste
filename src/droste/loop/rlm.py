@@ -106,6 +106,10 @@ Continue refining. When done, set `answer[\"ready\"] = True`."""
 _EXTRACT_CODE_CHARS = 1000
 _EXTRACT_OUTPUT_CHARS = 1500
 _EXTRACT_SUMMARY_CHARS = 60000
+# Host observations ride an uncached extract call, so this is deliberately far
+# tighter than the trajectory budget above: enough rows to answer from, not the
+# whole ledger.
+_EXTRACT_HOST_CONTEXT_CHARS = 8000
 
 # Sentinel used in extract summaries for iterations that printed nothing; the
 # conversational nudge shown to the in-loop model must not read as real output.
@@ -568,6 +572,36 @@ def _has_extractable_work(answer: dict[str, Any], has_successful_step: bool) -> 
     return has_successful_step
 
 
+def _host_extract_context(cfg: "RLMConfig") -> str:
+    """Host-rendered observations to append to the terminal extract prompt.
+
+    Bounded here rather than trusting the host: this rides on an extract call
+    that is deliberately uncached (`cache_anchors=None`), so every character is
+    paid at full prefill, and an unbounded host could spend the recovery call's
+    whole input budget describing what it found.
+
+    A provider that raises contributes nothing, for the same reason the probe
+    does: a terminal recovery path must not be able to fail the run it is
+    recovering.
+    """
+
+    provider = cfg.extract_context_provider
+    if provider is None:
+        return ""
+    try:
+        rendered = provider()
+    except Exception as exc:  # noqa: BLE001 - never let a provider end the run
+        warnings.warn(
+            f"RLM extract-context provider failed, continuing without it: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return ""
+    if not isinstance(rendered, str) or not rendered.strip():
+        return ""
+    return rendered[:_EXTRACT_HOST_CONTEXT_CHARS]
+
+
 def _host_reports_extractable_work(cfg: "RLMConfig") -> bool:
     """Whether the host says its own state holds work worth extracting.
 
@@ -648,6 +682,7 @@ def _extract_final_answer(
     cfg: "RLMConfig",
     context: ExecutionContext,
     prompt_pack: PromptPack,
+    host_context: str = "",
 ) -> tuple[str, RLMError | None]:
     """One extract pass:
     when a terminal budget handoff occurs without answer['ready'], make one
@@ -661,8 +696,13 @@ def _extract_final_answer(
     this" apart from "extraction failed, this is raw debug output," instead
     of both cases looking identical."""
     try:
+        # Host observations sit between the trajectory and the sentinel, and are
+        # labelled as retrieved data rather than as something the code printed —
+        # they exist precisely because the code did not print them.
+        observations = f"\n\nData retrieved during the run:\n{host_context}" if host_context else ""
         history = (
             _trajectory_summary(draft, trajectory)
+            + observations
             + f"\n\nUnable sentinel: {prompt_pack.unable_sentinel}"
         )
         slots = PromptSlots(
@@ -1381,14 +1421,20 @@ def run_rlm(
         was_extracted = False
         extract_error: RLMError | None = None
         recovered_error: RLMError | None = None
+        # Host observations are supplied ONLY when the host is what made this
+        # extraction possible. When the engine can already see the work — a
+        # retained draft, or a step that ran to completion — the prompt stays
+        # byte-identical to what it was before this hook existed, so runs that
+        # already extract successfully keep their answers, their spend, and
+        # their benchmark scores. The behavior change is confined to runs that
+        # produce nothing today.
+        engine_sees_work = _has_extractable_work(answer, has_successful_step)
+        host_sees_work = not engine_sees_work and _host_reports_extractable_work(cfg)
         if (
             not answer.get("ready")
             and terminal_handoff
             and trajectory
-            and (
-                _has_extractable_work(answer, has_successful_step)
-                or _host_reports_extractable_work(cfg)
-            )
+            and (engine_sees_work or host_sees_work)
         ):
             context.emit_progress("Loop ended unconfirmed: extracting best final answer...")
             context.emit_event(extract_event(iterations, "start"))
@@ -1401,6 +1447,7 @@ def run_rlm(
                 cfg,
                 context,
                 resolved_prompt_pack.pack,
+                host_context=_host_extract_context(cfg) if host_sees_work else "",
             )
             if extracted:
                 context.emit_event(extract_event(iterations, "completion"))

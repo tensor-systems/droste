@@ -16,7 +16,11 @@ import pytest
 from droste import Budget, RLMConfig, run_rlm
 from droste.exceptions import RLMError
 from droste.execution import create_execution_context
-from droste.loop.rlm import _extract_final_answer, _is_deadline_error
+from droste.loop.rlm import (
+    _EXTRACT_HOST_CONTEXT_CHARS,
+    _extract_final_answer,
+    _is_deadline_error,
+)
 from droste.loop.trajectory import EXECUTION_STATUS_SUCCESS, IterationRecord
 from droste.prompts import load_builtin_prompt_catalog, resolve_prompt_pack
 from droste.protocols.llm_client import TokenUsage
@@ -243,3 +247,100 @@ def test_a_raising_probe_cannot_fail_the_run_it_is_recovering() -> None:
     # Treated as "no work" rather than propagating: a terminal recovery path
     # must never be able to end the run it exists to rescue.
     assert result.extracted is False
+
+
+# --- What the extract pass is allowed to see -----------------------------
+#
+# Unlocking the extract call was necessary but not sufficient: the prompt is
+# built from draft + code + stdout, so a run whose data exists only in the host
+# ledger handed the extract pass failing code and nothing else, and it returned
+# InsufficientEvidence. The host can now contribute what its accessors actually
+# returned.
+
+
+def _captured_extract_prompt(**config_kwargs):
+    """Run to a terminal handoff and return the extract call's user prompt."""
+    seen: list[str] = []
+
+    class CapturingClient(MockLLMClient):
+        def responses_create(self, messages, *args, **kwargs):  # type: ignore[override]
+            seen.append(str(messages[-1].get("content", "")))
+            return super().responses_create(messages, *args, **kwargs)
+
+    responses = [MockResponse(text=_raising_code(), usage=_usage()) for _ in range(12)]
+    run_rlm(
+        question="test",
+        environment=MockEnvironment(),
+        root_llm=CapturingClient(responses=responses),
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(budget=Budget(max_iterations=2), **config_kwargs),
+    )
+    return seen[-1] if seen else ""
+
+
+def test_host_observations_reach_the_extract_prompt() -> None:
+    prompt = _captured_extract_prompt(
+        extractable_work_probe=lambda: True,
+        extract_context_provider=lambda: (
+            "[evidence-1] query(...) -> 84 rows\nSarah | dinner friday"
+        ),
+    )
+
+    assert "Data retrieved during the run" in prompt
+    assert "Sarah | dinner friday" in prompt
+
+
+def test_observations_are_bounded_so_recovery_cannot_eat_its_own_budget() -> None:
+    """The extract call is deliberately uncached, so every character is paid at
+    full prefill and an unbounded host could spend the whole recovery call."""
+    prompt = _captured_extract_prompt(
+        extractable_work_probe=lambda: True,
+        extract_context_provider=lambda: "x" * 50_000,
+    )
+
+    assert prompt.count("x") == _EXTRACT_HOST_CONTEXT_CHARS
+
+
+def test_a_raising_context_provider_still_lets_extraction_run() -> None:
+    def explode() -> str:
+        raise RuntimeError("ledger unavailable")
+
+    with pytest.warns(RuntimeWarning, match="extract-context provider failed"):
+        prompt = _captured_extract_prompt(
+            extractable_work_probe=lambda: True,
+            extract_context_provider=explode,
+        )
+
+    # Degraded, not fatal: the extract call still happened, just without them.
+    assert prompt
+    assert "Data retrieved during the run" not in prompt
+
+
+def test_a_run_the_engine_could_already_extract_is_left_untouched() -> None:
+    """The narrow gate. A run whose draft or successful step the engine can see
+    gets the prompt it got before this hook existed — same answer, same spend,
+    same benchmark score. Only runs that produce nothing today change."""
+    provider_calls: list[int] = []
+
+    responses = [
+        MockResponse(
+            text="```python\nanswer['content'] = 'partial finding'\n```",
+            usage=_usage(),
+        ),
+        MockResponse(text="Best-effort synthesis.", usage=_usage()),
+    ]
+    result = run_rlm(
+        question="test",
+        environment=MockEnvironment(),
+        root_llm=MockLLMClient(responses=responses),
+        subcalls=MockSubcallClient(),
+        config=RLMConfig(
+            budget=Budget(max_iterations=1),
+            extractable_work_probe=lambda: True,
+            extract_context_provider=lambda: provider_calls.append(1) or "should not appear",
+        ),
+    )
+
+    assert result.extracted is True
+    # The engine saw the draft, so the host was never consulted at all.
+    assert provider_calls == []

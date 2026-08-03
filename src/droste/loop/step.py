@@ -92,6 +92,15 @@ CheckpointPayloadProvider: TypeAlias = Callable[[], Any]
 # host does, and stays the only thing that knows what its own data layer did.
 ExtractableWorkProbe: TypeAlias = Callable[[], bool]
 
+# Renders host-held observations for the terminal extract prompt. The engine
+# builds that prompt from the draft and per-iteration code/stdout, which is
+# everything it can see — but a REPL only surfaces what generated code chose to
+# print, so a run that fetched rows and then raised leaves the extract pass
+# looking at failing code and nothing else. This lets the host contribute what
+# its accessors actually returned. Pre-rendered text: the engine bounds it and
+# concatenates it, and never parses or inspects it.
+ExtractContextProvider: TypeAlias = Callable[[], str]
+
 
 class ReadyMetadataValidatorError(RuntimeError):
     """Trusted host validator failed instead of returning repairable violations."""
@@ -127,6 +136,7 @@ class RLMConfig:
     # checkpoint can never fail a run.
     checkpoint_payload_provider: CheckpointPayloadProvider | None = None
     extractable_work_probe: ExtractableWorkProbe | None = None
+    extract_context_provider: ExtractContextProvider | None = None
 
 
 @dataclass
