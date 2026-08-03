@@ -60,7 +60,10 @@ Deno.test("the timer only ticks while the event loop is free", async () => {
   try {
     // Awaiting yields, so the timer runs — a healthy provider wait.
     await new Promise((resolve) => setTimeout(resolve, 120));
-    assert(ticks.length >= 3, `expected ticks while awaiting, got ${ticks.length}`);
+    assert(
+      ticks.length >= 3,
+      `expected ticks while awaiting, got ${ticks.length}`,
+    );
 
     // Blocking the thread is what a wedged Pyodide execution looks like from
     // here. No tick may land during it, which is what lets a watchdog still
@@ -76,4 +79,30 @@ Deno.test("the timer only ticks while the event loop is free", async () => {
   } finally {
     clearInterval(timer);
   }
+});
+
+// The shape a real subcall actually produced, captured from a live 75-second
+// provider call. Pinned verbatim because the first implementation wrapped only
+// `fetch` — which a streamed response resolves as soon as headers arrive — and
+// so reported nothing for exactly the wait it exists to cover. The mechanism
+// test above passed anyway, because it proved the timer worked rather than that
+// it spanned the right window. Zero heartbeats in a 4428-delta live run is what
+// actually caught it.
+Deno.test("a heartbeat a live subcall produced is forwarded", () => {
+  const observed = {
+    type: "heartbeat",
+    elapsed_ms: 15003,
+    run_id: "ca4fd03d-5532-4255-9669-86165c4bb0a3",
+    parent_run_id: "f6708912-b58d-4e3d-b0e9-a2c28d608635",
+    depth: 1,
+    seq: 2,
+    timestamp: "2026-08-03T21:46:54.805Z",
+    version: 8,
+    persistence_class: "transient",
+  };
+
+  assert(isRlmEvent(JSON.stringify(observed)));
+  // depth 1 is a subcall — the calls that run long and, when batched, stream
+  // nothing at all. That is the case this whole change exists for.
+  assertEquals(observed.depth, 1);
 });

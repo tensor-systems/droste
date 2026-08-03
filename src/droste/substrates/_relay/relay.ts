@@ -564,14 +564,14 @@ function finishHTTPFailureAssociation(adapterRaised: boolean): number {
 // while the event loop is free, which is exactly when the process is healthy.
 const HEARTBEAT_INTERVAL_MS = 15_000;
 
-function withProviderHeartbeat<T>(work: () => Promise<T>): Promise<T> {
+function startProviderHeartbeat(): () => void {
   const startedAt = Date.now();
   const timer = setInterval(() => {
     emitEvent({ type: "heartbeat", elapsed_ms: Date.now() - startedAt });
   }, HEARTBEAT_INTERVAL_MS);
   // Never let liveness reporting hold the process open past its work.
   if (typeof Deno !== "undefined" && Deno.unrefTimer) Deno.unrefTimer(timer);
-  return work().finally(() => clearInterval(timer));
+  return () => clearInterval(timer);
 }
 
 py.globals.set(
@@ -607,80 +607,85 @@ py.globals.set(
     if (wantsStream) {
       headers["Accept"] = 'application/x-ndjson; profile="responses-stream/v2"';
     }
-    // The wait that matters: for a non-streamed call the server finishes
-    // before headers arrive, so this await IS the whole provider latency.
-    const r = await withProviderHeartbeat(() =>
-      fetch(u, { method: m, headers, body: b })
-    );
-    // Exact runner callback JSON failures are protocol values for Python.
-    // Every other HTTP error stays a thrown, bounded transport failure.
-    if (!r.ok) {
-      // Set provenance before touching the body: read/decode/cancellation
-      // failures are still this HTTP failure and must retain its status.
-      associateHTTPFailure(fetchID, r.status, "transport-exception");
-      const contentType = r.headers.get("content-type") || "";
-      const typedCallback = shouldReturnRunnerCallbackFailureBody(
-        m,
-        u,
-        contentType,
-        [
-          request.root_endpoint,
-          request.subcall_endpoint,
-          request.subcall_batch_endpoint,
-        ],
-      );
-      if (typedCallback) {
-        try {
-          const failureBody = await readBoundedResponseText(r);
-          if (!failureBody.complete) {
-            throw new Error("incomplete callback body");
+    // Spans the WHOLE call, not just the fetch. A streamed response resolves
+    // `fetch` as soon as headers arrive and then spends its minutes in
+    // streamResponses below, so stopping at the fetch reported nothing for
+    // exactly the wait this exists to cover.
+    const stopHeartbeat = startProviderHeartbeat();
+    try {
+      const r = await fetch(u, { method: m, headers, body: b });
+      // Exact runner callback JSON failures are protocol values for Python.
+      // Every other HTTP error stays a thrown, bounded transport failure.
+      if (!r.ok) {
+        // Set provenance before touching the body: read/decode/cancellation
+        // failures are still this HTTP failure and must retain its status.
+        associateHTTPFailure(fetchID, r.status, "transport-exception");
+        const contentType = r.headers.get("content-type") || "";
+        const typedCallback = shouldReturnRunnerCallbackFailureBody(
+          m,
+          u,
+          contentType,
+          [
+            request.root_endpoint,
+            request.subcall_endpoint,
+            request.subcall_batch_endpoint,
+          ],
+        );
+        if (typedCallback) {
+          try {
+            const failureBody = await readBoundedResponseText(r);
+            if (!failureBody.complete) {
+              throw new Error("incomplete callback body");
+            }
+            // Keep exact number lexemes raw; only decoded JSON string tokens may
+            // be rewritten. The returned value keeps a fetch-scoped status
+            // association until the adapter invocation surfaces or handles it.
+            const safeBody = validateAndRedactRunnerCallbackFailureBody(
+              failureBody.text,
+              [creds.apiKey, creds.customerToken, creds.runnerToken],
+            );
+            associateHTTPFailure(fetchID, r.status, "typed-callback-value");
+            return safeBody;
+          } catch {
+            // Fall through to a body-free transport error. Invalid UTF-8,
+            // malformed JSON, short reads, and oversize bodies never cross into
+            // the untrusted interpreter.
           }
-          // Keep exact number lexemes raw; only decoded JSON string tokens may
-          // be rewritten. The returned value keeps a fetch-scoped status
-          // association until the adapter invocation surfaces or handles it.
-          const safeBody = validateAndRedactRunnerCallbackFailureBody(
-            failureBody.text,
-            [creds.apiKey, creds.customerToken, creds.runnerToken],
-          );
-          associateHTTPFailure(fetchID, r.status, "typed-callback-value");
-          return safeBody;
-        } catch {
-          // Fall through to a body-free transport error. Invalid UTF-8,
-          // malformed JSON, short reads, and oversize bodies never cross into
-          // the untrusted interpreter.
+        } else {
+          try {
+            await r.body?.cancel();
+          } catch {
+            // The status was captured before cancellation and remains the only
+            // diagnostic allowed to cross this boundary.
+          }
         }
-      } else {
-        try {
-          await r.body?.cancel();
-        } catch {
-          // The status was captured before cancellation and remains the only
-          // diagnostic allowed to cross this boundary.
-        }
+        const redactedStatusText = redactRelayErrorText(r.statusText, [
+          creds.apiKey,
+          creds.customerToken,
+          creds.runnerToken,
+        ]).replace(/\s+/g, " ").trim().slice(0, 120);
+        const statusText = /^[A-Za-z .'-]{1,120}$/.test(redactedStatusText)
+          ? redactedStatusText
+          : "";
+        throw new Error(
+          `ModelRelay HTTP ${r.status}${statusText ? ` ${statusText}` : ""}`,
+        );
       }
-      const redactedStatusText = redactRelayErrorText(r.statusText, [
-        creds.apiKey,
-        creds.customerToken,
-        creds.runnerToken,
-      ]).replace(/\s+/g, " ").trim().slice(0, 120);
-      const statusText = /^[A-Za-z .'-]{1,120}$/.test(redactedStatusText)
-        ? redactedStatusText
-        : "";
-      throw new Error(
-        `ModelRelay HTTP ${r.status}${statusText ? ` ${statusText}` : ""}`,
-      );
+      // Stream only when we asked for it AND the server actually returned ndjson;
+      // otherwise fall back to the unary path — behavior identical to before.
+      const contentType = r.headers.get("content-type") || "";
+      const isNdjson = contentType.includes("ndjson") ||
+        contentType.includes("event-stream");
+      if (wantsStream && isNdjson) {
+        return await streamResponses(
+          r,
+          (chunk) => emitEvent({ type: "reasoning_delta", text: chunk }),
+        );
+      }
+      return await r.text();
+    } finally {
+      stopHeartbeat();
     }
-    // Stream only when we asked for it AND the server actually returned ndjson;
-    // otherwise fall back to the unary path — behavior identical to before.
-    const contentType = r.headers.get("content-type") || "";
-    const isNdjson = contentType.includes("ndjson") ||
-      contentType.includes("event-stream");
-    if (wantsStream && isNdjson) {
-      return await streamResponses(
-        r,
-        (chunk) => emitEvent({ type: "reasoning_delta", text: chunk }),
-      );
-    }
-    return await r.text();
   },
 );
 // A′: the sandbox receives the credential-stripped request; legacy keeps the
