@@ -568,6 +568,34 @@ def _has_extractable_work(answer: dict[str, Any], has_successful_step: bool) -> 
     return has_successful_step
 
 
+def _host_reports_extractable_work(cfg: "RLMConfig") -> bool:
+    """Whether the host says its own state holds work worth extracting.
+
+    The engine's test above sees only what the engine owns. Generated code that
+    retrieves real data through a host accessor and then raises before printing
+    leaves no draft, no successful step, and no stdout — so the engine concludes
+    there is nothing to extract while the host is holding everything the answer
+    needed. Asking rather than inferring keeps the engine ignorant of what the
+    host's data layer is, which is the whole point of the boundary.
+
+    A probe that raises is treated as "no": a terminal recovery path must not be
+    able to fail the run it is recovering.
+    """
+
+    probe = cfg.extractable_work_probe
+    if probe is None:
+        return False
+    try:
+        return bool(probe())
+    except Exception as exc:  # noqa: BLE001 - never let a probe end the run
+        warnings.warn(
+            f"RLM extractable-work probe failed, treating as no work: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return False
+
+
 def _is_deadline_error(error: RLMError | None) -> bool:
     """Whether a root failure is wall-clock deadline exhaustion.
 
@@ -1357,7 +1385,10 @@ def run_rlm(
             not answer.get("ready")
             and terminal_handoff
             and trajectory
-            and _has_extractable_work(answer, has_successful_step)
+            and (
+                _has_extractable_work(answer, has_successful_step)
+                or _host_reports_extractable_work(cfg)
+            )
         ):
             context.emit_progress("Loop ended unconfirmed: extracting best final answer...")
             context.emit_event(extract_event(iterations, "start"))

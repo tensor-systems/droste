@@ -84,6 +84,14 @@ ReadyMetadataValidator: TypeAlias = Callable[
 # ferry their own answer-critical state (whatever that is) alongside the draft.
 CheckpointPayloadProvider: TypeAlias = Callable[[], Any]
 
+# Answers "is there work here worth one terminal extract call?" for state the
+# engine cannot see. The engine's own test — a retained draft, or a step that
+# executed successfully — misses the case where generated code retrieved real
+# data through a host accessor and then raised before printing any of it. The
+# engine has no signal there (no draft, no successful step, no stdout), but the
+# host does, and stays the only thing that knows what its own data layer did.
+ExtractableWorkProbe: TypeAlias = Callable[[], bool]
+
 
 class ReadyMetadataValidatorError(RuntimeError):
     """Trusted host validator failed instead of returning repairable violations."""
@@ -118,6 +126,7 @@ class RLMConfig:
     # raises is reported and the checkpoint carries a null payload: a
     # checkpoint can never fail a run.
     checkpoint_payload_provider: CheckpointPayloadProvider | None = None
+    extractable_work_probe: ExtractableWorkProbe | None = None
 
 
 @dataclass
