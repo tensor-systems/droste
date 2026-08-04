@@ -63,29 +63,17 @@ jobs:
         run: uv run pytest -q
       - name: Build sdist + wheel
         run: uv build
-      - name: Publish to PyPI (trusted publishing)
-        # --check-url makes re-runs idempotent: if a previous attempt uploaded
-        # some artifacts before failing (or the release step after this one
-        # failed), the retry verifies existing files against the index and
-        # skips them instead of erroring on duplicate filenames.
-        run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/droste/
       - name: Bundle the Pyodide relay assets
-        # Convenience artifact for non-Python consumers (#33): the EMBEDDER
-        # path is now the wheel itself — the relay ships as package data
-        # under droste/substrates/_relay (see `droste relay-path`), so wheel
-        # and relay are version-locked by construction. Deliberately NOT in
-        # dist/ — uv publish uploads dist/* to PyPI and would choke on a
-        # tarball that isn't an sdist.
-        run: |
-          staging="droste-relay-$GITHUB_REF_NAME"
-          mkdir -p "$staging/conformance" relay-dist
-          cp src/droste/substrates/_relay/*.ts pyodide/README.md "$staging/"
-          cp src/droste/testing/fixtures/trace-v9-execution.ndjson \
-            src/droste/testing/fixtures/trace-v9-lifecycle.ndjson \
-            src/droste/testing/fixtures/runner-v10-refusal.ndjson \
-            "$staging/conformance/"
-          printf '%s %s\n' "$GITHUB_REF_NAME" "$GITHUB_SHA" > "$staging/DROSTE_VERSION"
-          tar czf "relay-dist/$staging.tar.gz" "$staging"
+        # Ordered BEFORE the publish: every fallible local step must finish
+        # before the one irreversible byte leaves the runner. This step failing
+        # after a successful upload is what stranded 0.24.0 -- published to
+        # PyPI, absent from the GitHub release, and impossible to re-tag.
+        run: scripts/bundle-relay.sh "$GITHUB_REF_NAME" "$GITHUB_SHA"
+      - name: Publish to PyPI (trusted publishing)
+        # The only irreversible step, and now the last thing that can fail in a
+        # way that matters. Converges: a re-run of an already-published version
+        # is a no-op rather than a duplicate-filename error.
+        run: scripts/publish-pypi.sh "${GITHUB_REF_NAME#v}"
       - name: GitHub release with artifacts
         # Retry-safe like the PyPI step: create only when absent, and upload
         # assets with replacement semantics so a rerun completes a partial

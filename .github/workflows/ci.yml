@@ -140,7 +140,9 @@ jobs:
           PY
       - name: Distributions bundle the exact event ABI corpus (#144)
         run: |
-          for f in trace-v9-execution.ndjson trace-v9-lifecycle.ndjson runner-v10-refusal.ndjson; do
+          fixtures="$(uv run --no-sync python -c 'from droste.testing import conformance_fixture_names; print("\n".join(conformance_fixture_names()))')"
+          [ -n "$fixtures" ] || { echo "conformance corpus is empty"; exit 1; }
+          for f in $fixtures; do
             unzip -l dist/*.whl | grep -q "droste/testing/fixtures/$f" || {
               echo "wheel is missing droste/testing/fixtures/$f"; exit 1;
             }
@@ -171,6 +173,35 @@ jobs:
             "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v9-execution.ndjson"
           cmp src/droste/testing/fixtures/runner-v10-refusal.ndjson \
             "$tmp/$sdist_root/src/droste/testing/fixtures/runner-v10-refusal.ndjson"
+
+  release-dryrun:
+    name: release path (dry run)
+    runs-on: [self-hosted, macOS, ARM64]
+    # The release workflow used to run only on a tag, so a step that broke was
+    # discoverable only by breaking a release -- which is how a fixture rename
+    # shipped. Exercise the same scripts here, on every pull request, with the
+    # single irreversible action stubbed out.
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - name: Sync (locked)
+        run: uv sync --locked
+      - name: Build sdist + wheel
+        run: uv build
+      - name: Bundle the Pyodide relay assets
+        run: scripts/bundle-relay.sh "v0.0.0-dryrun" "$GITHUB_SHA"
+      - name: Relay tarball carries the whole conformance corpus
+        run: |
+          fixtures="$(uv run --no-sync python -c 'from droste.testing import conformance_fixture_names; print("\n".join(conformance_fixture_names()))')"
+          [ -n "$fixtures" ] || { echo "conformance corpus is empty"; exit 1; }
+          for f in $fixtures; do
+            tar tzf relay-dist/droste-relay-v0.0.0-dryrun.tar.gz \
+              | grep -q "conformance/$f" || {
+              echo "relay tarball is missing conformance/$f"; exit 1;
+            }
+          done
+      - name: Publish is validated, never performed
+        run: scripts/publish-pypi.sh "0.0.0" --dry-run
 
   deno:
     name: deno (pyodide substrate)
@@ -319,7 +350,9 @@ jobs:
           PY
       - name: Distributions bundle the exact event ABI corpus (#144)
         run: |
-          for f in trace-v9-execution.ndjson trace-v9-lifecycle.ndjson runner-v10-refusal.ndjson; do
+          fixtures="$(uv run --no-sync python -c 'from droste.testing import conformance_fixture_names; print("\n".join(conformance_fixture_names()))')"
+          [ -n "$fixtures" ] || { echo "conformance corpus is empty"; exit 1; }
+          for f in $fixtures; do
             unzip -l dist/*.whl | grep -q "droste/testing/fixtures/$f" || {
               echo "wheel is missing droste/testing/fixtures/$f"; exit 1;
             }

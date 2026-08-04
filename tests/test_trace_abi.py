@@ -1348,3 +1348,38 @@ def test_startup_reports_the_ready_gates_a_run_armed() -> None:
             "ready_gates": ["policy_hints", "ready_answer_validator"],
         },
     )
+
+
+def test_conformance_corpus_is_enumerated_not_listed() -> None:
+    """A corpus rename must not require editing every consumer.
+
+    The filenames were duplicated across two workflows, the packaging check,
+    the release tarball, and downstream suites; the v8 -> v9 rename was missed
+    in the one workflow that only runs on a tag, and it broke a release.
+    """
+
+    from droste.testing import (
+        conformance_fixture_names,
+        runner_v10_refusal_ndjson,
+        trace_v9_execution_ndjson,
+        trace_v9_lifecycle_ndjson,
+    )
+
+    names = conformance_fixture_names()
+
+    assert names == tuple(sorted(names)), "enumeration must be deterministic"
+    assert names, "an empty corpus would silently pass every consumer's check"
+    assert all(name.endswith(".ndjson") for name in names)
+    # Every named accessor's fixture is in the enumeration, so a consumer
+    # driven by it stages exactly what the helpers can read.
+    assert set(names) == {
+        "runner-v10-refusal.ndjson",
+        "trace-v9-execution.ndjson",
+        "trace-v9-lifecycle.ndjson",
+    }
+    for reader in (
+        runner_v10_refusal_ndjson,
+        trace_v9_execution_ndjson,
+        trace_v9_lifecycle_ndjson,
+    ):
+        assert reader(), "every enumerated fixture must be non-empty"
