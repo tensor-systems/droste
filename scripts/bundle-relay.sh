@@ -29,10 +29,7 @@ cp src/droste/substrates/_relay/*.ts pyodide/README.md "$staging/"
 # Enumerated from the package, never listed here: a corpus rename must not
 # require finding this file. Fails loudly if the corpus is empty rather than
 # shipping a tarball with a silently missing conformance directory.
-fixtures="$(uv run --no-sync python -c '
-from droste.testing import conformance_fixture_names
-print("\n".join(conformance_fixture_names()))
-')"
+fixtures="$(cd src/droste/testing/fixtures && ls *.ndjson | sort)"  # single source: the corpus directory itself
 if [ -z "$fixtures" ]; then
   echo "::error::conformance corpus is empty — refusing to bundle a relay tarball without it" >&2
   exit 1

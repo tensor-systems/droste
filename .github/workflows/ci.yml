@@ -140,7 +140,7 @@ jobs:
           PY
       - name: Distributions bundle the exact event ABI corpus (#144)
         run: |
-          fixtures="$(uv run --no-sync python -c 'from droste.testing import conformance_fixture_names; print("\n".join(conformance_fixture_names()))')"
+          fixtures="$(cd src/droste/testing/fixtures && ls *.ndjson | sort)"
           [ -n "$fixtures" ] || { echo "conformance corpus is empty"; exit 1; }
           for f in $fixtures; do
             unzip -l dist/*.whl | grep -q "droste/testing/fixtures/$f" || {
@@ -192,7 +192,7 @@ jobs:
         run: scripts/bundle-relay.sh "v0.0.0-dryrun" "$GITHUB_SHA"
       - name: Relay tarball carries the whole conformance corpus
         run: |
-          fixtures="$(uv run --no-sync python -c 'from droste.testing import conformance_fixture_names; print("\n".join(conformance_fixture_names()))')"
+          fixtures="$(cd src/droste/testing/fixtures && ls *.ndjson | sort)"
           [ -n "$fixtures" ] || { echo "conformance corpus is empty"; exit 1; }
           for f in $fixtures; do
             tar tzf relay-dist/droste-relay-v0.0.0-dryrun.tar.gz \
@@ -201,7 +201,11 @@ jobs:
             }
           done
       - name: Publish is validated, never performed
-        run: scripts/publish-pypi.sh "0.0.0" --dry-run
+        # The version actually built: publish-pypi.sh refuses a dist/ holding
+        # anything else, which is the guard being exercised, not bypassed.
+        run: |
+          version="$(uv run --no-project --python 3.11 python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          scripts/publish-pypi.sh "$version" --dry-run
 
   deno:
     name: deno (pyodide substrate)
@@ -350,7 +354,7 @@ jobs:
           PY
       - name: Distributions bundle the exact event ABI corpus (#144)
         run: |
-          fixtures="$(uv run --no-sync python -c 'from droste.testing import conformance_fixture_names; print("\n".join(conformance_fixture_names()))')"
+          fixtures="$(cd src/droste/testing/fixtures && ls *.ndjson | sort)"
           [ -n "$fixtures" ] || { echo "conformance corpus is empty"; exit 1; }
           for f in $fixtures; do
             unzip -l dist/*.whl | grep -q "droste/testing/fixtures/$f" || {
