@@ -11,6 +11,38 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
+## 0.24.0
+
+### Trace ABI v9 reports which ready-time gates a run armed
+
+The `startup` event gains an optional `ready_gates` array naming the gates the
+run actually enabled: any of `policy_hints`, `ready_metadata_validator`, and
+`ready_answer_validator`. An empty array means the run enforced nothing.
+
+It exists because enforcement here is opt-in and defaults to off, so a host that
+never passes `policy_hints` runs with `ready_violations` and
+`contract_violations` permanently inert -- and until now emitted a trace
+identical to a fully gated run. That is the silent degradation this file is for.
+One embedder shipped for months in exactly that state while its benchmark suite
+passed hints and measured the enforced configuration; no test could fail,
+because nothing recorded which system was running.
+
+**Embedders should assert on `ready_gates` in whatever checks their production
+configuration**, and treat an unexpectedly empty array as a misconfiguration
+rather than a default.
+
+### `ready_answer_validator` gates on observed run state
+
+`run_rlm` accepts a new optional `ready_answer_validator`, called with a
+`ReadyAnswerState` (metadata, answer content, iteration, calls made, successful
+calls) instead of metadata alone.
+
+`ready_metadata_validator` sees only model-written metadata, so it can verify
+the model's *claims* about its work but not the work. Behavioural rules -- "do
+not answer without consulting the data" -- need what the engine observed. The
+older hook is unchanged and still supported; both run when both are supplied,
+and violations from either revoke readiness identically.
+
 ## 0.23.0
 
 ### Trace ABI v8 reports liveness during provider calls

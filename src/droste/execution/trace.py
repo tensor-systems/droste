@@ -17,7 +17,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
-TRACE_ABI_VERSION = 8
+TRACE_ABI_VERSION = 9
 
 
 class PersistenceClass(str, Enum):
@@ -71,6 +71,7 @@ EVENT_BODY_SCHEMAS: Mapping[str, EventBodySchema] = MappingProxyType(
                 "provider_protocol": (int, _NONE_TYPE),
                 "scaffold_manifest_id": str,
                 "scaffold_manifest_version": int,
+                "ready_gates": (list, tuple),
             },
         ),
         "progress": ({"status": str}, {}),

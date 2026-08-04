@@ -57,6 +57,7 @@ from ..structured import _StructuredBatchEvidence, aggregate_json_counts, bind_s
 from .code_extractor import extract_code_block
 from .step import (
     EMPTY_OUTPUT_NUDGE,
+    ReadyAnswerValidator,
     ReadyMetadataValidator,
     RLMConfig,
     RLMResult,
@@ -767,6 +768,7 @@ def run_rlm(
     prompt_pack: PromptPack | None = None,
     consumer_prompt_catalog: PromptPackCatalog | None = None,
     ready_metadata_validator: ReadyMetadataValidator | None = None,
+    ready_answer_validator: ReadyAnswerValidator | None = None,
 ) -> RLMResult:
     try:
         cfg = config or RLMConfig()
@@ -927,6 +929,7 @@ def run_rlm(
                 namespaced_accessor_pairs=namespaced_accessor_pairs,
                 semantic_evidence=semantic_evidence,
                 ready_metadata_validator=ready_metadata_validator,
+                ready_answer_validator=ready_answer_validator,
             )
 
         def emit_checkpoint() -> None:
@@ -995,6 +998,23 @@ def run_rlm(
                 "provider_protocol": scaffold_manifest.body["abis"]["provider"],
                 "scaffold_manifest_id": scaffold_manifest.manifest_id,
                 "scaffold_manifest_version": scaffold_manifest.schema_version,
+                # Which ready-time gates this run actually armed. Enforcement
+                # that defaults to off is indistinguishable from a caller who
+                # meant to disable it, so a run that gates nothing has to say
+                # so rather than look identical to a fully gated one. Cozy
+                # shipped for months with policy_hints unset -- every
+                # ready_violations/contract_violations check inert -- while its
+                # benchmarks passed hints and measured an enforced system.
+                # Nothing in either trace recorded the difference.
+                "ready_gates": sorted(
+                    name
+                    for name, active in (
+                        ("policy_hints", cfg.policy_hints is not None),
+                        ("ready_metadata_validator", ready_metadata_validator is not None),
+                        ("ready_answer_validator", ready_answer_validator is not None),
+                    )
+                    if active
+                ),
             }
         )
         while not answer.get("ready"):
