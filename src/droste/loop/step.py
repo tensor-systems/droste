@@ -750,7 +750,10 @@ def execute_step(
             host_gates: list[tuple[str, Any]] = []
             if ready_metadata_validator is not None:
                 host_gates.append(
-                    ("ready_metadata_validator", lambda: ready_metadata_validator(deepcopy(answer_metadata)))
+                    (
+                        "ready_metadata_validator",
+                        lambda: ready_metadata_validator(deepcopy(answer_metadata)),
+                    )
                 )
             if ready_answer_validator is not None:
                 state = ReadyAnswerState(
@@ -767,14 +770,10 @@ def execute_step(
                     if isinstance(validator_violations, str) or not isinstance(
                         validator_violations, Sequence
                     ):
-                        raise TypeError(
-                            f"{gate_name} must return a sequence of violation strings"
-                        )
+                        raise TypeError(f"{gate_name} must return a sequence of violation strings")
                     for violation in validator_violations:
                         if not isinstance(violation, str) or not violation.strip():
-                            raise TypeError(
-                                f"{gate_name} violations must be non-empty strings"
-                            )
+                            raise TypeError(f"{gate_name} violations must be non-empty strings")
                         violations.append(violation.strip())
                 except Exception as exc:
                     raise ReadyMetadataValidatorError(

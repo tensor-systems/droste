@@ -140,7 +140,7 @@ jobs:
           PY
       - name: Distributions bundle the exact event ABI corpus (#144)
         run: |
-          for f in trace-v8-execution.ndjson trace-v8-lifecycle.ndjson runner-v10-refusal.ndjson; do
+          for f in trace-v9-execution.ndjson trace-v9-lifecycle.ndjson runner-v10-refusal.ndjson; do
             unzip -l dist/*.whl | grep -q "droste/testing/fixtures/$f" || {
               echo "wheel is missing droste/testing/fixtures/$f"; exit 1;
             }
@@ -154,21 +154,21 @@ jobs:
 
           from droste.testing import (
               runner_v10_refusal_ndjson,
-              trace_v8_execution_ndjson,
-              trace_v8_lifecycle_ndjson,
+              trace_v9_execution_ndjson,
+              trace_v9_lifecycle_ndjson,
           )
 
           source = Path(sys.argv[1])
-          assert trace_v8_execution_ndjson() == (source / "trace-v8-execution.ndjson").read_bytes()
-          assert trace_v8_lifecycle_ndjson() == (source / "trace-v8-lifecycle.ndjson").read_bytes()
+          assert trace_v9_execution_ndjson() == (source / "trace-v9-execution.ndjson").read_bytes()
+          assert trace_v9_lifecycle_ndjson() == (source / "trace-v9-lifecycle.ndjson").read_bytes()
           assert runner_v10_refusal_ndjson() == (source / "runner-v10-refusal.ndjson").read_bytes()
           PY
           sdist_root="$(tar tzf dist/droste-*.tar.gz | sed -n '1s#/.*##p')"
           tar xzf dist/droste-*.tar.gz -C "$tmp"
-          cmp src/droste/testing/fixtures/trace-v8-lifecycle.ndjson \
-            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v8-lifecycle.ndjson"
-          cmp src/droste/testing/fixtures/trace-v8-execution.ndjson \
-            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v8-execution.ndjson"
+          cmp src/droste/testing/fixtures/trace-v9-lifecycle.ndjson \
+            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v9-lifecycle.ndjson"
+          cmp src/droste/testing/fixtures/trace-v9-execution.ndjson \
+            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v9-execution.ndjson"
           cmp src/droste/testing/fixtures/runner-v10-refusal.ndjson \
             "$tmp/$sdist_root/src/droste/testing/fixtures/runner-v10-refusal.ndjson"
 
@@ -319,7 +319,7 @@ jobs:
           PY
       - name: Distributions bundle the exact event ABI corpus (#144)
         run: |
-          for f in trace-v8-execution.ndjson trace-v8-lifecycle.ndjson runner-v10-refusal.ndjson; do
+          for f in trace-v9-execution.ndjson trace-v9-lifecycle.ndjson runner-v10-refusal.ndjson; do
             unzip -l dist/*.whl | grep -q "droste/testing/fixtures/$f" || {
               echo "wheel is missing droste/testing/fixtures/$f"; exit 1;
             }
@@ -333,21 +333,21 @@ jobs:
 
           from droste.testing import (
               runner_v10_refusal_ndjson,
-              trace_v8_execution_ndjson,
-              trace_v8_lifecycle_ndjson,
+              trace_v9_execution_ndjson,
+              trace_v9_lifecycle_ndjson,
           )
 
           source = Path(sys.argv[1])
-          assert trace_v8_execution_ndjson() == (source / "trace-v8-execution.ndjson").read_bytes()
-          assert trace_v8_lifecycle_ndjson() == (source / "trace-v8-lifecycle.ndjson").read_bytes()
+          assert trace_v9_execution_ndjson() == (source / "trace-v9-execution.ndjson").read_bytes()
+          assert trace_v9_lifecycle_ndjson() == (source / "trace-v9-lifecycle.ndjson").read_bytes()
           assert runner_v10_refusal_ndjson() == (source / "runner-v10-refusal.ndjson").read_bytes()
           PY
           sdist_root="$(tar tzf dist/droste-*.tar.gz | sed -n '1s#/.*##p')"
           tar xzf dist/droste-*.tar.gz -C "$tmp"
-          cmp src/droste/testing/fixtures/trace-v8-lifecycle.ndjson \
-            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v8-lifecycle.ndjson"
-          cmp src/droste/testing/fixtures/trace-v8-execution.ndjson \
-            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v8-execution.ndjson"
+          cmp src/droste/testing/fixtures/trace-v9-lifecycle.ndjson \
+            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v9-lifecycle.ndjson"
+          cmp src/droste/testing/fixtures/trace-v9-execution.ndjson \
+            "$tmp/$sdist_root/src/droste/testing/fixtures/trace-v9-execution.ndjson"
           cmp src/droste/testing/fixtures/runner-v10-refusal.ndjson \
             "$tmp/$sdist_root/src/droste/testing/fixtures/runner-v10-refusal.ndjson"
 
