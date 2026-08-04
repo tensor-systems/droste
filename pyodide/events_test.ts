@@ -120,6 +120,7 @@ const BODIES: Record<string, Record<string, unknown>> = {
     status: "success",
     ready: true,
     extracted: false,
+    degradations: [],
     iterations: 1,
     usage: {
       kind: "resolved",

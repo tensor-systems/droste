@@ -990,6 +990,7 @@ def finalize(
             scaffold_manifest.schema_version if scaffold_manifest is not None else None
         ),
         "stdout_chars": result.stdout_chars,
+        "degradations": [dict(item) for item in result.degradations],
     }
     result.run_record = context.finish_trace(terminal)
     return result

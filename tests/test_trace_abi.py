@@ -124,6 +124,7 @@ def _terminal() -> dict[str, object]:
         "status": "success",
         "ready": True,
         "extracted": False,
+        "degradations": [],
         "iterations": 0,
         "usage": usage,
         "budget": budget,

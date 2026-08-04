@@ -388,6 +388,7 @@ function validBody(type: string, body: Record<string, unknown>): boolean {
           "status",
           "ready",
           "extracted",
+          "degradations",
           "iterations",
           "usage",
           "budget",
@@ -401,6 +402,7 @@ function validBody(type: string, body: Record<string, unknown>): boolean {
       ) && ["success", "error", "cancelled"].includes(String(body.status)) &&
         typeof body.ready === "boolean" &&
         typeof body.extracted === "boolean" &&
+        Array.isArray(body.degradations) &&
         integerField("iterations") && Number(body.iterations) >= 0 &&
         isObject(body.usage) &&
         validBody("usage", body.usage) && isObject(body.budget) &&

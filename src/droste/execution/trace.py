@@ -177,6 +177,9 @@ EVENT_BODY_SCHEMAS: Mapping[str, EventBodySchema] = MappingProxyType(
                 "status": str,
                 "ready": bool,
                 "extracted": bool,
+                # Same field as the result event: a host that reads only the
+                # terminal event must still learn what the run did without.
+                "degradations": list,
                 "iterations": int,
                 "usage": Mapping,
                 "budget": Mapping,
