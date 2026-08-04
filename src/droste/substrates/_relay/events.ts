@@ -439,7 +439,7 @@ export function isRlmEvent(line: string): boolean {
         Number.isInteger(o.seq) && o.seq > 0 &&
         typeof o.timestamp === "string" &&
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(o.timestamp) &&
-        o.version === 9 &&
+        o.version === 10 &&
         o.persistence_class === PERSISTENCE_BY_TYPE[o.type] &&
         Number.isInteger(o.depth) && o.depth >= 0 &&
         (o.depth === 0

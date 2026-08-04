@@ -63,6 +63,9 @@ def build_response(
         "subcalls": 0,
         "successful_subcalls": 0,
         "extracted": False,
+        # Same key on every response shape: a consumer reads one field to know
+        # what was lost, and never has to treat a missing key as "nothing".
+        "degradations": [],
         "error": error,
         "extract_error": None,
         "recovered_error": None,

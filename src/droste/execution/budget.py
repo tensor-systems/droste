@@ -200,6 +200,10 @@ class BudgetLedger:
     _closed: bool = field(default=False, init=False, repr=False)
     _event_journal: list[dict[str, Any]] = field(default_factory=list, init=False, repr=False)
     _emitted_events: int = field(default=0, init=False, repr=False)
+    # Events this ledger produced but could not deliver. A failing sink must
+    # not end the run, but the loss must not vanish either: without this the
+    # stream is short by one event and nothing anywhere says so.
+    _dropped_events: list[dict[str, str]] = field(default_factory=list, init=False, repr=False)
     _emit_lock: RLock = field(default_factory=RLock, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -538,6 +542,12 @@ class BudgetLedger:
             }
         )
 
+    def dropped_events(self) -> tuple[dict[str, str], ...]:
+        """Budget events this ledger produced but failed to deliver."""
+
+        with self._lock:
+            return tuple(dict(item) for item in self._dropped_events)
+
     def _drain_events(self) -> None:
         """Emit the ledger journal in mutation order without holding its lock."""
 
@@ -560,6 +570,14 @@ class BudgetLedger:
                         RuntimeWarning,
                         stacklevel=2,
                     )
+                    with self._lock:
+                        self._dropped_events.append(
+                            {
+                                "error_type": type(exc).__name__,
+                                "detail": str(exc),
+                                "event": str(event.get("event", "budget")),
+                            }
+                        )
 
 
 def _plain_json(value: Any) -> Any:

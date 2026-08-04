@@ -170,7 +170,7 @@ function wire(
     run_id: "run-1",
     seq: 1,
     timestamp: "2026-07-14T00:00:00Z",
-    version: 9,
+    version: 10,
     persistence_class: persistence ?? PERSISTENCE_BY_TYPE[type],
     depth: 0,
     ...body,
@@ -384,7 +384,7 @@ Deno.test("successful output beginning ERROR remains an output event", () => {
 
 Deno.test("Python and relay accept the same execution golden NDJSON", async () => {
   const fixture = new URL(
-    "../src/droste/testing/fixtures/trace-v9-execution.ndjson",
+    "../src/droste/testing/fixtures/trace-v10-execution.ndjson",
     import.meta.url,
   );
   const lines = (await Deno.readTextFile(fixture)).trim().split("\n");
@@ -428,7 +428,7 @@ Deno.test("Python and relay accept the same execution golden NDJSON", async () =
 
 Deno.test("Python and relay accept the same lifecycle golden NDJSON", async () => {
   const fixture = new URL(
-    "../src/droste/testing/fixtures/trace-v9-lifecycle.ndjson",
+    "../src/droste/testing/fixtures/trace-v10-lifecycle.ndjson",
     import.meta.url,
   );
   const lines = (await Deno.readTextFile(fixture)).trim().split("\n");

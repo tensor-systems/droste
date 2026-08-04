@@ -11,6 +11,36 @@ Ordered newest first. "Embedder" means anything that builds on the engine
 beyond the `droste` CLI: hosts calling `run_rlm` in-process, `droste_runner`
 consumers, and Pyodide-substrate integrations staging the Deno relay.
 
+## 0.25.0
+
+### Trace ABI v10: a run reports what it did without
+
+Every result now carries `degradations`, a list that is empty on a clean run
+and otherwise names each thing the run continued without: `site`,
+`error_type`, `detail`, and — the field that matters to a reader —
+`consequence`, which records not that a callback raised but what the run then
+did without it.
+
+Several boundaries here deliberately refuse to let a host-supplied callback end
+a run: a broken logging sink or observer must not destroy a user's work. That
+resilience is correct. It was paid for with a `warnings.warn` that reaches no
+consumer of the result, so a run that lost a budget event, ran its terminal
+extract without host context, or discarded salvageable work returned something
+byte-identical to a clean run. The loss was real and unobservable.
+
+Recorded today at `budget_event_sink`, `extract_context_provider`, and
+`extractable_work_probe`. `BudgetLedger.dropped_events()` exposes the same
+facts for a directly-held ledger.
+
+**Hosts should treat a non-empty `degradations` as a degraded answer** — worth
+surfacing, logging, or refusing, depending on what the run lost. Nothing new
+can end a run; this only makes the existing fallbacks visible.
+
+The v9 -> v10 rename moves the `trace_v9_*` helpers and `trace-v9-*` fixtures
+to `trace_v10_*` / `trace-v10-*`. Response builders in `droste_runner` emit
+`degradations: []` on every shape, so a consumer reads one field rather than
+treating a missing key as "nothing was lost".
+
 ## 0.24.0
 
 ### Trace ABI v9 reports which ready-time gates a run armed

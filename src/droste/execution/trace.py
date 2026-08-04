@@ -17,7 +17,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
-TRACE_ABI_VERSION = 9
+TRACE_ABI_VERSION = 10
 
 
 class PersistenceClass(str, Enum):
@@ -464,6 +464,9 @@ def _validate_structured_body(event_type: str, body: Mapping[str, Any]) -> None:
                 "subcalls": int,
                 "successful_subcalls": int,
                 "extracted": bool,
+                # Always present, empty on a clean run: a consumer must never
+                # have to read silence as "nothing was lost".
+                "degradations": list,
                 "error": (Mapping, _NONE_TYPE),
                 "extract_error": (Mapping, _NONE_TYPE),
                 "recovered_error": (Mapping, _NONE_TYPE),

@@ -22,7 +22,7 @@ const { isRlmEvent, PERSISTENCE_BY_TYPE, RLM_EVENT_TYPES } = await import(
 function wire(body: Record<string, unknown>): string {
   return JSON.stringify({
     type: "heartbeat",
-    version: 9,
+    version: 10,
     run_id: "run-1",
     seq: 4,
     timestamp: "2026-08-03T00:00:00Z",
@@ -97,7 +97,7 @@ Deno.test("a heartbeat a live subcall produced is forwarded", () => {
     depth: 1,
     seq: 2,
     timestamp: "2026-08-03T21:46:54.805Z",
-    version: 9,
+    version: 10,
     persistence_class: "transient",
   };
 
