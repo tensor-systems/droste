@@ -79,6 +79,33 @@ ReadyMetadataValidator: TypeAlias = Callable[
     Sequence[str],
 ]
 
+
+@dataclass(frozen=True)
+class ReadyAnswerState:
+    """What the engine observed about a run at the moment it went ready.
+
+    ``metadata`` is written by the model, so a validator reading it alone can
+    only check the model's *claims* about its own work. Everything else here the
+    engine observed, so a validator reading this can check what the run actually
+    *did*. That distinction is the point: "assert nothing you did not support"
+    is a claim-level rule, but "do not answer without consulting the data" is a
+    behaviour-level one, and a metadata-only hook cannot express it.
+    """
+
+    metadata: Mapping[str, Any]
+    content: str
+    iteration: int
+    calls_made: int
+    successful_calls: int
+
+
+# Gates a ready answer against observed run state. Prefer this over
+# ReadyMetadataValidator, which sees only model-written metadata.
+ReadyAnswerValidator: TypeAlias = Callable[
+    [ReadyAnswerState],
+    Sequence[str],
+]
+
 # Resolves the opaque value carried by each answer-state checkpoint. The engine
 # never inspects what this returns and never schema-checks it: hosts use it to
 # ferry their own answer-critical state (whatever that is) alongside the draft.
@@ -671,6 +698,7 @@ def execute_step(
     namespaced_accessor_pairs: set[tuple[str, str]],
     semantic_evidence: _StructuredBatchEvidence | None = None,
     ready_metadata_validator: ReadyMetadataValidator | None = None,
+    ready_answer_validator: ReadyAnswerValidator | None = None,
 ) -> StepOutcome:
     """Execute one code block: the identical path for a first attempt and for
     repaired code. Policy pre-check, execute, output budget, event emit,
@@ -718,25 +746,39 @@ def execute_step(
                 answer_metadata = copy_answer_metadata(answer)
             except ValueError as exc:
                 violations.append(str(exc))
-        if answer.get("ready") and not violations and ready_metadata_validator is not None:
-            try:
-                validator_violations = ready_metadata_validator(deepcopy(answer_metadata))
-                if isinstance(validator_violations, str) or not isinstance(
-                    validator_violations, Sequence
-                ):
-                    raise TypeError(
-                        "ready_metadata_validator must return a sequence of violation strings"
+        if answer.get("ready") and not violations:
+            host_gates: list[tuple[str, Any]] = []
+            if ready_metadata_validator is not None:
+                host_gates.append(
+                    (
+                        "ready_metadata_validator",
+                        lambda: ready_metadata_validator(deepcopy(answer_metadata)),
                     )
-                for violation in validator_violations:
-                    if not isinstance(violation, str) or not violation.strip():
-                        raise TypeError(
-                            "ready_metadata_validator violations must be non-empty strings"
-                        )
-                    violations.append(violation.strip())
-            except Exception as exc:
-                raise ReadyMetadataValidatorError(
-                    "ready_metadata_validator failed; inspect the chained host exception"
-                ) from exc
+                )
+            if ready_answer_validator is not None:
+                state = ReadyAnswerState(
+                    metadata=deepcopy(answer_metadata),
+                    content=str(answer.get("content") or ""),
+                    iteration=iteration,
+                    calls_made=context.stats.calls_made,
+                    successful_calls=context.stats.successful_calls,
+                )
+                host_gates.append(("ready_answer_validator", lambda: ready_answer_validator(state)))
+            for gate_name, invoke in host_gates:
+                try:
+                    validator_violations = invoke()
+                    if isinstance(validator_violations, str) or not isinstance(
+                        validator_violations, Sequence
+                    ):
+                        raise TypeError(f"{gate_name} must return a sequence of violation strings")
+                    for violation in validator_violations:
+                        if not isinstance(violation, str) or not violation.strip():
+                            raise TypeError(f"{gate_name} violations must be non-empty strings")
+                        violations.append(violation.strip())
+                except Exception as exc:
+                    raise ReadyMetadataValidatorError(
+                        f"{gate_name} failed; inspect the chained host exception"
+                    ) from exc
         if violations:
             # Revoke readiness BEFORE emitting the output event, so the
             # published answer_ready is the post-gate truth — never a state

@@ -7,7 +7,7 @@
 // The events the engine + relay emit. The native subprocess runner uses the same
 // set on stdout NDJSON — one vocabulary across substrates.
 export const RLM_EVENT_TYPES = new Set<string>([
-  "startup", // {engine_version, runner_protocol, provider_protocol} — contract handshake (#33)
+  "startup", // {engine_version, runner_protocol, provider_protocol, ready_gates} — contract handshake (#33)
   "progress", // coarse human-readable status
   "iteration_start", // {iteration, remaining_tokens}
   "llm_response", // {iteration, response} — the root model's full reply (#35)
@@ -246,6 +246,7 @@ function validBody(type: string, body: Record<string, unknown>): boolean {
           "provider_protocol",
           "scaffold_manifest_id",
           "scaffold_manifest_version",
+          "ready_gates",
         ],
       ) && stringField("engine_version") &&
         ["runner_protocol", "provider_protocol"].every((key) =>
@@ -438,7 +439,7 @@ export function isRlmEvent(line: string): boolean {
         Number.isInteger(o.seq) && o.seq > 0 &&
         typeof o.timestamp === "string" &&
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(o.timestamp) &&
-        o.version === 8 &&
+        o.version === 9 &&
         o.persistence_class === PERSISTENCE_BY_TYPE[o.type] &&
         Number.isInteger(o.depth) && o.depth >= 0 &&
         (o.depth === 0
