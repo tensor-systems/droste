@@ -573,7 +573,7 @@ def _has_extractable_work(answer: dict[str, Any], has_successful_step: bool) -> 
     return has_successful_step
 
 
-def _host_extract_context(cfg: "RLMConfig") -> str:
+def _host_extract_context(cfg: "RLMConfig", context: ExecutionContext) -> str:
     """Host-rendered observations to append to the terminal extract prompt.
 
     Bounded here rather than trusting the host: this rides on an extract call
@@ -597,13 +597,18 @@ def _host_extract_context(cfg: "RLMConfig") -> str:
             RuntimeWarning,
             stacklevel=2,
         )
+        context.record_degradation(
+            site="extract_context_provider",
+            error=exc,
+            consequence="terminal extract ran without host-held observations",
+        )
         return ""
     if not isinstance(rendered, str) or not rendered.strip():
         return ""
     return rendered[:_EXTRACT_HOST_CONTEXT_CHARS]
 
 
-def _host_reports_extractable_work(cfg: "RLMConfig") -> bool:
+def _host_reports_extractable_work(cfg: "RLMConfig", context: ExecutionContext) -> bool:
     """Whether the host says its own state holds work worth extracting.
 
     The engine's test above sees only what the engine owns. Generated code that
@@ -627,6 +632,11 @@ def _host_reports_extractable_work(cfg: "RLMConfig") -> bool:
             f"RLM extractable-work probe failed, treating as no work: {exc}",
             RuntimeWarning,
             stacklevel=2,
+        )
+        context.record_degradation(
+            site="extractable_work_probe",
+            error=exc,
+            consequence="run treated as having no salvageable work; extract skipped",
         )
         return False
 
@@ -1449,7 +1459,7 @@ def run_rlm(
         # their benchmark scores. The behavior change is confined to runs that
         # produce nothing today.
         engine_sees_work = _has_extractable_work(answer, has_successful_step)
-        host_sees_work = not engine_sees_work and _host_reports_extractable_work(cfg)
+        host_sees_work = not engine_sees_work and _host_reports_extractable_work(cfg, context)
         if (
             not answer.get("ready")
             and terminal_handoff
@@ -1467,7 +1477,7 @@ def run_rlm(
                 cfg,
                 context,
                 resolved_prompt_pack.pack,
-                host_context=_host_extract_context(cfg) if host_sees_work else "",
+                host_context=_host_extract_context(cfg, context) if host_sees_work else "",
             )
             if extracted:
                 context.emit_event(extract_event(iterations, "completion"))

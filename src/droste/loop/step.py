@@ -176,6 +176,11 @@ class RLMResult:
     tokens_used: int
     sub_calls_made: int
     trajectory: list[IterationRecord]
+    # Everything the run continued without. Empty on a clean run; non-empty
+    # means the answer was produced by a run that lost an event, skipped a
+    # salvage, or ran a pass without host context. A host that cares can
+    # refuse it; every host can at least see it.
+    degradations: tuple[dict[str, str], ...] = ()
     error: RLMError | None = None
     # True when the answer came from the post-exhaustion extract pass rather
     # than the model marking answer['ready'] — hosts may surface it as a
@@ -887,6 +892,18 @@ def finalize(
         tokens_used=context.stats.total_tokens,
         sub_calls_made=context.stats.calls_made,
         trajectory=trajectory,
+        degradations=(
+            *(item.as_dict() for item in context.degradations()),
+            *(
+                {
+                    "site": "budget_event_sink",
+                    "error_type": drop["error_type"],
+                    "detail": drop["detail"],
+                    "consequence": "a budget event was produced but never delivered",
+                }
+                for drop in context.ledger.dropped_events()
+            ),
+        ),
         sub_calls_succeeded=context.stats.successful_calls,
         error=error,
         extracted=extracted,
@@ -973,6 +990,7 @@ def finalize(
             scaffold_manifest.schema_version if scaffold_manifest is not None else None
         ),
         "stdout_chars": result.stdout_chars,
+        "degradations": [dict(item) for item in result.degradations],
     }
     result.run_record = context.finish_trace(terminal)
     return result

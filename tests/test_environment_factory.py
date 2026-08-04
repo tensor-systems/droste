@@ -206,9 +206,36 @@ def test_native_and_pyodide_deliver_the_same_ordered_terminal_event_lifecycle() 
             context=context,
         )
         assert result.answer == "done"
-        event_orders.append(require_ordered_terminal_events(events))
+        try:
+            event_orders.append(require_ordered_terminal_events(events))
+        except AssertionError as exc:
+            raise AssertionError(
+                f"{config.kind} substrate emitted an invalid lifecycle: {exc}\n"
+                f"observed: {[event.get('type') for event in events]}"
+            ) from exc
 
-    assert event_orders[0] == event_orders[1]
+    native_order, pyodide_order = event_orders
+    if native_order != pyodide_order:
+        # Both substrates ran the same mock provider over the same code, so a
+        # divergence names the offending substrate and index rather than
+        # printing two anonymous tuples. Written this way because a rare
+        # failure of this assertion is the only chance to diagnose it: it has
+        # been seen once, on a heavily loaded machine, and never reproduced.
+        index = next(
+            (
+                i
+                for i, (native, pyodide) in enumerate(zip(native_order, pyodide_order))
+                if native != pyodide
+            ),
+            min(len(native_order), len(pyodide_order)),
+        )
+        raise AssertionError(
+            "native and pyodide emitted different lifecycles; they must agree\n"
+            f"first difference at index {index}: "
+            f"{native_order[index : index + 1]} vs {pyodide_order[index : index + 1]}\n"
+            f"native  ({len(native_order)}): {native_order}\n"
+            f"pyodide ({len(pyodide_order)}): {pyodide_order}"
+        )
 
 
 def test_native_rejects_pyodide_only_safety_declarations() -> None:

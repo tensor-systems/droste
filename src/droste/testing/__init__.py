@@ -38,16 +38,16 @@ def conformance_fixture_names() -> tuple[str, ...]:
     )
 
 
-def trace_v9_lifecycle_ndjson() -> bytes:
+def trace_v10_lifecycle_ndjson() -> bytes:
     """Return the shared Trace ABI v7 lifecycle conformance corpus."""
 
-    return files(__package__).joinpath("fixtures/trace-v9-lifecycle.ndjson").read_bytes()
+    return files(__package__).joinpath("fixtures/trace-v10-lifecycle.ndjson").read_bytes()
 
 
-def trace_v9_execution_ndjson() -> bytes:
+def trace_v10_execution_ndjson() -> bytes:
     """Return the shared Trace ABI v7 response/code/output/error conformance corpus."""
 
-    return files(__package__).joinpath("fixtures/trace-v9-execution.ndjson").read_bytes()
+    return files(__package__).joinpath("fixtures/trace-v10-execution.ndjson").read_bytes()
 
 
 def runner_v10_refusal_ndjson() -> bytes:
@@ -73,6 +73,6 @@ __all__ = [
     "require_unknown_completion",
     "run_while_blocked",
     "conformance_fixture_names",
-    "trace_v9_execution_ndjson",
-    "trace_v9_lifecycle_ndjson",
+    "trace_v10_execution_ndjson",
+    "trace_v10_lifecycle_ndjson",
 ]

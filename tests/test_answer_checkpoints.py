@@ -72,8 +72,8 @@ def _valid_body(**overrides: object) -> dict[str, object]:
 # --- Layer 1: the wire contract ----------------------------------------------
 
 
-def test_trace_abi_is_version_nine_and_knows_checkpoint() -> None:
-    assert TRACE_ABI_VERSION == 9
+def test_trace_abi_is_version_ten_and_knows_checkpoint() -> None:
+    assert TRACE_ABI_VERSION == 10
     assert "checkpoint" in EVENT_TYPES
 
 
@@ -167,7 +167,7 @@ def test_checkpoint_follows_each_executed_step_whose_draft_moved() -> None:
     assert [event["ready"] for event in checkpoints] == [False, True]
     assert [event["iteration"] for event in checkpoints] == [1, 2]
     assert all(event["payload"] is None for event in checkpoints)
-    assert all(event["version"] == 9 for event in checkpoints)
+    assert all(event["version"] == 10 for event in checkpoints)
     assert all(event["persistence_class"] == "configurable" for event in checkpoints)
 
 

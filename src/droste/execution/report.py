@@ -53,6 +53,9 @@ def project_result(
         "subcalls": result.sub_calls_made,
         "successful_subcalls": int(getattr(result, "sub_calls_succeeded", 0)),
         "extracted": bool(getattr(result, "extracted", False)),
+        # Always present, empty on a clean run: a consumer must never have to
+        # read silence as "nothing was lost".
+        "degradations": [dict(item) for item in getattr(result, "degradations", ())],
         "error": error_payload(result.error, include_details=include_error_details),
         "extract_error": error_payload(
             getattr(result, "extract_error", None), include_details=include_error_details

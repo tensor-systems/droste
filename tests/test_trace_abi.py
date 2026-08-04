@@ -33,10 +33,10 @@ from droste.testing import (
     MockResponse,
     MockSubcallClient,
     runner_v10_refusal_ndjson,
-    trace_v9_execution_ndjson,
-    trace_v9_lifecycle_ndjson,
+    trace_v10_execution_ndjson,
+    trace_v10_lifecycle_ndjson,
 )
-from droste.testing._trace_fixtures import build_trace_v9_execution_ndjson
+from droste.testing._trace_fixtures import build_trace_v10_execution_ndjson
 from droste_runner.run import run as run_worker
 
 
@@ -124,6 +124,7 @@ def _terminal() -> dict[str, object]:
         "status": "success",
         "ready": True,
         "extracted": False,
+        "degradations": [],
         "iterations": 0,
         "usage": usage,
         "budget": budget,
@@ -233,7 +234,7 @@ def test_usage_progress_emits_cumulative_role_boundaries_without_estimating() ->
     assert progress[1]["root"]["total_tokens"] == 10
     assert progress[1]["subcall"]["total_tokens"] == 7
     assert progress[1]["persistence_class"] == "transient"
-    assert progress[1]["version"] == 9
+    assert progress[1]["version"] == 10
 
 
 def test_concurrent_subcall_usage_progress_is_serialized_and_monotonic() -> None:
@@ -582,7 +583,7 @@ def test_run_record_allows_repeated_durable_budget_mutations() -> None:
     ]
 
 
-def test_parser_requires_v9_envelope_and_rejects_false_classification() -> None:
+def test_parser_requires_v10_envelope_and_rejects_false_classification() -> None:
     with pytest.raises(ValueError, match="missing envelope fields"):
         parse_event({"type": "code", "iteration": 1, "code": "print(1)"})
 
@@ -592,7 +593,7 @@ def test_parser_requires_v9_envelope_and_rejects_false_classification() -> None:
             "run_id": "run",
             "seq": 1,
             "timestamp": "2026-07-14T00:00:00Z",
-            "version": 9,
+            "version": 10,
             "persistence_class": "configurable",
             "depth": 0,
             "iteration": 1,
@@ -607,7 +608,7 @@ def test_parser_requires_v9_envelope_and_rejects_false_classification() -> None:
             "run_id": "run",
             "seq": 2,
             "timestamp": "2026-07-14T00:00:00Z",
-            "version": 9,
+            "version": 10,
             "persistence_class": "transient",
             "depth": 0,
             "engine_version": "0.10.6",
@@ -624,7 +625,7 @@ def test_parser_requires_v9_envelope_and_rejects_false_classification() -> None:
                 "run_id": "run",
                 "seq": 1,
                 "timestamp": "2026-07-14T00:00:00Z",
-                "version": 9,
+                "version": 10,
                 "persistence_class": "durable",
                 "depth": 0,
                 "code": "print(1)",
@@ -638,7 +639,7 @@ def test_parser_requires_v9_envelope_and_rejects_false_classification() -> None:
                 "run_id": "run",
                 "seq": 1,
                 "timestamp": "2026-07-14T01:00:00+01:00",
-                "version": 9,
+                "version": 10,
                 "persistence_class": "transient",
                 "depth": 0,
                 "status": "working",
@@ -673,7 +674,7 @@ def test_event_bodies_reject_missing_unknown_and_wrong_primitive_fields() -> Non
         recorder.finish(terminal)
 
 
-def test_trace_v9_budget_snapshot_requires_max_iterations() -> None:
+def test_trace_v10_budget_snapshot_requires_max_iterations() -> None:
     recorder = TraceRecorder(run_id="strict-budget")
     budget = json.loads(json.dumps(_terminal()["budget"]))
     del budget["configured"]["max_iterations"]
@@ -844,11 +845,11 @@ def test_trace_abi_v3_is_rejected_instead_of_dropping_cache_usage() -> None:
         )
 
 
-def _trace_v9_golden_runs() -> dict[str, list[RunEvent]]:
+def _trace_v10_golden_runs() -> dict[str, list[RunEvent]]:
     runs: dict[str, list[RunEvent]] = {}
     previous_run_id: str | None = None
     closed: set[str] = set()
-    for line in trace_v9_lifecycle_ndjson().decode("utf-8").splitlines():
+    for line in trace_v10_lifecycle_ndjson().decode("utf-8").splitlines():
         event = parse_event(json.loads(line))
         if event.run_id != previous_run_id:
             if event.run_id in closed:
@@ -860,9 +861,9 @@ def _trace_v9_golden_runs() -> dict[str, list[RunEvent]]:
     return runs
 
 
-def test_trace_v9_execution_fixture_is_canonical_and_exact() -> None:
-    fixture = trace_v9_execution_ndjson()
-    assert fixture == build_trace_v9_execution_ndjson()
+def test_trace_v10_execution_fixture_is_canonical_and_exact() -> None:
+    fixture = trace_v10_execution_ndjson()
+    assert fixture == build_trace_v10_execution_ndjson()
     events = [parse_event(json.loads(line)) for line in fixture.decode("utf-8").splitlines()]
 
     root = events[:6]
@@ -894,8 +895,8 @@ def _error_type(value: object) -> object:
     return value.get("type") if isinstance(value, Mapping) else None
 
 
-def test_trace_v9_lifecycle_golden_ndjson_is_strict_ordered_and_terminal() -> None:
-    runs = _trace_v9_golden_runs()
+def test_trace_v10_lifecycle_golden_ndjson_is_strict_ordered_and_terminal() -> None:
+    runs = _trace_v10_golden_runs()
     assert set(runs) == {
         "golden-success",
         "golden-recovered",
@@ -991,8 +992,8 @@ def test_trace_v9_lifecycle_golden_ndjson_is_strict_ordered_and_terminal() -> No
     assert terminal["usage"]["subcall"]["cache_creation_tokens"] == 1
 
 
-def test_trace_v9_golden_corpus_covers_each_discriminated_lifecycle() -> None:
-    events = [event for run in _trace_v9_golden_runs().values() for event in run]
+def test_trace_v10_golden_corpus_covers_each_discriminated_lifecycle() -> None:
+    events = [event for run in _trace_v10_golden_runs().values() for event in run]
     subcalls = [event for event in events if event.type == "subcall"]
     repairs = [event for event in events if event.type == "repair"]
     extracts = [event for event in events if event.type == "extract"]
@@ -1019,7 +1020,7 @@ def test_trace_v9_golden_corpus_covers_each_discriminated_lifecycle() -> None:
     assert {event.body["boundary"] for event in usage_progress} == {"root", "subcall"}
     assert all(event.persistence_class is PersistenceClass.TRANSIENT for event in usage_progress)
 
-    output_limit = _trace_v9_golden_runs()["golden-output-limit"]
+    output_limit = _trace_v10_golden_runs()["golden-output-limit"]
     assert not any(event.type == "output" for event in output_limit)
     assert any(
         event.type == "execution_error" and event.body["error_type"] == "SandboxError"
@@ -1043,7 +1044,7 @@ def test_trace_v9_golden_corpus_covers_each_discriminated_lifecycle() -> None:
         event.body["message"] for event in output_limit if event.type == "execution_error"
     )
     assert f"exceeded {output_manifest['sandbox']['output_chars']} characters" in output_error
-    cancelled = _trace_v9_golden_runs()["golden-cancelled"]
+    cancelled = _trace_v10_golden_runs()["golden-cancelled"]
     assert cancelled[-1].body["status"] == "error"
     assert any(
         event.type == "execution_error" and event.body["error_type"] == "CapabilityCallError"
@@ -1057,7 +1058,7 @@ def test_trace_v9_golden_corpus_covers_each_discriminated_lifecycle() -> None:
     assert cancelled[-1].body["usage"]["root"]["complete"] is False
     assert cancelled[-1].body["usage"]["subcall"]["complete"] is False
 
-    extract_failed = _trace_v9_golden_runs()["golden-extract-failed"]
+    extract_failed = _trace_v10_golden_runs()["golden-extract-failed"]
     result = next(event.body["result"] for event in extract_failed if event.type == "result")
     assert result["answer"] == f"Error: {result['error']['message']}"
     assert result["error"]["details"]["withheld_content"] == "retained evidence"
@@ -1361,8 +1362,8 @@ def test_conformance_corpus_is_enumerated_not_listed() -> None:
     from droste.testing import (
         conformance_fixture_names,
         runner_v10_refusal_ndjson,
-        trace_v9_execution_ndjson,
-        trace_v9_lifecycle_ndjson,
+        trace_v10_execution_ndjson,
+        trace_v10_lifecycle_ndjson,
     )
 
     names = conformance_fixture_names()
@@ -1374,12 +1375,133 @@ def test_conformance_corpus_is_enumerated_not_listed() -> None:
     # driven by it stages exactly what the helpers can read.
     assert set(names) == {
         "runner-v10-refusal.ndjson",
-        "trace-v9-execution.ndjson",
-        "trace-v9-lifecycle.ndjson",
+        "trace-v10-execution.ndjson",
+        "trace-v10-lifecycle.ndjson",
     }
     for reader in (
         runner_v10_refusal_ndjson,
-        trace_v9_execution_ndjson,
-        trace_v9_lifecycle_ndjson,
+        trace_v10_execution_ndjson,
+        trace_v10_lifecycle_ndjson,
     ):
         assert reader(), "every enumerated fixture must be non-empty"
+
+
+def test_a_failing_budget_sink_reports_the_event_it_lost() -> None:
+    """A dropped event must not be inferable only from a shorter stream.
+
+    The ledger deliberately refuses to let a host's sink end the run, but it
+    used to pay for that with a warning no consumer of the result ever sees:
+    the stream came back one event short and nothing said so.
+    """
+
+    import warnings
+
+    from droste.execution.budget import Budget, BudgetLedger, BudgetRequest
+
+    calls = {"n": 0}
+
+    def flaky_sink(event: dict) -> None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("transient sink failure")
+
+    ledger = BudgetLedger(budget=Budget(), on_event=flaky_sink)
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("always")
+        for index in range(4):
+            ledger.reserve(f"call-{index}", BudgetRequest(tokens=10))
+
+    (dropped,) = ledger.dropped_events()
+    assert dropped["error_type"] == "RuntimeError"
+    assert "transient sink failure" in dropped["detail"]
+
+
+def test_a_clean_run_reports_no_degradations() -> None:
+    from droste.execution.context import ExecutionContext
+
+    assert ExecutionContext().degradations() == ()
+
+
+def test_a_recorded_degradation_names_what_the_run_did_without() -> None:
+    from droste.execution.context import ExecutionContext
+
+    context = ExecutionContext()
+    context.record_degradation(
+        site="extract_context_provider",
+        error=RuntimeError("host blew up"),
+        consequence="terminal extract ran without host-held observations",
+    )
+
+    (degradation,) = context.degradations()
+    assert degradation.site == "extract_context_provider"
+    assert degradation.error_type == "RuntimeError"
+    # The consequence, not just the exception, is what a reader needs.
+    assert "without host-held observations" in degradation.consequence
+
+
+def test_a_degraded_run_says_so_on_the_wire() -> None:
+    """The whole point: a consumer of the event stream can see the loss.
+
+    Recording a degradation the host never receives would be the same defect
+    one layer up, so assert it reaches the emitted result event.
+    """
+
+    from droste import EnvironmentConfig, RLMConfig, create_environment, run_rlm
+    from droste.environments import create_environment_context
+    from droste.protocols.llm_client import TokenUsage
+    from droste.testing import MockLLMClient, MockResponse, MockSubcallClient
+
+    events: list[dict] = []
+    config = EnvironmentConfig(kind="native")
+    context = create_environment_context(config, on_event=events.append, run_id="degraded")
+    subcalls = MockSubcallClient()
+    environment = create_environment(
+        config, context={}, registry=None, subcalls=subcalls, execution_context=context
+    )
+    context.record_degradation(
+        site="extract_context_provider",
+        error=RuntimeError("host blew up"),
+        consequence="terminal extract ran without host-held observations",
+    )
+    result = run_rlm(
+        "question",
+        environment=environment,
+        root_llm=MockLLMClient(
+            [
+                MockResponse(
+                    "```python\nanswer['content'] = 'done'\nanswer['ready'] = True\n```",
+                    TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, exact=True),
+                )
+            ]
+        ),
+        subcalls=subcalls,
+        config=RLMConfig(run_id="degraded"),
+        context=context,
+    )
+
+    assert len(result.degradations) == 1
+    (wire_result,) = [e["result"] for e in events if e["type"] == "result"]
+    (reported,) = wire_result["degradations"]
+    assert reported["site"] == "extract_context_provider"
+    assert reported["consequence"] == ("terminal extract ran without host-held observations")
+
+
+def test_a_clean_run_still_reports_the_field_rather_than_omitting_it() -> None:
+    """Absence must never be how a consumer learns nothing was lost."""
+
+    from droste.execution.report import project_result
+    from droste.loop.step import RLMResult
+
+    projected = project_result(
+        RLMResult(
+            answer="a",
+            ready=True,
+            iterations=1,
+            tokens_used=0,
+            sub_calls_made=0,
+            trajectory=[],
+        ),
+        include_trajectory=False,
+    )
+
+    assert projected["degradations"] == []

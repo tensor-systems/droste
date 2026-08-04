@@ -24,6 +24,35 @@ from .trace import (
 )
 
 
+@dataclass(frozen=True)
+class RunDegradation:
+    """One thing the run silently did without, recorded so it cannot stay silent.
+
+    Several boundaries here deliberately refuse to let a host-supplied callback
+    end a run -- a broken logging sink or observer must not destroy a user's
+    work. That resilience is correct, but it used to be paid for with a
+    ``warnings.warn`` that reaches no consumer of the result, so a run that
+    lost an event, ran an extract pass without its context, or discarded
+    salvageable work returned something indistinguishable from a clean run.
+
+    ``consequence`` is the part that matters to a reader: not that a callback
+    raised, but what the run then did without.
+    """
+
+    site: str
+    error_type: str
+    detail: str
+    consequence: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "site": self.site,
+            "error_type": self.error_type,
+            "detail": self.detail,
+            "consequence": self.consequence,
+        }
+
+
 @dataclass
 class ExecutionContext:
     """Context for tracking recursive LLM calls within sandbox execution."""
@@ -34,6 +63,7 @@ class ExecutionContext:
     ledger: BudgetLedger = field(default_factory=lambda: BudgetLedger(Budget()))
     _emission_lock: RLock = field(default_factory=RLock, init=False, repr=False)
     _iteration: int = field(default=0, init=False, repr=False)
+    _degradations: list[RunDegradation] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.ledger.budget != self.config.budget:
@@ -49,6 +79,30 @@ class ExecutionContext:
         if self.config.on_progress is not None:
             self.config.on_progress(status)
         self.emit_event(progress_event(status))
+
+    def record_degradation(self, *, site: str, error: BaseException, consequence: str) -> None:
+        """Record that the run continued without something it should have had.
+
+        Callers keep whatever fallback they already had; this only ensures the
+        fallback is visible in the run's own output instead of a warning the
+        host never sees.
+        """
+
+        with self._emission_lock:
+            self._degradations.append(
+                RunDegradation(
+                    site=site,
+                    error_type=type(error).__name__,
+                    detail=str(error),
+                    consequence=consequence,
+                )
+            )
+
+    def degradations(self) -> tuple[RunDegradation, ...]:
+        """Everything this run did without, in the order it happened."""
+
+        with self._emission_lock:
+            return tuple(self._degradations)
 
     def emit_event(self, event: dict[str, Any]) -> None:
         """Deliver a structured loop event (#1) to the attached sink.
