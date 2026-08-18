@@ -1,45 +1,18 @@
 # Deno + Pyodide RLM substrate
 
-The Deno + Pyodide (CPython-on-WASM) substrate runs droste's RLM engine under
-one Deno binary + an offline Pyodide runtime — no `Python.framework`, no
-wheelhouse, no per-`.so` code signing. It started as a feasibility spike (see
-History, below) and now ships as the default substrate inside a production
-macOS `.app` bundle.
+The Deno + Pyodide substrate runs Droste in CPython on WASM with an offline
+Pyodide runtime. It has two parts:
 
-This substrate has two layers, and the split matters if you're adopting droste
-for your own host:
+- The reusable relay and Python substrate included in the `droste` wheel.
+- A host-owned adapter that supplies data sources and maps the host's request
+  and response types.
 
-- **The substrate itself** — droste-general, reusable, ModelRelay-shaped but
-  host-agnostic: `relay.ts`, `event_channel.ts`, `broker.ts`, `events.ts`,
-  `stream.ts`, and the
-  Python adapters in `droste.substrates.pyodide` (which ship inside `pip install
-  droste`). Plus the A′-1 / A′-2 security machinery, whose droste-side half
-  (`droste.sources.bridge`) is also part of the installable package. **None of
-  this knows anything about any particular host's data layer** — `relay.ts`
-  included. It's fully adapter-agnostic: it takes the name of a host adapter
-  module as a CLI argument and drives it through a fixed two-function contract
-  (below), never referencing any specific host.
-- **A host adapter** — one small Python module per host that wires the
-  substrate up to that host's own data source and request/response shape. This
-  is *not* part of the droste package; each host writes its own. Two exist:
-  - `examples/pyodide-host/pyodide_host_adapter.py` — droste's own minimal
-    reference adapter, built entirely from droste-general pieces, with zero
-    third-party or product dependencies. It ships in this repo as the worked
-    example and the CI proof that `relay.ts` actually works end to end.
-    Copy the *shape* of this file, substituting your own data source and result
-    format.
-  - A production host's adapter — backed by the host's own data-layer package
-    instead of `droste.sources.sql_local`. It lives in the host's repo, **not
-    here** — droste's repo has no host-specific code anywhere under `pyodide/`.
-    Such an adapter is analogous in shape to the example adapter, just with the
-    host's own request contract and data layer.
+The relay has no host-specific data logic. It loads the adapter module named by
+the trusted process launcher and calls its fixed two-function contract. See
+`examples/pyodide-host/pyodide_host_adapter.py` for a working adapter.
 
-If you're reading this to embed droste elsewhere: everything in "the substrate"
-is yours to reuse as-is; write one adapter module of your own and point
-`relay.ts` at it.
-
-**Getting the Deno half:** the relay ships **inside the droste wheel** (#33)
-as package data under `droste/substrates/_relay/` — `relay.ts`,
+The relay ships inside the wheel as package data under
+`droste/substrates/_relay/`: `relay.ts`,
 `event_channel.ts`, `stream.ts`, `broker.ts`, `events.ts`, `offline-probe.ts`,
 and `deps.ts` (the single Pyodide version pin). Stage it in your build from the
 installed package:
@@ -48,15 +21,11 @@ installed package:
     cp "$relay_dir"/*.ts <your-build-staging>/
 
 (Or `python -c 'from droste.substrates import relay_dir; print(relay_dir())'`.)
-The wheel is already the one pinned, hash-verified artifact in your lockfile,
-so relay and engine are version-locked by construction — no separate tarball
-download, no sha pin to keep in sync. On an admitted run, the relay prefixes
+The relay and engine therefore come from the same pinned artifact. On an
+admitted run, the relay prefixes
 the first canonical event with a `startup` event
-(`{engine_version, runner_protocol, provider_protocol}`) so contract adoption
-is a structured signal, not a changelog audit. Preflight and pre-admission
-refusal leave the event descriptor empty. (Tagged releases
-still attach `droste-relay-vX.Y.Z.tar.gz` as a convenience for non-Python
-consumers; it is no longer the embedder path.)
+(`{engine_version, runner_protocol, provider_protocol}`). Preflight and
+pre-admission refusal leave the event descriptor empty.
 
 In this repo the relay sources live at `src/droste/substrates/_relay/`; this
 directory (`pyodide/`) keeps the substrate's tests, spikes, and this README.
@@ -284,35 +253,11 @@ needs. (An earlier version of `relay.ts` hardcoded one host's field names into
 its own Python template; making `meta` opaque is what removed the last
 host-specific knowledge from the relay.)
 
-### Gotcha 1 — JsNull normalization (already handled for you)
+### `sql_local` timeouts
 
-A JS `null` passed across the Pyodide FFI via `globals.set(name, null)` does
-**not** arrive as Python's `None`. It arrives as a `JsProxy`-wrapped `JsNull`
-sentinel, which passes an `is not None` check and then blows up the first time
-an adapter tries to use it (e.g. `'JsNull' object is not callable`). **You do
-not need to defend against this** — `relay.ts` normalizes it inside its own
-embedded Python template, at both boundary crossings, before your adapter is
-called:
-
-- `bridge_call` → `_bridge_call = bridge_call if callable(bridge_call) else None`
-- `duplex_bridge_call` → `_duplex_bridge_call = duplex_bridge_call if callable(duplex_bridge_call) else None`
-- `contacts_db_path` → `_contacts_db_path = svc_contacts_db_path if isinstance(svc_contacts_db_path, str) else None`
-
-So the contract your adapter sees is a clean "real Python `None`, or a real
-value." This is called out here only so nobody re-discovers and re-solves it in
-their own adapter — the relay owns it.
-
-### Gotcha 2 — `sql_local` timeouts under Pyodide (handled, but know the limit)
-
-`LocalSqlRuntime.query()` enforces its per-query timeout with
-`threading.Timer`, which needs real OS threads — unavailable under
-Pyodide/WASM. Since the #8 fix, the source degrades gracefully there: the
-timer is skipped with a one-time `RuntimeWarning`, and queries run normally
-under the **default** policy. The thing to know is what that means: the
-policy's `timeout_ms` is simply **not enforced** in this substrate — the
-host's own wall-clock kill (Deno's process timeout) is the real enforcement,
-exactly as the Pyodide environment factory requires for exec timeouts. Make
-sure your host actually has one.
+Pyodide has no OS threads, so `LocalSqlRuntime.query()` cannot enforce its
+`threading.Timer` timeout. It emits one warning and continues. The host must
+enforce the wall-clock deadline and terminate the process when needed.
 
 ## Configuration flags
 
@@ -470,19 +415,3 @@ Roughly three tiers of coverage:
   silently falling back to raw loop output, but there's no data yet on how
   often that call actually fails or why. No retry has been added — that's a
   decision for once real failure data exists, not before.
-
-## History
-
-This substrate started as a feasibility spike: proving droste imports cleanly
-under Pyodide, that a real corpus returns byte-identical results across sqlite
-engines (native 3.53.1 vs Pyodide's bundled 3.39.0) against a large real-world
-benchmark corpus, and that packaging a Deno binary + an offline
-`--cached-only` `DENO_DIR` (~14MB) beats shipping a signed `Python.framework` +
-wheelhouse per architecture. That work — plus the two security hardening passes
-(A′-1 and A′-2, with A′-2 now the sole database-backed path) and the
-adapter-agnostic split that made `relay.ts` fully adapter-agnostic and gave
-droste its own example host — is in
-this repo's git/PR history, not duplicated here. A few standalone investigation
-scripts from that era (`spike_topology.ts`, `probe_dual_sqlite.ts`,
-`verify_16_threading.ts`) still live in this directory as reference, outside
-the `deno test` suite.

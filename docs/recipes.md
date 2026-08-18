@@ -1,24 +1,22 @@
 # Recipes
 
-Three copy-paste starting points. Every recipe works with any
-OpenAI-compatible endpoint — set `OPENAI_API_KEY` (and `OPENAI_BASE_URL` for
-non-OpenAI providers; see the README's BYOK section).
+These examples work with the account saved by `droste login` or any
+OpenAI-compatible endpoint configured with `OPENAI_API_KEY` and, when needed,
+`OPENAI_BASE_URL`.
 
 ## 1. Interrogate a huge log file
 
 ```bash
-droste "Group the errors by service and root cause. Which failure started
-   first, and did it cascade? Give me counts, not vibes." server.log
+droste "Group errors by service and cause. Which failure started first, and
+did it cascade? Include exact counts." server.log
 ```
 
-Multi-megabyte files are fine: the model is told the file's name and size,
-then pulls slices in via code. Counting, grouping, and time-ordering happen
-in Python, so the numbers are exact. Add `--verbose` to watch it work.
+The model inspects slices of the file through code. Python handles counting,
+grouping, and time ordering. Add `--verbose` to watch the run.
 
 ## 2. Ask questions across a chat/export archive
 
-Point it at an export directory's files — Slack, WhatsApp, or any
-line-oriented dump:
+Point it at Slack, WhatsApp, or another line-oriented export:
 
 ```bash
 droste export/channel-eng.txt export/channel-support.txt \
@@ -26,10 +24,8 @@ droste export/channel-eng.txt export/channel-support.txt \
    internal discussion match what support was telling people?"
 ```
 
-This is the shape retrieval can't do: the answer requires reading *both*
-files, aligning them in time, and judging consistency — the model narrows
-mechanically, then fans out `llm_query_batched` over the sections that need
-actual reading.
+Droste searches both files, aligns relevant passages in time, and uses model
+subcalls where judging consistency requires close reading.
 
 ## 3. Analyze a SQLite database
 
@@ -39,9 +35,7 @@ droste app.db \
    MRR walked out the door?"
 ```
 
-`--db` exposes the database as a read-only, policy-gated source (SELECT-only,
-single statement, bounded rows). The model reads the schema, iterates on
-queries, and computes in code. The policy is a guardrail, not a security
-boundary — the file is opened read-only, and OS permissions are the real
-control. Cheap subcalls under a stronger root: add
-`--subcall-model gpt-5.2-mini` (or any cheaper model on your endpoint).
+Droste detects SQLite files, reads the schema, writes bounded read-only
+queries, and computes over the results. Operating-system permissions remain
+the security boundary. To use a cheaper model for subcalls, add
+`--subcall-model MODEL`.
