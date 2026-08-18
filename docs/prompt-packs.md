@@ -112,7 +112,7 @@ result = run_rlm(
     environment=environment,
     root_llm=root,
     subcalls=subcalls,
-    config=RLMConfig(root_model="gpt-5", prompt_profile="full"),
+    config=RLMConfig(root_model="YOUR_MODEL_ID", prompt_profile="full"),
     prompt_pack=pack,
 )
 print(result.prompt_pack.as_dict())

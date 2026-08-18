@@ -38,8 +38,9 @@ Everything else: monospace, letter-spaced caps for labels. No italics.
 
 ## Assets
 
-- `docs/assets/droste.svg` / `droste-dark.svg` — the mark (light/dark)
-- `docs/assets/og.png` — 1200×630 social card (paper). Upload via GitHub
+- `../assets/droste.svg` / `../assets/droste-dark.svg` is the mark in light and
+  dark variants.
+- `../assets/og.png` is the 1200×630 social card. Upload it through GitHub
   Settings → Social preview. Regenerate: the card is plain HTML + a headless
   Chrome screenshot at 1200×630; composition = mark left, DROSTE / tagline /
   bordered `uvx` command / metadata line right, 5px inner border (frame zero

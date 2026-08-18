@@ -1,6 +1,6 @@
 # Architecture principles
 
-*The north star for droste's evolution. `architecture.md` describes what is; this
+*The north star for droste's evolution. `../architecture.md` describes what is; this
 describes what everything should converge toward, and the test every new piece of
 structure must pass.*
 
