@@ -1,87 +1,57 @@
 # Embed Droste
 
-The `droste` package has no runtime dependencies. An embedded run needs a root
-model client, a subcall client, an execution environment, and one shared
-execution context.
+The dependency-free `droste` package can run with your model clients and data.
+Install it with `uv add droste`, then start from the tested
+[embedding example](../examples/embedding.py).
 
-```bash
-uv add droste
-```
+An embedded run has four shared pieces: a `Budget`, an `ExecutionContext`, model
+clients, and an execution environment. Construct the context and environment
+from the same `EnvironmentConfig`; conflicting budgets fail before inference.
 
-This example uses an OpenAI-compatible endpoint and a string as the dataset:
+`OpenAICompatClient` reads `OPENAI_API_KEY` and `OPENAI_BASE_URL`. Anthropic and
+ModelRelay clients are also included. Explicit constructor arguments override
+environment values.
+
+## Compute and local execution limits
+
+`Budget` is the model-compute authorization:
 
 ```python
-from droste import (
-    Budget,
-    EnvironmentConfig,
-    OpenAICompatClient,
-    OpenAICompatSubcallClient,
-    RLMConfig,
-    create_environment,
-    create_environment_context,
-    run_rlm,
+Budget(
+    tokens=500_000,
+    subcalls=50,
+    depth=1,
+    wall_ms=300_000,
+    max_iterations=30,
+    root_output_tokens=4_096,
+    subcall_output_tokens=2_048,
 )
-
-model = "YOUR_MODEL_ID"
-environment_config = EnvironmentConfig(
-    kind="native",
-    budget=Budget(subcalls=50, depth=1),
-)
-context = create_environment_context(environment_config)
-
-root = OpenAICompatClient(model=model)
-subcalls = OpenAICompatSubcallClient(model=model, context=context)
-environment = create_environment(
-    environment_config,
-    context="your source data",
-    registry=None,
-    subcalls=subcalls,
-    execution_context=context,
-)
-
-result = run_rlm(
-    "What happened?",
-    environment=environment,
-    root_llm=root,
-    subcalls=subcalls,
-    config=RLMConfig(root_model=model),
-    context=context,
-)
-print(result.answer)
 ```
 
-`OpenAICompatClient` reads `OPENAI_API_KEY` and `OPENAI_BASE_URL`. Explicit
-constructor arguments take precedence. The package also provides
-`AnthropicClient` and `AnthropicSubcallClient`.
+One `BudgetLedger` atomically reserves and reconciles root calls and brokered
+subcalls. Failed work still settles its reservation. `depth` authorizes child
+ledgers for hosts that construct child runs; Droste's built-in model-facing
+helpers currently make only flat `llm_query` and batch subcalls.
 
-## Data providers
+`SandboxLimits` is separate. It bounds local execution time and captured
+output; it is not provider/model spend and the native REPL is not a security
+boundary.
 
-Pass plain data through `context`, or bind a `ProviderRegistry` for named data
-sources. Droste includes filesystem text and read-only SQLite providers. See
-[provider manifests](provider-manifests.md) when exposing an application data
-source or MCP server.
+Built-in subcall clients default to five concurrent batch items. If you change
+their `max_parallel`, record the same value in `RLMConfig.rollout`; a mismatch
+fails before the first model request.
 
-## Budgets and concurrency
+## Data, policy, and events
 
-`EnvironmentConfig` and its execution context must share one `Budget`. The
-same ledger reserves and settles root calls, subcalls, child runs, and wall
-time.
+Pass plain data through `context`, or use a `ProviderRegistry` for named data
+sources. Droste includes read-only SQLite and filesystem-text providers; see
+[Providers](providers.md).
 
-Subcall clients default to five concurrent batch items. If you change
-`OpenAICompatSubcallClient(max_parallel=...)`, set the same value in
-`RLMConfig.rollout`. A mismatch fails before inference.
+Droste does not infer enforcement rules from question text. Products that need
+semantic-subcall or answer requirements must pass explicit `PolicyHints` or a
+ready-time validator.
 
-See [budgets](budgets.md) for the full authorization model.
-
-## Policy and traces
-
-Droste does not infer enforcement rules from the wording of a question. Pass
-explicit `PolicyHints` when a product requires semantic subcalls or another
-answer contract.
-
-Attach `on_event` or configure trace retention through the execution context
-to consume structured events. The [Trace ABI](trace-abi.md) defines the event
-and retention contracts.
-
-Hosts that run Droste through HTTP or Pyodide should use the runner protocol in
-the [technical architecture](architecture.md#the-runner-protocol-embedding).
+Attach `on_event` for live events and configure `TraceRetentionPolicy` for the
+terminal record. See the [Trace ABI](reference/trace.md). Non-Python hosts use
+the [runner protocol](reference/runner.md); the Pyodide host path is documented
+beside its implementation in [pyodide/README.md](../pyodide/README.md).

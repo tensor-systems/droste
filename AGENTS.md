@@ -116,7 +116,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
 
 ## Trace ABI
 
-- Every structured event is a strict Trace ABI v7 value. Stamp it exactly once
+- Every structured event is a strict Trace ABI v10 value. Stamp it exactly once
   through `ExecutionContext`; do not emit raw or partially enveloped event
   dictionaries at host boundaries.
 - Treat every envelope/body, classification, and ordering change as an ABI
@@ -189,7 +189,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
 - A strict published event vocabulary/body change requires a Trace ABI bump and,
   when embedded in runner output, an atomic runner-protocol bump. Do not expand
   an old strict version in place or add a compatibility decoder in the engine.
-- Trace ABI v7 usage is `resolved` only when both root and subcall scopes have
+- Trace ABI v10 usage is `resolved` only when both root and subcall scopes have
   complete provider usage. Missing or malformed usage preserves any known
   counts, marks that scope `complete=false`, and makes terminal usage
   `kind="partial"`; never report conservative reservations as provider usage.
@@ -239,7 +239,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
   partial evidence rather than invalidating an otherwise valid envelope.
 - `reasoning_tokens` is a non-negative breakdown inside `completion_tokens`.
   Preserve it through internal usage copies, folds, and root/subcall
-  `ExecutionStats`, but do not add it to totals or Trace ABI v7 events.
+  `ExecutionStats`, but do not add it to totals or Trace ABI v10 events.
   Observation basis and reasoning usage are
   internal callback/accounting facts; do not add them to the public usage
   projections.
@@ -272,7 +272,7 @@ evidence with that status rather than leaving the model to interpret prefixes.
   partial and settle conservatively rather than falling back to the start
   estimate.
 - `ExecutionStats` folds those same cache classes separately for root and
-  subcall scopes. Trace ABI v7 exposes them in every durable usage breakdown;
+  subcall scopes. Trace ABI v10 exposes them in every durable usage breakdown;
   complete scopes require the disjoint cache classes to fit inside inclusive
   input tokens, while partial scopes preserve independently validated counts.
   ModelRelay names the classes `cache_read_input_tokens` and
@@ -519,16 +519,8 @@ evidence with that status rather than leaving the model to interpret prefixes.
   optional revision, and explicit byte/line/section ranges. Cursor pagination
   must describe both the input cursor and output `next_cursor`.
 - MCP transport binding is shared through `McpToolTransport`,
-  `McpBindingPolicy`, and `bind_mcp_transport_source`; stdio, native HTTP, and
-  cross-language host bridges must not copy descriptor/result projection.
-- Streamable HTTP source specs contain exact HTTPS allowlists and tenant-scoped
-  secret references only. Live `McpHttpHost` state owns resolved secrets,
-  private-network CIDR exceptions, TLS, DNS, and bounded raw debug sinks.
-  Redirects fail closed; every DNS answer is checked and the selected IP is
-  pinned through TLS. Startup and request timeouts are total budgets across
-  auth, retry, and SSE-resume hops; close uses only cached auth under one close
-  deadline. Generated code and durable traces receive none of the
-  URL/auth/session/raw protocol state.
+  `McpBindingPolicy`, and `bind_mcp_transport_source`; stdio and cross-language
+  host bridges must not copy descriptor/result projection.
 - Trusted runner hosts use `source_opener` for dynamic-manifest sources. The
   request cannot choose the hook; both run and preflight acquire through it and
   transfer lifecycle ownership to the ordinary registry/environment path.

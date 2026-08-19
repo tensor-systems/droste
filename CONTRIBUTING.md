@@ -18,6 +18,15 @@ Thanks for your interest. Ground rules, kept short:
 - **Benchmarks**: claims about accuracy, cost, or latency require checked-in
   immutable artifacts and a version-matched generated report. Unpublished runs
   must not support public comparative claims.
+- **Documentation**: document shipped behavior, not roadmap work. Give each
+  concept one canonical page and link to it instead of copying contract prose.
+  Version history belongs in `UPGRADING.md`; implementation rationale belongs
+  in code, tests, issues, or pull requests. Add every maintained page to
+  `docs/README.md`. Runnable examples live under `examples/` and need tests.
+- **Documentation contracts**: `tests/test_docs.py` checks local links, anchors,
+  orphaned pages, and version headings against runtime constants. A protocol or
+  schema bump updates its implementation, reference heading, fixtures, and
+  migration note in one change.
 
 Development:
 

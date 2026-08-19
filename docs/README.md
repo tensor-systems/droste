@@ -1,27 +1,24 @@
 # Documentation
 
-Start with the [quickstart](quickstart.md), then use a recipe that matches your
-data:
+Choose the page that matches the work:
 
-- [Logs, chat archives, and SQLite](recipes.md)
-- [Embed Droste in a Python application](embedding.md)
-- [Architecture overview](architecture-overview.md)
-- [Benchmark results](benchmarks.md)
+- [Use the command line](quickstart.md)
+- [Embed Droste in Python](embedding.md)
+- [Understand the architecture](architecture.md)
+- [Add a data provider](providers.md)
+- [Review benchmark results](benchmarks.md)
 
 ## Technical reference
 
-These documents specify contracts for hosts, provider authors, and contributors.
-You do not need them to use the command line tool.
+These are versioned contracts for host and protocol implementers. CLI users do
+not need them.
 
-- [Architecture and runner protocol](architecture.md)
-- [Budgets](budgets.md)
-- [Provider manifests](provider-manifests.md)
-- [MCP over stdio](mcp-stdio.md)
-- [MCP over Streamable HTTP](mcp-http.md)
-- [Prompt packs](prompt-packs.md)
-- [RLM skills](rlm-skills.md)
-- [Scaffold manifest](scaffold-manifest.md)
-- [Trace ABI](trace-abi.md)
-- [Verifiers harness](verifiers-harness.md)
+- [Runner protocol](reference/runner.md)
+- [Trace ABI](reference/trace.md)
+- [Prompt packs and RLM skills](reference/prompt-packs.md)
+- [Scaffold manifest](reference/scaffold.md)
 
-Project design notes and brand assets live under [internal](internal/).
+Contributor workflow and migration guidance live in
+[CONTRIBUTING.md](../CONTRIBUTING.md) and [UPGRADING.md](../UPGRADING.md).
+Benchmark reproduction remains beside the tooling in
+[benchmarks/README.md](../benchmarks/README.md).

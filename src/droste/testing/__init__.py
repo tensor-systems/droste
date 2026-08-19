@@ -39,13 +39,13 @@ def conformance_fixture_names() -> tuple[str, ...]:
 
 
 def trace_v10_lifecycle_ndjson() -> bytes:
-    """Return the shared Trace ABI v7 lifecycle conformance corpus."""
+    """Return the shared Trace ABI v10 lifecycle conformance corpus."""
 
     return files(__package__).joinpath("fixtures/trace-v10-lifecycle.ndjson").read_bytes()
 
 
 def trace_v10_execution_ndjson() -> bytes:
-    """Return the shared Trace ABI v7 response/code/output/error conformance corpus."""
+    """Return the shared Trace ABI v10 response/code/output/error conformance corpus."""
 
     return files(__package__).joinpath("fixtures/trace-v10-execution.ndjson").read_bytes()
 
