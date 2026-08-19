@@ -61,8 +61,8 @@ useful flags.
 
 If the data already fits comfortably in a context window, or the task is
 open-ended agent work rather than a question about a corpus, use a general
-agent instead. The [recipes](docs/recipes.md) cover logs, chat archives, and
-SQLite.
+agent instead. The [quickstart](docs/quickstart.md) includes examples for logs,
+archives, and SQLite.
 
 ## Results
 
@@ -89,7 +89,7 @@ implementers can use the [technical reference](docs/README.md#technical-referenc
 ## Development
 
 ```bash
-uv sync --extra verifiers
+uv sync
 uv run pytest
 uv build
 ```

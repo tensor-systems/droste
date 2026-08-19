@@ -60,3 +60,31 @@ input, and output option.
 The generated Python code can read the data you provide. Database access is
 opened read-only and policy-gated, but process isolation and operating-system
 permissions remain the security boundary.
+
+## Examples
+
+Interrogate a large log without putting the whole file in the model prompt:
+
+```bash
+droste "Which failure caused the outage, and what happened immediately before it?" server.log
+```
+
+Ask across an export or archive. Droste recursively reads supported text files
+while skipping hidden and common generated directories:
+
+```bash
+droste "Which decisions were reversed, and why?" ./chat-export
+```
+
+Use SQL for exact aggregation and model calls only where interpretation is
+needed:
+
+```bash
+droste "Which plan has the highest refund rate relative to MRR?" shop.db
+```
+
+For multiple inputs, pass every path after the question:
+
+```bash
+droste "What changed between these reports?" january.md february.md
+```
