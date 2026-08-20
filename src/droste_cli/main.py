@@ -21,9 +21,9 @@ recognized by their magic bytes and go through the engine's local-mode SQL
 data source (read-only policy as a guardrail, not a boundary; OS permissions
 are the boundary).
 
-Pointing --base-url at ModelRelay lights up the platform features (validated
-SQL policies, server-enforced subcall cost controls, audit); it is documented,
-not required. `droste` is the engine CLI; `mrl` remains the platform CLI.
+ModelRelay is a native provider selected by ``droste login``,
+``MODELRELAY_API_KEY``, an ``mr_sk_*`` key, or ``--provider modelrelay``.
+`droste` is the engine CLI; `mrl` remains the platform CLI.
 """
 
 from __future__ import annotations
@@ -67,8 +67,8 @@ from .inputs import (
 
 NO_CREDENTIALS_MESSAGE = (
     "no credentials. run `droste login` to choose how to run (free credits, "
-    "or your own key); scripts can pass --api-key or set OPENAI_API_KEY / "
-    "ANTHROPIC_API_KEY"
+    "or your own key); scripts can pass --api-key or set MODELRELAY_API_KEY / "
+    "OPENAI_API_KEY / ANTHROPIC_API_KEY"
 )
 
 
@@ -96,8 +96,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "setup: droste login chooses how to run (ModelRelay free credits, "
             "or your own key) and stores it; droste whoami / droste logout. "
-            "--api-key / --base-url override for a single run; scripts can "
-            "set OPENAI_API_KEY / ANTHROPIC_API_KEY. embedders: droste "
+            "--provider / --api-key / --base-url override for a single run; scripts can "
+            "set MODELRELAY_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY. embedders: droste "
             "relay-path prints the bundled Deno relay directory."
         ),
     )
@@ -115,14 +115,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="root model id (env: DROSTE_MODEL)",
     )
     parser.add_argument(
+        "--provider",
+        choices=("modelrelay", "openai", "anthropic"),
+        default=None,
+        help="model provider (otherwise inferred from credentials and key prefixes)",
+    )
+    parser.add_argument(
         "--base-url",
         default=None,
-        help="OpenAI-compatible endpoint base URL (env: OPENAI_BASE_URL; default: api.openai.com/v1)",
+        help=(
+            "provider endpoint base URL (env: MODELRELAY_BASE_URL or OPENAI_BASE_URL; "
+            "provider default when omitted)"
+        ),
     )
     parser.add_argument(
         "--api-key",
         default=None,
-        help="API key (env: OPENAI_API_KEY; the flag overrides the env)",
+        help=(
+            "provider API key (env: MODELRELAY_API_KEY, OPENAI_API_KEY, or "
+            "ANTHROPIC_API_KEY; the flag overrides the env)"
+        ),
     )
     parser.add_argument(
         "--subcall-model", default="", help="model for llm_query subcalls (default: --model)"
@@ -272,20 +284,32 @@ class _StreamEcho:
 def select_provider(args: argparse.Namespace) -> str:
     """Fact-based provider detection — no guessing, documented order:
 
-    1. An explicit endpoint (``--base-url`` or ``OPENAI_BASE_URL``) always
-       means the OpenAI-compatible client: the user chose where to go.
-    2. ``--api-key sk-ant-…`` is an Anthropic key (their published prefix).
-    3. Any other explicit ``--api-key`` is OpenAI-compatible.
-    4. A ``claude-*`` model with ``ANTHROPIC_API_KEY`` set goes to Anthropic
+    1. ``--provider`` is authoritative.
+    2. Explicit ``mr_sk_*`` and ``sk-ant-*`` keys select their native clients.
+    3. Any other explicit key or endpoint is OpenAI-compatible.
+    4. ``MODELRELAY_API_KEY`` selects ModelRelay before ambient compat settings.
+    5. A ``claude-*`` model with ``ANTHROPIC_API_KEY`` set goes to Anthropic
        even when ``OPENAI_API_KEY`` is also set (the model names the vendor).
-    5. Otherwise ``OPENAI_API_KEY`` wins, then ``ANTHROPIC_API_KEY``.
+    6. Otherwise ``OPENAI_API_KEY`` wins, then ``ANTHROPIC_API_KEY``.
     """
     from droste.clients.anthropic import ANTHROPIC_KEY_PREFIX
+    from droste.clients.modelrelay import MODELRELAY_KEY_PREFIX
 
-    if args.base_url or os.environ.get("OPENAI_BASE_URL"):
-        return "openai"
+    explicit_provider = getattr(args, "provider", None)
+    if explicit_provider:
+        return str(explicit_provider)
     if args.api_key is not None:
-        return "anthropic" if args.api_key.startswith(ANTHROPIC_KEY_PREFIX) else "openai"
+        if args.api_key.startswith(MODELRELAY_KEY_PREFIX):
+            return "modelrelay"
+        if args.api_key.startswith(ANTHROPIC_KEY_PREFIX):
+            return "anthropic"
+        return "openai"
+    if args.base_url:
+        return "openai"
+    if os.environ.get("MODELRELAY_API_KEY") or os.environ.get("MODELRELAY_BASE_URL"):
+        return "modelrelay"
+    if os.environ.get("OPENAI_BASE_URL"):
+        return "openai"
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
     has_anthropic = anthropic_key.startswith(ANTHROPIC_KEY_PREFIX)
     if str(args.model).startswith("claude") and has_anthropic:
@@ -297,26 +321,62 @@ def select_provider(args: argparse.Namespace) -> str:
     return "openai"
 
 
+def _modelrelay_credentials(
+    api_key: str | None = None,
+    base_url: str | None = None,
+) -> Credentials:
+    from droste.clients.modelrelay import (
+        resolve_modelrelay_api_key,
+        resolve_modelrelay_base_url,
+    )
+
+    resolved_api_key = resolve_modelrelay_api_key(api_key)
+    if not resolved_api_key:
+        raise CLIError(
+            "no ModelRelay API key: pass --api-key, set MODELRELAY_API_KEY, or run `droste login`"
+        )
+    return Credentials(
+        api_key=resolved_api_key,
+        base_url=resolve_modelrelay_base_url(base_url),
+        provider="modelrelay",
+    )
+
+
 def resolve_run_target(args: argparse.Namespace) -> tuple[str, Credentials | None]:
     """Credential resolution:
 
-    1. Per-run flags (``--base-url`` / ``--api-key``) always win: an explicit
+    1. Per-run flags (``--provider`` / ``--base-url`` / ``--api-key``) always win: an explicit
        flag is a statement about THIS run.
     2. Stored credentials — set up once via `droste login` (ModelRelay with
        free credits, or your own key). Choosing how droste runs is a
        deliberate setup step, never a side effect of exported env vars.
     3. No credentials on an interactive terminal: run the same chooser
        in-line, then continue the run.
-    4. Non-interactive (scripts/CI): env keys (``OPENAI_BASE_URL`` /
-       ``OPENAI_API_KEY`` / ``ANTHROPIC_API_KEY``) as a fallback, else a
+    4. Non-interactive (scripts/CI): ModelRelay, OpenAI-compatible, or Anthropic
+       environment credentials as a fallback, else a
        terse error pointing at `droste login`.
     """
-    if args.base_url is not None or args.api_key is not None:
-        return select_provider(args), None
+    explicit_transport = args.base_url is not None or args.api_key is not None
+    if explicit_transport:
+        provider = select_provider(args)
+        if provider == "modelrelay":
+            return provider, _modelrelay_credentials(args.api_key, args.base_url)
+        return provider, None
     try:
         creds = load_credentials()
     except CredentialsError as exc:
         raise CLIError(str(exc)) from exc
+    explicit_provider = getattr(args, "provider", None)
+    if explicit_provider is not None:
+        if explicit_provider == "modelrelay":
+            if os.environ.get("MODELRELAY_API_KEY"):
+                return explicit_provider, _modelrelay_credentials()
+            if creds is not None and creds.provider == "modelrelay":
+                return explicit_provider, creds
+            return explicit_provider, _modelrelay_credentials()
+        # Selecting another provider explicitly bypasses a stored ModelRelay
+        # login. Its native client resolves the corresponding environment key.
+        return explicit_provider, None
     if creds is None and sys.stdin.isatty() and sys.stderr.isatty():
         from . import auth
 
@@ -339,16 +399,21 @@ def resolve_run_target(args: argparse.Namespace) -> tuple[str, Credentials | Non
             args.base_url = creds.base_url or DEFAULT_BASE_URL
             return "openai", None
         return "modelrelay", creds
-    # ANY set env key counts — including a malformed one. A bad
-    # ANTHROPIC_API_KEY must fail loudly on the BYOK path, not be masked
-    # by the no-credentials error.
-    env_byok = (
-        bool(os.environ.get("OPENAI_BASE_URL"))
+    # Any configured provider variable counts, including a malformed one.
+    # Fail loudly on the selected provider path instead of masking it with the
+    # generic no-credentials error.
+    env_provider = (
+        bool(os.environ.get("MODELRELAY_API_KEY"))
+        or bool(os.environ.get("MODELRELAY_BASE_URL"))
+        or bool(os.environ.get("OPENAI_BASE_URL"))
         or bool(os.environ.get("OPENAI_API_KEY"))
         or bool(os.environ.get("ANTHROPIC_API_KEY"))
     )
-    if env_byok:
-        return select_provider(args), None
+    if env_provider:
+        provider = select_provider(args)
+        if provider == "modelrelay":
+            return provider, _modelrelay_credentials()
+        return provider, None
     raise CLIError(NO_CREDENTIALS_MESSAGE)
 
 
@@ -453,7 +518,7 @@ def run_ask(args: argparse.Namespace) -> int:
                 "no API key: set OPENAI_API_KEY or ANTHROPIC_API_KEY, or pass "
                 "--api-key (custom --base-url endpoints may run keyless)"
             )
-    elif args.reasoning_effort:
+    elif provider == "anthropic" and args.reasoning_effort:
         raise CLIError(
             "--reasoning-effort is not an Anthropic API parameter; Claude "
             "thinking is controlled via the API's thinking params"
@@ -527,6 +592,7 @@ def run_ask(args: argparse.Namespace) -> int:
 
         root = AnthropicClient(
             model=args.model,
+            base_url=args.base_url,
             api_key=args.api_key,
             on_delta=echo,
         )
@@ -535,6 +601,7 @@ def run_ask(args: argparse.Namespace) -> int:
         subcalls = AnthropicSubcallClient(
             model=args.subcall_model or args.model,
             context=exec_context,
+            base_url=args.base_url,
             api_key=args.api_key,
             max_output_tokens=budget.subcall_output_tokens,
             max_parallel=rollout.concurrency,

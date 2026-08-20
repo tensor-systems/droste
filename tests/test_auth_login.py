@@ -447,6 +447,23 @@ def test_login_chooser_byok_imports_env_key(fake_platform, monkeypatch, capsys):
     assert "sk-env-key-123456" not in err  # never echo the full key
 
 
+def test_login_chooser_imports_existing_modelrelay_key(fake_platform, monkeypatch):
+    _fake_tty(monkeypatch)
+    monkeypatch.setenv("MODELRELAY_API_KEY", "mr_sk_existing")
+    monkeypatch.setenv("MODELRELAY_BASE_URL", fake_platform.base_url)
+    # choice 2, accept env key, model; ModelRelay does not ask for an OpenAI base URL.
+    _feed_inputs(monkeypatch, ["2", "", "root-model"])
+
+    assert auth.run_login(fake_platform.base_url) == 0
+
+    creds = load_credentials()
+    assert creds is not None
+    assert creds.provider == "modelrelay"
+    assert creds.api_key == "mr_sk_existing"
+    assert creds.base_url == fake_platform.base_url
+    assert creds.default_model == "root-model"
+
+
 def test_login_chooser_default_choice_is_modelrelay(fake_platform, monkeypatch):
     _fake_tty(monkeypatch)
     _feed_inputs(monkeypatch, [""])  # Enter = choice 1

@@ -8,9 +8,10 @@ An embedded run has four shared pieces: a `Budget`, an `ExecutionContext`, model
 clients, and an execution environment. Construct the context and environment
 from the same `EnvironmentConfig`; conflicting budgets fail before inference.
 
-`OpenAICompatClient` reads `OPENAI_API_KEY` and `OPENAI_BASE_URL`. Anthropic and
-ModelRelay clients are also included. Explicit constructor arguments override
-environment values.
+`OpenAICompatClient` reads `OPENAI_API_KEY` and `OPENAI_BASE_URL`.
+`ModelRelayClient` and `ModelRelaySubcallClient` read `MODELRELAY_API_KEY` and
+`MODELRELAY_BASE_URL`. Anthropic clients are also included. Explicit constructor
+arguments override environment values.
 
 ## Compute and local execution limits
 

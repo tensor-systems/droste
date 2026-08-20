@@ -36,6 +36,8 @@ def test_parse_flags_and_positionals():
             "what changed?",
             "--model",
             "m",
+            "--provider",
+            "modelrelay",
             "--base-url",
             "http://x/v1",
             "--api-key",
@@ -64,6 +66,7 @@ def test_parse_flags_and_positionals():
         ]
     )
     assert args.inputs == ["a.txt", "b.txt", "what changed?"]
+    assert args.provider == "modelrelay"
     assert (args.model, args.base_url, args.api_key) == ("m", "http://x/v1", "k")
     assert (args.subcall_model, args.subcall_output_tokens) == ("sm", 512)
     assert args.reasoning_effort == "low"
@@ -751,6 +754,73 @@ def test_env_keys_used_when_not_logged_in(stub_server, tmp_path, monkeypatch, ca
     assert capsys.readouterr().out.strip() == "byok content"
 
 
+def test_modelrelay_env_key_runs_native_client(stub_native_server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("MODELRELAY_API_KEY", "mr_sk_env")
+    monkeypatch.setenv("MODELRELAY_BASE_URL", stub_native_server.base_url)
+    doc = tmp_path / "doc.txt"
+    doc.write_text("modelrelay env content")
+    stub_native_server.root_responses = [ANSWER_FROM_FILE]
+
+    exit_code = main([str(doc), "q", "--model", "root-model"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "modelrelay env content"
+    assert stub_native_server.headers[0].get("x-modelrelay-api-key") == "mr_sk_env"
+
+
+def test_modelrelay_key_flag_selects_native_client(stub_native_server, tmp_path, capsys):
+    doc = tmp_path / "doc.txt"
+    doc.write_text("modelrelay flag content")
+    stub_native_server.root_responses = [ANSWER_FROM_FILE]
+
+    exit_code = main(
+        [
+            str(doc),
+            "q",
+            "--model",
+            "root-model",
+            "--api-key",
+            "mr_sk_flag",
+            "--base-url",
+            stub_native_server.base_url,
+        ]
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "modelrelay flag content"
+    assert stub_native_server.headers[0].get("x-modelrelay-api-key") == "mr_sk_flag"
+
+
+def test_explicit_modelrelay_provider_accepts_nonstandard_key_prefix(
+    stub_native_server, tmp_path, capsys
+):
+    doc = tmp_path / "doc.txt"
+    doc.write_text("explicit provider content")
+    stub_native_server.root_responses = [ANSWER_FROM_FILE]
+
+    exit_code = main(
+        [
+            str(doc),
+            "q",
+            "--model",
+            "root-model",
+            "--provider",
+            "modelrelay",
+            "--api-key",
+            "development-key",
+            "--base-url",
+            stub_native_server.base_url,
+            "--reasoning-effort",
+            "low",
+        ]
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "explicit provider content"
+    assert stub_native_server.headers[0].get("x-modelrelay-api-key") == "development-key"
+    assert stub_native_server.requests[0]["reasoning_effort"] == "low"
+
+
 def test_malformed_env_key_without_login_fails_loudly(tmp_path, monkeypatch, capsys):
     # A set-but-malformed key still selects the BYOK path (when not logged
     # in): fail loudly there, never mask it with the no-credentials error.
@@ -772,6 +842,19 @@ def test_explicit_model_beats_credentials_default(stub_native_server, tmp_path, 
     exit_code = main([str(doc), "q", "--model", "override-model"])
     assert exit_code == 0
     assert stub_native_server.requests[0]["model"] == "override-model"
+
+
+def test_explicit_modelrelay_provider_reuses_stored_login(stub_native_server, tmp_path, capsys):
+    _write_credentials(stub_native_server.base_url)
+    doc = tmp_path / "doc.txt"
+    doc.write_text("stored provider content")
+    stub_native_server.root_responses = [ANSWER_FROM_FILE]
+
+    exit_code = main([str(doc), "q", "--provider", "modelrelay"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "stored provider content"
+    assert stub_native_server.headers[0].get("x-modelrelay-api-key") == "mr_sk_stored"
 
 
 def test_corrupt_credentials_file_is_actionable(tmp_path, capsys):

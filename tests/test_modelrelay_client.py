@@ -488,6 +488,23 @@ def test_root_http_error_is_bounded(stub_native):
     assert client.root_requests_issued == 1
 
 
+def test_clients_read_modelrelay_environment(stub_native, monkeypatch):
+    monkeypatch.setenv("MODELRELAY_API_KEY", "mr_sk_env")
+    monkeypatch.setenv("MODELRELAY_BASE_URL", stub_native.base_url)
+
+    root = ModelRelayClient(model="root-model")
+    subcalls = ModelRelaySubcallClient(
+        model="sub-model",
+        context=create_execution_context(),
+    )
+
+    assert root.responses_create([{"role": "user", "content": "q"}], model="") == "hi"
+    assert subcalls.llm_query("q") == "echo: q"
+    assert all(
+        headers.get("x-modelrelay-api-key") == "mr_sk_env" for headers in stub_native.headers
+    )
+
+
 def test_root_transport_failure_counts_dispatched_request(monkeypatch):
     client = ModelRelayClient(model="root-model", api_key="mr_sk_t")
 

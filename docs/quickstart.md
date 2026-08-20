@@ -14,12 +14,22 @@ droste login
 and CI, set a provider key directly:
 
 ```bash
-export OPENAI_API_KEY=sk-...
+export MODELRELAY_API_KEY=mr_sk_...
+# Or: export OPENAI_API_KEY=sk-...
 # Or: export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Set `OPENAI_BASE_URL` when using another OpenAI-compatible endpoint. You can
-also pass `--api-key` and `--base-url` for one run.
+ModelRelay uses its native endpoint by default; override it with
+`MODELRELAY_BASE_URL` when needed. Set `OPENAI_BASE_URL` when using another
+OpenAI-compatible endpoint. You can also pass `--provider`, `--api-key`, and
+`--base-url` for one run. `mr_sk_*` keys passed through `--api-key` select the
+native ModelRelay provider automatically.
+
+For explicit provider selection:
+
+```bash
+droste "..." ./data --provider modelrelay --api-key mr_sk_... --model MODEL
+```
 
 For a one-off run without installation:
 

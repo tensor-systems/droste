@@ -40,6 +40,10 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 
+from droste.clients.modelrelay import (
+    MODELRELAY_KEY_PREFIX,
+    resolve_modelrelay_base_url,
+)
 from droste.clients.useragent import USER_AGENT
 
 from .credentials import (
@@ -357,7 +361,7 @@ def _prompt_choice() -> str:
     print(
         "droste: choose how to run:\n"
         "  1) ModelRelay - free credits, GitHub sign-in, no key (recommended)\n"
-        "  2) your own API key (any OpenAI-compatible endpoint, or Anthropic)",
+        "  2) your own API key (ModelRelay, OpenAI-compatible, or Anthropic)",
         file=sys.stderr,
         flush=True,
     )
@@ -373,7 +377,12 @@ def _setup_byok() -> None:
     """Store a bring-your-own-key choice in the credentials file."""
     import getpass
 
-    env_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or ""
+    env_key = (
+        os.environ.get("MODELRELAY_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("ANTHROPIC_API_KEY")
+        or ""
+    )
     api_key = ""
     if env_key:
         if _ask(f"use {_mask_key(env_key)} from your environment? [Y/n]: ").lower() not in (
@@ -389,8 +398,9 @@ def _setup_byok() -> None:
     if not api_key:
         raise AuthError("no API key entered")
 
-    base = ""
-    if not api_key.startswith("sk-ant-"):
+    is_modelrelay = api_key.startswith(MODELRELAY_KEY_PREFIX)
+    base = resolve_modelrelay_base_url() if is_modelrelay else ""
+    if not api_key.startswith("sk-ant-") and not is_modelrelay:
         base = _ask("API base URL [https://api.openai.com/v1]: ").rstrip("/")
 
     model = _ask("default model (e.g. gpt-5.2-mini): ")
@@ -401,7 +411,7 @@ def _setup_byok() -> None:
         Credentials(
             api_key=api_key,
             base_url=base,
-            provider="byok",
+            provider="modelrelay" if is_modelrelay else "byok",
             default_model=model,
             created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )

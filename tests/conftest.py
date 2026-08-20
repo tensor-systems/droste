@@ -16,6 +16,13 @@ import pytest
 def _isolated_credentials(tmp_path_factory, monkeypatch):
     config_home = tmp_path_factory.mktemp("xdg-config")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
-    for var in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "DROSTE_MODEL"):
+    for var in (
+        "MODELRELAY_API_KEY",
+        "MODELRELAY_BASE_URL",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "ANTHROPIC_API_KEY",
+        "DROSTE_MODEL",
+    ):
         monkeypatch.delenv(var, raising=False)
     yield
