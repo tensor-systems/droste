@@ -709,7 +709,14 @@ def test_batch_bounded_concurrency(stub):
 
 
 def _clean_provider_env(monkeypatch):
-    for var in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"):
+    for var in (
+        "MODELRELAY_API_KEY",
+        "MODELRELAY_BASE_URL",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+    ):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -719,7 +726,7 @@ def test_select_provider_matrix(monkeypatch):
     from droste_cli.main import select_provider
 
     def args(**kw):
-        defaults = {"base_url": None, "api_key": None, "model": "m"}
+        defaults = {"provider": None, "base_url": None, "api_key": None, "model": "m"}
         defaults.update(kw)
         return argparse.Namespace(**defaults)
 
@@ -732,7 +739,12 @@ def test_select_provider_matrix(monkeypatch):
     monkeypatch.delenv("OPENAI_BASE_URL")
     # Key prefix is the fact.
     assert select_provider(args(api_key="sk-ant-abc")) == "anthropic"
+    assert select_provider(args(api_key="mr_sk_abc")) == "modelrelay"
     assert select_provider(args(api_key="sk-proj-abc")) == "openai"
+    assert select_provider(args(provider="modelrelay", api_key="custom")) == "modelrelay"
+    monkeypatch.setenv("MODELRELAY_API_KEY", "mr_sk_env")
+    assert select_provider(args()) == "modelrelay"
+    monkeypatch.delenv("MODELRELAY_API_KEY")
     # claude-* model + anthropic key beats a coexisting OPENAI_API_KEY.
     monkeypatch.setenv("OPENAI_API_KEY", "sk-oai")
     assert select_provider(args(model="claude-opus-4-8")) == "anthropic"

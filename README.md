@@ -49,9 +49,9 @@ tail -5000 app.log | droste "why did it crash?"
 ```
 
 For a one-off run, use `uvx droste` instead of installing it. The command also
-supports your own OpenAI-compatible or Anthropic endpoint. See the
-[quickstart](docs/quickstart.md) for credentials, directories, SQLite, and
-useful flags.
+supports an existing ModelRelay key or your own OpenAI-compatible or Anthropic
+endpoint. See the [quickstart](docs/quickstart.md) for credentials, directories,
+SQLite, and useful flags.
 
 ## Good fits
 

@@ -1,4 +1,4 @@
-"""Stored ModelRelay credentials for the logged-in path.
+"""Stored provider credentials for CLI runs.
 
 One file, one credential: ``$XDG_CONFIG_HOME/droste/credentials.json``
 (default ``~/.config/droste/credentials.json``), written atomically at 0600.

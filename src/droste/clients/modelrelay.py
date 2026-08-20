@@ -1,8 +1,9 @@
-"""Native ModelRelay clients for the logged-in path.
+"""Native ModelRelay clients for logged-in and direct-key paths.
 
-`droste login` stores a ModelRelay API key; these clients run the loop against
-ModelRelay's native `POST /responses` — the same endpoint the platform's hosted
-runner ultimately talks to — with no OpenAI-compat shim in between.
+`droste login` can store a ModelRelay API key, and callers can pass one directly
+or set ``MODELRELAY_API_KEY``. These clients run the loop against ModelRelay's
+native `POST /responses` — the same endpoint the platform's hosted runner
+ultimately talks to — with no OpenAI-compat shim in between.
 
 Two classes, one per protocol, mirroring the BYOK pair in ``openai_compat``:
 
@@ -21,11 +22,16 @@ thousands of hidden reasoning tokens to answer in a few words). Pass
 ``reasoning_effort``/``max_output_tokens`` explicitly to override.
 
 Dependency-free by design: urllib only, like the rest of the engine.
+
+Config resolution: explicit constructor arguments win, then
+``MODELRELAY_API_KEY`` / ``MODELRELAY_BASE_URL``, then the public ModelRelay
+base URL.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import threading
 import urllib.error
 import urllib.request
@@ -62,7 +68,21 @@ from .openai_compat import (
 from .useragent import USER_AGENT
 
 DEFAULT_MODELRELAY_BASE_URL = "https://api.modelrelay.ai/api/v1"
+MODELRELAY_KEY_PREFIX = "mr_sk_"
 _STREAM_ACCEPT = 'application/x-ndjson; profile="responses-stream/v2"'
+
+
+def resolve_modelrelay_api_key(api_key: str | None = None) -> str:
+    """Resolve an explicit key before the standard ModelRelay environment key."""
+
+    return str(api_key if api_key is not None else os.environ.get("MODELRELAY_API_KEY", ""))
+
+
+def resolve_modelrelay_base_url(base_url: str | None = None) -> str:
+    """Resolve an explicit endpoint before the standard ModelRelay environment endpoint."""
+
+    resolved = base_url or os.environ.get("MODELRELAY_BASE_URL") or DEFAULT_MODELRELAY_BASE_URL
+    return str(resolved).rstrip("/")
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,7 +219,7 @@ class _ResponsesTransport:
         label: str,
         on_dispatch: Callable[[], None] | None = None,
     ) -> None:
-        base = str(base_url or DEFAULT_MODELRELAY_BASE_URL).rstrip("/")
+        base = resolve_modelrelay_base_url(base_url)
         self._base_url = base
         self._url = base + "/responses"
         self._api_key = str(api_key or "")
@@ -365,7 +385,7 @@ class ModelRelayClient:
         *,
         model: str = "",
         base_url: str | None = None,
-        api_key: str = "",
+        api_key: str | None = None,
         temperature: float | None = None,
         stop: list[str] | None = None,
         max_output_tokens: int = 0,
@@ -373,15 +393,19 @@ class ModelRelayClient:
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         on_delta: Any | None = None,
     ) -> None:
-        if not api_key:
-            raise ValueError("api_key is required (run `droste login`)")
+        resolved_api_key = resolve_modelrelay_api_key(api_key)
+        if not resolved_api_key:
+            raise ValueError(
+                "api_key is required (pass it explicitly, set MODELRELAY_API_KEY, "
+                "or run `droste login`)"
+            )
         self._accounting_lock = threading.Lock()
         self._total_usage = TokenUsage(0, 0, 0, observation_basis=UsageObservationBasis.EXACT)
         self._has_usage_observation = False
         self._root_requests_issued = 0
         self._transport = _ResponsesTransport(
             base_url=base_url,
-            api_key=api_key,
+            api_key=resolved_api_key,
             timeout=timeout,
             label="root llm",
             on_dispatch=self._account_root_request,
@@ -509,7 +533,7 @@ class ModelRelaySubcallClient(SubcallClient):
         model: str,
         context: ExecutionContext,
         base_url: str | None = None,
-        api_key: str = "",
+        api_key: str | None = None,
         max_output_tokens: int = DEFAULT_SUBCALL_OUTPUT_TOKENS,
         temperature: float | None = None,
         reasoning_effort: str = "none",
@@ -518,13 +542,17 @@ class ModelRelaySubcallClient(SubcallClient):
     ) -> None:
         if not model:
             raise ValueError("model is required")
-        if not api_key:
-            raise ValueError("api_key is required (run `droste login`)")
+        resolved_api_key = resolve_modelrelay_api_key(api_key)
+        if not resolved_api_key:
+            raise ValueError(
+                "api_key is required (pass it explicitly, set MODELRELAY_API_KEY, "
+                "or run `droste login`)"
+            )
         if max_output_tokens < 0:
             raise ValueError("max_output_tokens must be >= 0 (0 disables the bound)")
         resolved_concurrency = validate_subcall_concurrency(max_parallel)
         self._transport = _ResponsesTransport(
-            base_url=base_url, api_key=api_key, timeout=timeout, label="llm_query"
+            base_url=base_url, api_key=resolved_api_key, timeout=timeout, label="llm_query"
         )
         self._model = str(model)
         self._context = context
