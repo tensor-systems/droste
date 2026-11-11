@@ -13,7 +13,7 @@ permissions:
 jobs:
   test:
     name: pytest (py${{ matrix.python }})
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -52,7 +52,7 @@ jobs:
 
   lint:
     name: ruff
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
@@ -67,7 +67,7 @@ jobs:
 
   hygiene:
     name: public-repo hygiene
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: No committed secrets
@@ -82,7 +82,7 @@ jobs:
 
   build:
     name: package builds
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
@@ -178,7 +178,7 @@ jobs:
 
   release-dryrun:
     name: release path (dry run)
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: ubuntu-latest
     # The release workflow used to run only on a tag, so a step that broke was
     # discoverable only by breaking a release -- which is how a fixture rename
     # shipped. Exercise the same scripts here, on every pull request, with the
@@ -211,7 +211,7 @@ jobs:
 
   deno:
     name: deno (pyodide substrate)
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: denoland/setup-deno@v2

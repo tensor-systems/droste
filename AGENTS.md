@@ -11,7 +11,10 @@ This project uses **uv** as the default package manager.
 
 ## CI Runners
 
-- CI targets the organization runner labels `[self-hosted, macOS, ARM64]`.
+- CI and releases run on GitHub-hosted `ubuntu-latest`. This repository is
+  public, so it must never target the organization's persistent self-hosted
+  pool: fork pull-request code would run on hosts that hold maintainer
+  credentials. The org runner group refuses public repositories regardless.
 - Keep workflows host-agnostic: do not encode runner names, network addresses,
   credentials, or mutable machine state. Preserve job names because they are
   part of the required-check contract.
