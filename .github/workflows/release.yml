@@ -23,12 +23,12 @@ permissions:
 
 jobs:
   release:
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0 # full history: the on-main ancestry check needs it
-          clean: true # self-hosted workspaces must not contribute stale release artifacts
+          clean: true # never let stale workspace files leak into release artifacts
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           python-version: "3.11"
